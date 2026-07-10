@@ -46,7 +46,7 @@ Today, checking where you stand means **opening the `/usage` panel or the app an
 - ⚡ **Zero context‑switch** — the number is already there; no panel to open.
 - 🔒 **Zero setup** — reuses your existing Claude login. Nothing to configure.
 - 🪶 **Featherweight** — ~0.03% CPU idle, ~50 MB RAM. You won't notice it.
-- 🖥️ **Stays out of the way** — auto‑hides over fullscreen movies, games, and presentations.
+- 🖥️ **Stays out of the way** — optionally auto‑hides over fullscreen movies, games, and presentations (or set it to always show).
 - 🔔 **Warns you in time** — optional desktop alerts when you cross 80% / 90%.
 - ⏭️ **Picks up where you left off** — when your session limit resets, one click resumes the interrupted work (or auto‑resume, if you opt in).
 - 🎨 **Looks the part** — supersampled rendering, light/dark aware, adapts to your taskbar.
@@ -168,6 +168,7 @@ Everything works with no config. To customise, copy
 poll = 90                        # seconds between polls (60–300)
 theme = "auto"                   # auto | light | dark
 metrics = ["session", "weekly"]  # which meters on the strip
+hide_on_fullscreen = true        # false = keep visible even over fullscreen apps
 alerts = true                    # desktop toast on threshold crossings
 alert_thresholds = [80, 90]
 show_cost = false                # estimated token/$ line in the popover
@@ -219,10 +220,12 @@ rows (e.g. **Opus**). Tokens are refreshed automatically when they expire.
 - **No** third‑party servers, **no** telemetry, **no** analytics.
 
 ### Behavior notes
-- **Fullscreen auto‑hide** — Claudometer hides itself whenever a fullscreen app
-  is active (movies, games, presentations), using Windows' own
-  `SHQueryUserNotificationState` plus a foreground‑covers‑the‑screen check, then
-  reappears when you exit. On macOS the menu bar hides in fullscreen natively.
+- **Fullscreen auto‑hide** (optional) — by default Claudometer hides itself
+  whenever a fullscreen app is active (movies, games, presentations), using
+  Windows' own `SHQueryUserNotificationState` plus a foreground‑covers‑the‑screen
+  check, then reappears when you exit. Set `hide_on_fullscreen = false` to keep it
+  visible even over fullscreen apps. On macOS the menu bar hides in fullscreen
+  natively.
 - **Performance** — ~0.03% of total CPU idle, ~0.2% while you have the popover
   open, ~50 MB RAM. The strip only re‑renders when a value changes; the popover
   only while it's open.

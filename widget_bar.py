@@ -382,6 +382,7 @@ class BarWidget:
         self._alerts_on = cfg["alerts"]
         self._thresholds = cfg["alert_thresholds"]
         self._show_cost = cfg["show_cost"]
+        self._hide_on_fullscreen = cfg["hide_on_fullscreen"]
         if cfg["accent"]:
             for _t in render.THEMES.values():
                 _t["accent"] = cfg["accent"]
@@ -737,8 +738,8 @@ class BarWidget:
 
     def _refresh_ui(self):
         # Hide over fullscreen apps (movies, games, presentations) like the
-        # taskbar does; show again when they exit.
-        fs = _fullscreen_active()
+        # taskbar does; show again when they exit. Disabled via hide_on_fullscreen.
+        fs = self._hide_on_fullscreen and _fullscreen_active()
         if fs and not self._hidden:
             self._hidden = True
             # a resume is pending if a toast is up OR a retry is already scheduled

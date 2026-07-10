@@ -20,6 +20,7 @@ DEFAULTS = {
     "alert_thresholds": [80, 90],     # percentages that trigger an alert
     "show_cost": False,               # show an estimated-cost line in the popover
     "accent": None,                   # hex override for the accent color, or None
+    "hide_on_fullscreen": True,       # hide over fullscreen apps; false = always show
     # Resume-on-reset (Tier 1 = notify + one click; Tier 2 = unattended)
     "resume_notify": True,            # notify + one-click resume when the session limit resets
     "resume_auto": False,             # Tier 2: automatically resume, unattended (opt-in, risky)
@@ -153,6 +154,7 @@ def load() -> dict:
             thr.append(v)
     cfg["alert_thresholds"] = sorted(set(thr)) or list(DEFAULTS["alert_thresholds"])
     cfg["show_cost"] = bool(cfg["show_cost"])
+    cfg["hide_on_fullscreen"] = bool(cfg["hide_on_fullscreen"])
     if not (isinstance(cfg["accent"], str) and cfg["accent"].startswith("#")):
         cfg["accent"] = None
     cfg["resume_notify"] = bool(cfg["resume_notify"])

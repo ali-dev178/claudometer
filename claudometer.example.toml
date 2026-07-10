@@ -12,6 +12,10 @@ theme = "auto"
 # Which meters to show on the taskbar strip: any of "session", "weekly".
 metrics = ["session", "weekly"]
 
+# Hide the widget while a fullscreen app (movie, game, presentation) is active,
+# like the taskbar does. Set to false to keep it always visible, even fullscreen.
+hide_on_fullscreen = true
+
 # Desktop toast alerts when you cross a usage threshold (upward).
 alerts = true
 alert_thresholds = [80, 90]
