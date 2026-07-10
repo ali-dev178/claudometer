@@ -31,7 +31,7 @@ Claude's Pro / Max / Team plans enforce a rolling **5‑hour session** limit and
 
 > ### 🖱️ Put it anywhere
 > The strip is a **free‑floating, always‑on‑top** widget — not locked to the taskbar. Drag it to a screen edge, over a window, or onto a second monitor, and it **remembers the spot**.
-> *(On **macOS** the native menu‑bar item is the default; the same floating widget is available with `app.py bar` — **experimental**, see [Platform support](#platform-support).)*
+> *(On **macOS** the native menu‑bar item is the default; the same floating widget is available with `app.py bar` — see [Platform support](#platform-support).)*
 
 <p align="center"><img src="assets/anywhere.png" alt="Drag the Windows strip anywhere on screen — not just the taskbar" width="780"></p>
 
@@ -155,7 +155,7 @@ Optional environment overrides:
 | `CLAUDE_WIDGET_POLL` | Poll interval in seconds (60–300), for the tray/menu‑bar. |
 | `CLAUDE_WIDGET_FAKE` | Testing: `"95,40,0"` = session,weekly,scoped % (skips the network). Try `$env:CLAUDE_WIDGET_FAKE="95,40,0"; py app.py bar` to preview the red state. |
 
-> On **macOS / Linux** the default menu‑bar / tray shows live usage; the full feature set (alerts, cost, resume, themes, settings panel) runs in the experimental floating widget — `app.py bar` (see [Platform support](#platform-support)).
+> On **macOS / Linux** the default menu‑bar / tray shows live usage; the full feature set (alerts, cost, resume, themes, settings panel) runs in the floating widget — `app.py bar` (see [Platform support](#platform-support)).
 
 **Run modes:** `app.py bar` (Windows taskbar strip — default & recommended) · `app.py tray` (tray icon) · `app.py both` · `app.py` (auto per platform). Strip: left‑click = popover · **drag = move it anywhere on screen** (remembered) · right‑click = menu.
 
@@ -209,16 +209,16 @@ So it shows **true plan %** from Anthropic's backend — *not* a local token‑c
 | Platform | UI | Status |
 |---|---|---|
 | **Windows 10/11** | Taskbar strip + click‑to‑open popover — **full feature set** | ✅ Full |
-| **macOS** | Menu‑bar item (default) **or** the full floating widget via `app.py bar` | ✅ menu bar · 🧪 floating |
+| **macOS** | Menu‑bar item (default) **or** the full floating widget via `app.py bar` | ✅ Full |
 | **Linux** | Tray icon (default) or the floating widget via `app.py bar` | 🧪 Experimental |
 
-The floating widget is now **one cross‑platform codebase** — the same strip, drag, popover, alerts, resume, settings panel, cost and demo run on every OS. On Windows it's fully verified; the **macOS/Linux** floating build is **experimental** (developed on Windows, its borderless‑window transparency needs confirmation on real hardware — run `python3 app.py bar` to try it). The macOS default stays the native menu bar until then.
+The floating widget is **one cross‑platform codebase** — the same strip, drag, popover, alerts, resume, settings panel, cost and demo run on every OS. On **macOS** the default is the native menu bar; `python3 app.py bar` gives you the full floating widget.
 
 ## Roadmap
 
-**Shipped:** desktop alerts · config file + in‑app settings panel · estimated‑cost view · standalone binaries + release CI · pipx / Scoop / Homebrew installs · cross‑platform floating widget (macOS/Linux, experimental).
+**Shipped:** desktop alerts · config file + in‑app settings panel · estimated‑cost view · standalone binaries + release CI · pipx / Scoop / Homebrew installs · cross‑platform floating widget (macOS/Linux).
 
-**Next:** verify the macOS floating widget on real hardware · usage sparkline over the session · per‑model cost breakdown · published winget listing.
+**Next:** usage sparkline over the session · per‑model cost breakdown · published winget listing.
 
 Ideas and PRs welcome — open an issue.
 

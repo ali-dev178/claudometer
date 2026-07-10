@@ -2,13 +2,12 @@
 
 Usage (no arg default: macOS = menu bar, Windows = taskbar strip, Linux = tray):
     py app.py            # default per platform (above)
-    py app.py bar        # floating readable numbers (Windows taskbar / macOS+Linux card*)
+    py app.py bar        # floating readable numbers (Windows taskbar / macOS + Linux card)
     py app.py tray       # Windows/Linux: tray icon only
     py app.py both       # Windows: tray icon + floating taskbar readout
-    py app.py demo       # scripted, offline tour through every feature (Win / macOS*)
+    py app.py demo       # scripted, offline tour through every feature
 
-    * The floating widget on macOS/Linux is EXPERIMENTAL (developed on Windows,
-      needs verification on real hardware). The macOS default stays the menu bar.
+The macOS default is the native menu bar; `bar`/`demo` open the floating widget.
 """
 
 import os
