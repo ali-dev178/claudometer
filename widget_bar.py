@@ -872,8 +872,14 @@ class SettingsWindow:
         self.top.update_idletasks()
         w, h = self.top.winfo_width(), self.top.winfo_height()
         try:
-            sw, sh = _screen_size()
-            self.top.geometry(f"+{(sw - w) // 2}+{max(20, (sh - h) // 3)}")
+            # Center within the work area of the monitor the widget lives on, so
+            # Settings opens on the same screen as the strip (not the primary).
+            wl, wt, wr, wb = _monitor_workarea(
+                root.winfo_rootx() + root.winfo_width() // 2,
+                root.winfo_rooty() + root.winfo_height() // 2)
+            x = wl + ((wr - wl) - w) // 2
+            y = wt + max(20, ((wb - wt) - h) // 3)
+            self.top.geometry(f"+{x}+{y}")
         except Exception:
             pass
 
