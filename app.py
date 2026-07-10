@@ -29,8 +29,8 @@ def main() -> None:
     mode = (sys.argv[1] if len(sys.argv) > 1 else "").lower()
 
     if sys.platform == "darwin":
-        # Default is the native menu bar (tested); `bar`/`demo` opt into the
-        # experimental cross-platform floating widget.
+        # Default is the native menu bar; `bar`/`demo` open the same
+        # cross-platform floating widget used on Windows/Linux.
         if mode in ("bar", "both", "demo"):
             from widget_bar import BarWidget
             BarWidget(demo=(mode == "demo")).run()
