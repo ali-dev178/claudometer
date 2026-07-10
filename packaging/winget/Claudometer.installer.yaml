@@ -1,0 +1,22 @@
+# winget manifest TEMPLATE (portable install of the standalone .exe).
+# Fill the <...> placeholders and submit to https://github.com/microsoft/winget-pkgs
+# (three-file manifest recommended for real submissions; this singleton is a start).
+PackageIdentifier: <YourPublisher>.Claudometer
+PackageVersion: 0.1.0
+PackageLocale: en-US
+Publisher: <Your Name>
+PackageName: Claudometer
+License: MIT
+ShortDescription: Live Claude usage limits, always visible on your taskbar.
+Moniker: claudometer
+Tags:
+  - claude
+  - productivity
+  - taskbar
+Installers:
+  - Architecture: x64
+    InstallerType: portable
+    InstallerUrl: https://github.com/<you>/claudometer/releases/download/v0.1.0/Claudometer.exe
+    InstallerSha256: <SHA256_OF_EXE>
+ManifestType: singleton
+ManifestVersion: 1.6.0

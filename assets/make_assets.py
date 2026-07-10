@@ -192,10 +192,23 @@ def strip_closeup(disp):
     bg.save(os.path.join(OUT, "strip.png"))
 
 
+def app_icon():
+    S = 256
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([8, 8, S - 8, S - 8], radius=56, fill="#d97757")
+    render._spark(d, S / 2, S / 2 - 2, S * 0.30, "#ffffff")
+    img.save(os.path.join(OUT, "icon.png"))
+    img.save(os.path.join(OUT, "icon.ico"),
+             sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+
+
 if __name__ == "__main__":
     disp = sample_disp()
     hero_windows(disp)
     hero_mac(disp)
     themes_side_by_side(disp)
     strip_closeup(disp)
-    print("wrote:", ", ".join(sorted(f for f in os.listdir(OUT) if f.endswith(".png"))))
+    app_icon()
+    print("wrote:", ", ".join(sorted(f for f in os.listdir(OUT)
+                                     if f.endswith((".png", ".ico")))))

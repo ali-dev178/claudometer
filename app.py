@@ -30,6 +30,9 @@ def main() -> None:
         MenuApp().run()
         return
 
+    if not mode:  # packaged/no-arg default: the flagship on Windows, tray on Linux
+        mode = "bar" if sys.platform == "win32" else "tray"
+
     if mode == "bar":
         _run_bar()
     elif mode == "both":

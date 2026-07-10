@@ -1,3 +1,4 @@
+<p align="center"><img src="assets/icon.png" width="84" alt="Claudometer"></p>
 <h1 align="center">Claudometer</h1>
 
 <p align="center">
@@ -46,7 +47,9 @@ Today, checking where you stand means **opening the `/usage` panel or the app an
 - 🔒 **Zero setup** — reuses your existing Claude login. Nothing to configure.
 - 🪶 **Featherweight** — ~0.03% CPU idle, ~50 MB RAM. You won't notice it.
 - 🖥️ **Stays out of the way** — auto‑hides over fullscreen movies, games, and presentations.
+- 🔔 **Warns you in time** — optional desktop alerts when you cross 80% / 90%.
 - 🎨 **Looks the part** — supersampled rendering, light/dark aware, adapts to your taskbar.
+- ⚙️ **Yours to tune** — an optional config file for interval, theme, alerts, accent, and an estimated‑cost view.
 
 ---
 
@@ -64,24 +67,30 @@ Today, checking where you stand means **opening the `/usage` panel or the app an
 
 ## Install
 
-Requires **Python 3.9+**, a **Claude Pro / Max / Team** subscription, and that you've **signed into Claude Code** at least once (that's where the credentials live).
+You need a **Claude Pro / Max / Team** subscription and to have **signed into Claude Code** at least once (that's where the credentials live).
 
+### Option A — Standalone binary (no Python)
+Grab `Claudometer.exe` (Windows) or `Claudometer.app` (macOS) from
+[**Releases**](https://github.com/<your-username>/claudometer/releases), run it,
+and drag the readout where you like. Add it to startup to launch on login.
+
+### Option B — From source (Python 3.9+)
 ```bash
 git clone https://github.com/<your-username>/claudometer.git
 cd claudometer
 ```
-
 **Windows**
 ```powershell
 py -m pip install -r requirements.txt
 pythonw.exe app.py bar     # runs with no console window
 ```
-
 **macOS**
 ```bash
 python3 -m pip install -r requirements.txt
 python3 app.py             # adds a menu-bar item
 ```
+
+Build your own binaries with [`packaging/`](packaging/) (PyInstaller + CI).
 
 > First run tip (Windows): Windows 11 may tuck new taskbar items away — drag Claudometer to where you want it; it remembers the position.
 
@@ -118,11 +127,26 @@ then `launchctl load ~/Library/LaunchAgents/com.claudometer.plist`.
 
 ## Configuration
 
-| Env var | Default | Purpose |
-|---|---|---|
-| `CLAUDE_WIDGET_POLL` | `90` | Poll interval in seconds (clamped 60–300). |
-| `CLAUDE_CONFIG_DIR` | `~/.claude` | Where to read credentials from. |
-| `CLAUDE_WIDGET_FAKE` | — | Testing: `"95,40,0"` = session,weekly,scoped % (skips the network). |
+Everything works with no config. To customise, copy
+[`claudometer.example.toml`](claudometer.example.toml) to `~/.claudometer.toml`:
+
+```toml
+poll = 90                        # seconds between polls (60–300)
+theme = "auto"                   # auto | light | dark
+metrics = ["session", "weekly"]  # which meters on the strip
+alerts = true                    # desktop toast on threshold crossings
+alert_thresholds = [80, 90]
+show_cost = false                # estimated token/$ line in the popover
+# accent = "#d97757"             # override the accent color
+```
+
+Environment overrides:
+
+| Env var | Purpose |
+|---|---|
+| `CLAUDOMETER_CONFIG` | Path to the config file (default `~/.claudometer.toml`). |
+| `CLAUDE_CONFIG_DIR` | Where to read Claude credentials/transcripts (default `~/.claude`). |
+| `CLAUDE_WIDGET_FAKE` | Testing: `"95,40,0"` = session,weekly,scoped % (skips the network). |
 
 Preview the red/alert state with no real load:
 ```powershell
@@ -170,14 +194,15 @@ row. Tokens are refreshed automatically when they expire.
 | **macOS** | Menu‑bar item + dropdown | ✅ Menu bar |
 | **Linux** | Notification‑area tray icon | 🧪 Experimental (`app.py tray`) |
 
-## Roadmap / ideas
+## Roadmap
 
-- 🔔 Threshold **desktop alerts** (ping at 80% / 90%)
-- ⚙️ **Config file** (position, theme override, which metrics to show)
-- 💵 Optional **cost / token** view
+**Shipped:** ✅ desktop alerts · ✅ config file · ✅ estimated cost view · ✅ standalone binaries + release CI.
+
+**Next up:**
 - 📈 A tiny **usage sparkline** over the session
-- 📦 One‑click packaging (**winget** / **Homebrew** / signed installers)
-- 🍎 Unified floating popover on macOS
+- 🍎 Unified floating popover on macOS (currently a native menu‑bar item)
+- 🧮 Per‑model cost breakdown & weekly totals
+- 📥 Published **winget** / **Homebrew** listings
 
 Contributions and ideas welcome — open an issue or PR.
 
