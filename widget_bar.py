@@ -21,6 +21,7 @@ from PIL import ImageTk
 
 import usage_core as core
 import render
+import settings
 
 POS_FILE = Path.home() / ".claude_widget_bar.json"
 TASKBAR_H = 48
@@ -212,6 +213,45 @@ class Popover:
 
 
 # --------------------------------------------------------------------------- #
+# Threshold alert toast
+# --------------------------------------------------------------------------- #
+class Toast:
+    """A small auto-dismissing alert card near the tray."""
+
+    def __init__(self, root, theme, pct, title, subtitle, color_name, duration=6500):
+        key = render.THEMES[theme]["key"]
+        self.top = tk.Toplevel(root)
+        self.top.overrideredirect(True)
+        self.top.attributes("-topmost", True)
+        self.top.configure(bg=key)
+        self.top.attributes("-transparentcolor", key)
+        img = render.render_toast(pct, title, subtitle, color_name, theme)
+        self._photo = ImageTk.PhotoImage(img)
+        w, h = img.size
+        c = tk.Canvas(self.top, width=w, height=h, bg=key, highlightthickness=0, bd=0)
+        c.pack()
+        c.create_image(0, 0, anchor="nw", image=self._photo)
+        c.bind("<Button-1>", lambda e: self.close())
+        sw, sh = _screen_size()
+        self.top.geometry(f"{w}x{h}+{sw - w - 20}+{sh - TASKBAR_H - h - 16}")
+        self._closed = False
+        self._after = self.top.after(duration, self.close)
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.top.after_cancel(self._after)
+        except Exception:
+            pass
+        try:
+            self.top.destroy()
+        except Exception:
+            pass
+
+
+# --------------------------------------------------------------------------- #
 # Taskbar strip (image-based)
 # --------------------------------------------------------------------------- #
 class BarWidget:
@@ -224,7 +264,21 @@ class BarWidget:
         self.canvas = tk.Canvas(self.root, highlightthickness=0, bd=0)
         self.canvas.pack()
 
-        self._theme = "light"
+        cfg = settings.load()
+        self._poll = cfg["poll"]
+        self._metrics = tuple(cfg["metrics"])
+        self._forced_theme = cfg["theme"] if cfg["theme"] in ("light", "dark") else None
+        self._alerts_on = cfg["alerts"]
+        self._thresholds = cfg["alert_thresholds"]
+        self._show_cost = cfg["show_cost"]
+        if cfg["accent"]:
+            for _t in render.THEMES.values():
+                _t["accent"] = cfg["accent"]
+        self._alerted = {"session": set(), "weekly": set()}
+        self._toast = None
+        self._first_alert = True
+
+        self._theme = self._forced_theme or "light"
         self._bg_hex = None
         self._state = core.PollState()
         self._disp = None
@@ -252,7 +306,7 @@ class BarWidget:
         if hexc == self._bg_hex:
             return
         self._bg_hex = hexc
-        self._theme = "light" if _lum(rgb) > 140 else "dark"
+        self._theme = self._forced_theme or ("light" if _lum(rgb) > 140 else "dark")
         self.root.configure(bg=hexc)
         self.canvas.configure(bg=hexc)
         self._sig = None
@@ -343,6 +397,48 @@ class BarWidget:
         self._popover = None
         self._pop_closed_at = time.monotonic()
 
+    # -- threshold alerts ------------------------------------------------- #
+    def _maybe_alert(self, disp):
+        """Fire a toast when session/weekly crosses a configured threshold
+        upward. Runs on the poll thread; the toast is created on the main
+        thread via after()."""
+        if not self._alerts_on:
+            return
+        first = self._first_alert
+        self._first_alert = False
+        for which in ("session", "weekly"):
+            pct = disp.get(f"{which}_pct")
+            if pct is None:
+                continue
+            reached = {t for t in self._thresholds if pct >= t}
+            new = reached - self._alerted[which]
+            self._alerted[which] = reached  # drops when the window resets too
+            if new and not first:
+                self._queue_toast(which, pct, disp)
+
+    def _queue_toast(self, which, pct, disp):
+        color = disp.get(f"{which}_color", "amber")
+        if which == "session":
+            label, reset = "Session", render._fmt_left(disp.get("session_resets_at"))
+        else:
+            label, reset = "Weekly", render._fmt_at(disp.get("weekly_resets_at"))
+        title = f"{label} usage at {pct}%"
+        sub = reset or "you're approaching your limit"
+        try:
+            self.root.after(0, lambda: self._show_toast(pct, title, sub, color))
+        except Exception:
+            pass
+
+    def _show_toast(self, pct, title, subtitle, color):
+        if self._hidden:
+            return
+        try:
+            if self._toast is not None:
+                self._toast.close()
+            self._toast = Toast(self.root, self._theme, pct, title, subtitle, color)
+        except Exception:
+            pass
+
     def _popup_menu(self, e):
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="Details…", command=self._toggle_popover)
@@ -372,7 +468,7 @@ class BarWidget:
         )
 
     def _draw(self, disp):
-        img = render.render_strip(disp, self._bg_hex, self._theme, scale=3)
+        img = render.render_strip(disp, self._bg_hex, self._theme, scale=3, metrics=self._metrics)
         self._photo = ImageTk.PhotoImage(img)
         w, h = img.size
         self.canvas.configure(width=w, height=h)
@@ -400,7 +496,8 @@ class BarWidget:
                 disp = core.status_display(core.Status.ERROR)
             with self._lock:
                 self._disp = disp
-            wait = self._state.backoff or core.poll_seconds()
+            self._maybe_alert(disp)
+            wait = self._state.backoff or self._poll
             self._wake.wait(timeout=wait)
             self._wake.clear()
 

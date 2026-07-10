@@ -1,0 +1,24 @@
+# Claudometer configuration — OPTIONAL.
+# Copy to  ~/.claudometer.toml  (or set CLAUDOMETER_CONFIG=/path/to/file).
+# Everything has a sensible default; delete any line to use it. Changes apply
+# on restart.
+
+# Seconds between usage polls (clamped to 60–300).
+poll = 90
+
+# "auto" follows your taskbar's light/dark; force with "light" or "dark".
+theme = "auto"
+
+# Which meters to show on the taskbar strip: any of "session", "weekly".
+metrics = ["session", "weekly"]
+
+# Desktop toast alerts when you cross a usage threshold (upward).
+alerts = true
+alert_thresholds = [80, 90]
+
+# Show an estimated token/cost line in the popover (reads local Claude Code
+# session logs; estimate only — see the README).
+show_cost = false
+
+# Override the accent color (brand mark, badge, links). Hex string, e.g.:
+# accent = "#5b61ea"

@@ -149,7 +149,7 @@ def _badge_right(d, x_right, cy, text, font, T, S):
 # --------------------------------------------------------------------------- #
 # Taskbar strip
 # --------------------------------------------------------------------------- #
-def render_strip(disp, bg_hex, theme, scale=3):
+def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
     T = THEMES.get(theme, THEMES["light"])
     S = scale
     PAD, DOT_R, DOTGAP, GGAP, H = 9 * S, 4 * S, 9 * S, 22 * S, 30 * S
@@ -159,14 +159,14 @@ def render_strip(disp, bg_hex, theme, scale=3):
     f_dim = _font("reg", 11 * S)
 
     groups = []
-    if disp.get("session_pct") is not None:
+    if "session" in metrics and disp.get("session_pct") is not None:
         g = [("Session ", f_lbl, T["dim"]),
              (f"{disp['session_pct']}%", f_num, sev_color(T, disp["session_color"]))]
         left = _fmt_left(disp.get("session_resets_at"))
         if left:
             g.append(("   " + left, f_dim, T["faint"]))
         groups.append(g)
-    if disp.get("weekly_pct") is not None:
+    if "weekly" in metrics and disp.get("weekly_pct") is not None:
         groups.append([("Weekly ", f_lbl, T["dim"]),
                        (f"{disp['weekly_pct']}%", f_num, sev_color(T, disp["weekly_color"]))])
     if not groups:
@@ -304,3 +304,31 @@ def render_popover(disp, theme, scale=3):
         "quit": (qx1 / S, (fy - 12 * S) / S, qx2 / S, (fy + 12 * S) / S),
     }
     return out, hits
+
+
+# --------------------------------------------------------------------------- #
+# Threshold alert toast
+# --------------------------------------------------------------------------- #
+def render_toast(pct, title, subtitle, color_name, theme, scale=3):
+    T = THEMES.get(theme, THEMES["light"])
+    S = scale
+    W, H = 322, 70
+    Ws, Hs = W * S, H * S
+    base = Image.new("RGB", (Ws, Hs), T["key"])
+    grad = _vgrad(Ws, Hs, T["panel_top"], T["panel_bot"])
+    mask = Image.new("L", (Ws, Hs), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, Ws - 1, Hs - 1], radius=14 * S, fill=255)
+    base.paste(grad, (0, 0), mask)
+    d = ImageDraw.Draw(base)
+    d.rounded_rectangle([0, 0, Ws - 1, Hs - 1], radius=14 * S, outline=T["border"], width=max(1, S))
+
+    col = sev_color(T, color_name)
+    cx1, cy1, chip = 14 * S, 13 * S, 44 * S
+    d.rounded_rectangle([cx1, cy1, cx1 + chip, cy1 + chip], radius=12 * S, fill=col)
+    d.text((cx1 + chip / 2, cy1 + chip / 2), f"{pct}%", font=_font("sb", 15 * S),
+           fill="#ffffff", anchor="mm")
+
+    tx = cx1 + chip + 16 * S
+    d.text((tx, 26 * S), title, font=_font("sb", 13 * S), fill=T["neutral"], anchor="lm")
+    d.text((tx, 45 * S), subtitle, font=_font("reg", 11 * S), fill=T["dim"], anchor="lm")
+    return base.resize((W, H), Image.LANCZOS)
