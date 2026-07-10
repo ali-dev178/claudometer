@@ -245,7 +245,7 @@ def _round_alpha(img, radius):
 # Details popover (image-based)
 # --------------------------------------------------------------------------- #
 class Popover:
-    def __init__(self, root, theme, get_disp, anchor_x, anchor_top, anchor_bottom,
+    def __init__(self, root, theme, get_disp, anchor_x, anchor_top, anchor_bottom, work,
                  on_refresh, on_quit, on_settings, on_close):
         self.theme = theme
         self.get_disp = get_disp
@@ -260,6 +260,7 @@ class Popover:
         self.anchor_x = anchor_x
         self.anchor_top = anchor_top
         self.anchor_bottom = anchor_bottom
+        self.work = work
 
         self.top = tk.Toplevel(root)
         self.top.overrideredirect(True)
@@ -309,8 +310,7 @@ class Popover:
         # Place on the SAME monitor as the strip (not the primary screen), and
         # open up or down depending on which side has room. See _popover_xy.
         px, py = _popover_xy(
-            self.anchor_x, self.anchor_top, self.anchor_bottom, w, h,
-            _monitor_workarea(self.anchor_x, self.anchor_top))
+            self.anchor_x, self.anchor_top, self.anchor_bottom, w, h, self.work)
         self.canvas.configure(width=w, height=h)
         self.top.geometry(f"{w}x{h}+{int(px)}+{int(py)}")
         self.canvas.delete("all")
@@ -375,7 +375,8 @@ class Toast:
         c.pack()
         c.create_image(0, 0, anchor="nw", image=self._photo)
         c.bind("<Button-1>", lambda e: self.close())
-        wl, wt, wr, wb = _monitor_workarea(root.winfo_x(), root.winfo_y())
+        wl, wt, wr, wb = _monitor_workarea(root.winfo_rootx() + root.winfo_width() // 2,
+                                           root.winfo_rooty() + root.winfo_height() // 2)
         self.top.geometry(f"{w}x{h}+{wr - w - 20}+{wb - h - 16}")
         self._closed = False
         self._after = self.top.after(duration, self.close)
@@ -448,7 +449,9 @@ class ResumeToast:
         self.canvas.configure(width=w, height=h)
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
-        wl, wt, wr, wb = _monitor_workarea(self._root.winfo_x(), self._root.winfo_y())
+        r = self._root
+        wl, wt, wr, wb = _monitor_workarea(r.winfo_rootx() + r.winfo_width() // 2,
+                                           r.winfo_rooty() + r.winfo_height() // 2)
         self.top.geometry(f"{w}x{h}+{wr - w - 20}+{wb - h - 16}")
 
     def _tick(self):
@@ -1063,10 +1066,14 @@ class BarWidget:
             return
         if time.monotonic() - self._pop_closed_at < 0.35:
             return
+        # winfo_rootx/rooty = the strip's absolute screen coords; resolve the
+        # monitor from the strip's CENTER so it's correct right at a boundary.
+        rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
+        rw, rh = self.root.winfo_width(), self.root.winfo_height()
+        work = _monitor_workarea(rx + rw // 2, ry + rh // 2)
         self._popover = Popover(
             self.root, self._theme, self._get_disp,
-            self.root.winfo_x(), self.root.winfo_y(),
-            self.root.winfo_y() + self.root.winfo_height(),
+            rx, ry, ry + rh, work,
             self._refresh_now, self._quit, self._open_settings, self._on_popover_closed,
         )
 
