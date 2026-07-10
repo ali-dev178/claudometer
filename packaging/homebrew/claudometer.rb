@@ -2,8 +2,8 @@
 # after a release. Publish via your own tap repo (homebrew-claudometer), then:
 #   brew install --cask ali-dev178/claudometer/claudometer
 cask "claudometer" do
-  version "1.1.0"
-  sha256 "bbb84f4069d6e7febf4802214457c2a065c6eca58f3774d926795c1f52cde1c8"
+  version "1.1.1"
+  sha256 "a5da55d42dbbbbbfdd0f2ab8eaf476248b3f3664411b50cfe43b28cde99aad31"
 
   url "https://github.com/ali-dev178/claudometer/releases/download/v#{version}/Claudometer-macos.zip"
   name "Claudometer"
