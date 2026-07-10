@@ -66,7 +66,10 @@ def _font(kind, size):
             except OSError:
                 continue
     else:
-        f = ImageFont.load_default()
+        try:
+            f = ImageFont.load_default(size)  # Pillow >=10.1: a sized FreeType font
+        except TypeError:                     # older Pillow: legacy bitmap font
+            f = ImageFont.load_default()
     _FCACHE[k] = f
     return f
 
@@ -147,7 +150,8 @@ def _big_pct(d, x, ymid, pct, fbig, fpct, color, dim):
     num = str(pct)
     nw = d.textlength(num, font=fbig)
     d.text((x, ymid), num, font=fbig, fill=color, anchor="lm")
-    d.text((x + nw + 2, ymid - fbig.size * 0.17), "%", font=fpct, fill=color, anchor="lm")
+    d.text((x + nw + 2, ymid - getattr(fbig, "size", 20) * 0.17), "%", font=fpct,
+           fill=color, anchor="lm")
 
 
 def _badge_right(d, x_right, cy, text, font, T, S):
@@ -189,7 +193,7 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
         cand.append((disp["session_pct"], disp["session_color"]))
     if disp.get("weekly_pct") is not None:
         cand.append((disp["weekly_pct"], disp["weekly_color"]))
-    dot_color = sev_color(T, max(cand)[1]) if cand else T["dim"]
+    dot_color = sev_color(T, max(cand, key=lambda c: c[0])[1]) if cand else T["dim"]
 
     tmp = ImageDraw.Draw(Image.new("RGB", (4, 4)))
 
@@ -272,6 +276,8 @@ def render_popover(disp, theme, scale=3):
     _spark(d, P + 8 * S, 28 * S, 8 * S, T["accent"])
     d.text((P + 24 * S, 28 * S), "Claudometer", font=f_title, fill=T["neutral"], anchor="lm")
     plan = (disp.get("plan") or "").replace("Plan: ", "") or "—"
+    if len(plan) > 22:  # keep the badge from overrunning the title
+        plan = plan[:21] + "…"
     _badge_right(d, Ws - P, 28 * S, plan, f_badge, T, S)
 
     bar_x1, bar_x2 = P + 60 * S, Ws - P

@@ -32,11 +32,50 @@ def config_path() -> Path:
     return Path(os.environ.get("CLAUDOMETER_CONFIG") or (Path.home() / ".claudometer.toml"))
 
 
+def _strip_comment(v):
+    """Drop an inline # comment, respecting quotes (so "#5b61ea" survives)."""
+    out, quote = [], None
+    for ch in v:
+        if quote:
+            out.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+            out.append(ch)
+        elif ch == "#":
+            break
+        else:
+            out.append(ch)
+    return "".join(out).strip()
+
+
+def _split_top(s):
+    """Split on top-level commas, respecting quotes."""
+    parts, buf, quote = [], [], None
+    for ch in s:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+            buf.append(ch)
+        elif ch == ",":
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    if "".join(buf).strip():
+        parts.append("".join(buf))
+    return parts
+
+
 def _mini_val(v):
     v = v.strip()
     if v.startswith("[") and v.endswith("]"):
         inner = v[1:-1].strip()
-        return [_mini_val(x) for x in inner.split(",") if x.strip()] if inner else []
+        return [_mini_val(x) for x in _split_top(inner) if x.strip()] if inner else []
     if len(v) >= 2 and v[0] in "\"'" and v[-1] == v[0]:
         return v[1:-1]
     low = v.lower()
@@ -61,12 +100,12 @@ def _parse(text: str) -> dict:
     except Exception:
         return {}
     out = {}
-    for line in text.splitlines():
-        line = line.split("#", 1)[0].strip()
-        if not line or "=" not in line:
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
             continue
         k, v = line.split("=", 1)
-        out[k.strip()] = _mini_val(v)
+        out[k.strip()] = _mini_val(_strip_comment(v.strip()))
     return out
 
 

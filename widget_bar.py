@@ -14,6 +14,7 @@ from ctypes import wintypes
 import json
 import threading
 import time
+import traceback
 import tkinter as tk
 from datetime import datetime, timezone
 from pathlib import Path
@@ -113,6 +114,16 @@ def _fullscreen_active():
         return True
     sw, sh = _screen_size()
     return _foreground_fullscreen(sw, sh)
+
+
+def _log_exc(_exc=None):
+    """Append an unexpected exception to a log so real bugs are diagnosable."""
+    try:
+        log = Path.home() / ".claude" / "claudometer-error.log"
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(traceback.format_exc() + "\n")
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -373,6 +384,9 @@ class BarWidget:
         self._resume_state = "idle"  # idle | capped
         self._resume_snapshot = None
         self._resume_toast = None
+        self._resume_retry_after = None
+        self._poll_seq = 0        # bumped by the poll thread on each new result
+        self._processed_seq = 0   # last poll processed for alerts/resume (main thread)
 
         self._theme = self._forced_theme or "light"
         self._bg_hex = None
@@ -496,10 +510,11 @@ class BarWidget:
     # -- threshold alerts ------------------------------------------------- #
     def _maybe_alert(self, disp):
         """Fire a toast when session/weekly crosses a configured threshold
-        upward. Runs on the poll thread; the toast is created on the main
-        thread via after()."""
+        upward. Runs on the main thread (called from _refresh_ui)."""
         if not self._alerts_on:
             return
+        if disp.get("session_pct") is None and disp.get("weekly_pct") is None:
+            return  # no numeric data yet — don't consume the first-run suppression
         first = self._first_alert
         self._first_alert = False
         for which in ("session", "weekly"):
@@ -520,10 +535,7 @@ class BarWidget:
             label, reset = "Weekly", render._fmt_at(disp.get("weekly_resets_at"))
         title = f"{label} usage at {pct}%"
         sub = reset or "you're approaching your limit"
-        try:
-            self.root.after(0, lambda: self._show_toast(pct, title, sub, color))
-        except Exception:
-            pass
+        self._show_toast(pct, title, sub, color)
 
     def _show_toast(self, pct, title, subtitle, color):
         if self._hidden:
@@ -538,8 +550,8 @@ class BarWidget:
     # -- resume on reset -------------------------------------------------- #
     def _track_resume(self, disp):
         """Watch the 5-hour session: snapshot the active session when it caps,
-        and fire the resume flow when its window resets. Runs on the poll
-        thread; UI is created on the main thread via after()."""
+        and fire the resume flow when its window resets. Runs on the main
+        thread (called from _refresh_ui)."""
         if not (self._resume_notify or self._resume_auto):
             return
         sp = disp.get("session_pct")
@@ -553,24 +565,34 @@ class BarWidget:
                     self._resume_snapshot = snap
                     self._resume_state = "capped"
         elif self._resume_state == "capped":
-            passed = False
+            # Authoritative reset signal is the reset time passing; fall back to
+            # a large utilization drop only when no reset time is known.
             ra = (self._resume_snapshot or {}).get("resets_at")
+            reset = False
             if ra is not None:
                 try:
-                    passed = datetime.now(timezone.utc) >= ra
+                    reset = datetime.now(timezone.utc) >= ra
                 except Exception:
-                    passed = False
-            if passed or sp <= 25:  # window has reset
+                    reset = False
+            elif sp <= 50:
+                reset = True
+            if reset:
                 snap = self._resume_snapshot
                 self._resume_snapshot = None
                 self._resume_state = "idle"
-                self.root.after(0, lambda: self._fire_resume(snap))
+                self._fire_resume(snap)
 
     def _fire_resume(self, snap):
         if not snap:
             return
+        if self._resume_retry_after is not None:  # replace any pending retry
+            try:
+                self.root.after_cancel(self._resume_retry_after)
+            except Exception:
+                pass
+            self._resume_retry_after = None
         if self._hidden:  # over fullscreen — retry shortly, don't lose it
-            self.root.after(15000, lambda: self._fire_resume(snap))
+            self._resume_retry_after = self.root.after(15000, lambda: self._fire_resume(snap))
             return
         try:
             if self._resume_toast is not None:
@@ -646,6 +668,7 @@ class BarWidget:
     # -- loops ------------------------------------------------------------ #
     def _poll_loop(self):
         while True:
+            result = None
             try:
                 result = core.poll_once(self._state)
                 if isinstance(result, core.Usage):
@@ -655,6 +678,7 @@ class BarWidget:
             except core.CredentialsMissing:
                 disp = core.status_display(core.Status.NO_CREDS)
             except Exception:
+                _log_exc()
                 disp = core.status_display(core.Status.ERROR)
             if self._show_cost and isinstance(result, core.Usage):
                 try:
@@ -665,10 +689,12 @@ class BarWidget:
                         disp["cost_usd"] = c["cost"]
                 except Exception:
                     pass
+            # Hand off to the main thread. Tkinter isn't thread-safe, so alerts
+            # and resume (which build Toplevels/timers) run in _refresh_ui on the
+            # main thread; here we only publish data + bump the sequence.
             with self._lock:
                 self._disp = disp
-            self._maybe_alert(disp)
-            self._track_resume(disp)
+                self._poll_seq += 1
             wait = self._state.backoff or self._poll
             self._wake.wait(timeout=wait)
             self._wake.clear()
@@ -679,8 +705,13 @@ class BarWidget:
         if _fullscreen_active():
             if not self._hidden:
                 self._hidden = True
-                if self._popover is not None:
-                    self._popover.close()
+                for t in (self._popover, self._toast, self._resume_toast):
+                    if t is not None:
+                        try:
+                            t.close()
+                        except Exception:
+                            pass
+                self._popover = self._toast = self._resume_toast = None
                 try:
                     self.root.withdraw()
                 except Exception:
@@ -701,9 +732,18 @@ class BarWidget:
             rgb = self._sample_bg()
             if rgb:
                 self._apply_bg(rgb)
+
         with self._lock:
             disp = self._disp
+            seq = self._poll_seq
         if disp is not None:
+            if seq != self._processed_seq:  # new poll — alerts/resume on main thread
+                self._processed_seq = seq
+                try:
+                    self._maybe_alert(disp)
+                    self._track_resume(disp)
+                except Exception:
+                    _log_exc()
             sig = self._strip_sig(disp)
             if sig != self._sig:
                 self._draw(disp)

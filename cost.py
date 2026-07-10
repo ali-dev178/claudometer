@@ -7,7 +7,9 @@ plan billing (Pro/Max are flat-rate).
 
 Prices: USD per million tokens, verified from the official pricing page
 (platform.claude.com) on 2026-07-10. `cache_write` = 5-minute cache write
-(1.25x input); `cache_read` = cache hit (0.1x input).
+(1.25x input); `cache_read` = cache hit (0.1x input). Prices are matched by model
+family (opus/sonnet/haiku/fable) and assume the current generation — a future
+model sharing a family name but priced differently would use these rates.
 """
 
 import json
@@ -55,6 +57,7 @@ def compute_today(config_dir=None):
     start = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
     cutoff = start.timestamp()
     total_tokens, total_cost = 0, 0.0
+    seen = set()  # message ids already counted (Claude Code repeats usage per block-line)
 
     for f in proj.rglob("*.jsonl"):
         try:
@@ -79,8 +82,15 @@ def compute_today(config_dir=None):
                             if datetime.fromisoformat(ts.replace("Z", "+00:00")) < start:
                                 continue
                         except ValueError:
-                            pass
+                            continue  # can't date it -> exclude from "today"
                     msg = obj.get("message", {})
+                    # Claude Code writes one line per content block, each carrying
+                    # the SAME cumulative usage — count each message id only once.
+                    mid = msg.get("id")
+                    if mid is not None:
+                        if mid in seen:
+                            continue
+                        seen.add(mid)
                     key = _key_for(msg.get("model", ""))
                     if not key:
                         continue

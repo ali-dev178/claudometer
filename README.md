@@ -37,7 +37,7 @@ Today, checking where you stand means **opening the `/usage` panel or the app an
 - **`Weekly 18%`** — your 7‑day all‑models usage.
 - A **color‑coded status dot** (🟢 &lt;50% · 🟡 50–80% · 🔴 &gt;80%) so severity registers in a glance.
 
-**Click it** for a polished breakdown with per‑meter reset times and per‑model (e.g. Fable) usage:
+**Click it** for a polished breakdown with per‑meter reset times and per‑model (e.g. Opus) usage:
 
 <p align="center"><img src="assets/popover-themes.png" alt="Light and dark popover" width="820"></p>
 
@@ -126,7 +126,7 @@ Build your own binaries with [`packaging/`](packaging/) (PyInstaller + CI).
 |---|---|
 | `app.py bar` | **Windows:** floating taskbar strip + popover *(recommended)* |
 | `app.py tray` | **Windows/Linux:** notification‑area tray icon |
-| `app.py both` | Taskbar strip **and** tray icon |
+| `app.py both` | **Windows:** taskbar strip **and** tray icon |
 | `app.py` | Default — **macOS:** menu bar · **Windows/Linux:** tray |
 
 **Interactions (taskbar strip):** left‑click = open/close popover · drag = move (remembered) · right‑click = Details / Refresh / Quit.
@@ -153,6 +153,10 @@ then `launchctl load ~/Library/LaunchAgents/com.claudometer.plist`.
 
 ## Configuration
 
+> The config file, alerts, cost view, resume, theme and accent apply to the
+> **Windows taskbar strip** (`bar` mode). The macOS menu bar and Linux tray show
+> usage but ignore these options (see [Platform support](#platform-support)).
+
 Everything works with no config. To customise, copy
 [`claudometer.example.toml`](claudometer.example.toml) to `~/.claudometer.toml`:
 
@@ -177,6 +181,7 @@ Environment overrides:
 |---|---|
 | `CLAUDOMETER_CONFIG` | Path to the config file (default `~/.claudometer.toml`). |
 | `CLAUDE_CONFIG_DIR` | Where to read Claude credentials/transcripts (default `~/.claude`). |
+| `CLAUDE_WIDGET_POLL` | Poll interval in seconds (60–300). The interval source for the macOS menu bar / tray (which don't read the config file). |
 | `CLAUDE_WIDGET_FAKE` | Testing: `"95,40,0"` = session,weekly,scoped % (skips the network). |
 
 Preview the red/alert state with no real load:
@@ -197,8 +202,8 @@ GET https://api.anthropic.com/api/oauth/usage
 ```
 
 The response maps directly onto the UI: the 5‑hour window → **Session**, the
-7‑day all‑models window → **Weekly**, and per‑model scoped limits → the **Fable**
-row. Tokens are refreshed automatically when they expire.
+7‑day all‑models window → **Weekly**, and any per‑model scoped limits → per‑model
+rows (e.g. **Opus**). Tokens are refreshed automatically when they expire.
 
 > This is *true plan %* from Anthropic's backend — **not** a local token‑cost
 > estimate (unlike tools that add up `*.jsonl` transcript costs).
@@ -224,6 +229,11 @@ row. Tokens are refreshed automatically when they expire.
 | **Windows 10/11** | Taskbar strip + click‑to‑open popover | ✅ Full |
 | **macOS** | Menu‑bar item + dropdown | ✅ Menu bar |
 | **Linux** | Notification‑area tray icon | 🧪 Experimental (`app.py tray`) |
+
+> **Feature scope:** the taskbar strip (Windows) has the full feature set —
+> click‑to‑open popover, alerts, estimated cost, resume‑on‑reset, themes, accent,
+> and the config file. The macOS menu bar and Linux tray currently show live
+> usage only. Unifying these is on the roadmap.
 
 ## Roadmap
 

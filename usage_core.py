@@ -414,21 +414,27 @@ def poll_once(state: PollState):
     if not token:
         raise CredentialsMissing("credentials file missing accessToken")
 
-    # Proactive refresh if the token is about to expire.
+    # Proactive refresh if the token is about to expire. A RefreshRejected
+    # (invalid_grant) means re-login is required — track it to surface NO_CREDS.
+    rejected = False
     if _expiring_soon(creds) and refresh_tok:
         try:
             token = _refresh_and_persist(refresh_tok, full)
-        except (RefreshRejected, RefreshFailed):
-            pass  # try the (possibly still valid) existing token anyway
+        except RefreshRejected:
+            rejected = True
+        except RefreshFailed:
+            pass  # transient — try the existing token anyway
 
     status, usage = fetch_usage(token, plan, rate_tier)
 
     # Reactive refresh: exactly one retry on 401.
-    if status == "unauthorized" and refresh_tok:
+    if status == "unauthorized" and refresh_tok and not rejected:
         try:
             token = _refresh_and_persist(refresh_tok, full)
             status, usage = fetch_usage(token, plan, rate_tier)
-        except (RefreshRejected, RefreshFailed):
+        except RefreshRejected:
+            rejected = True
+        except RefreshFailed:
             pass
 
     if status == "ok":
@@ -443,6 +449,8 @@ def poll_once(state: PollState):
         return Status.OFFLINE
     if status == "no_data":
         return Status.NO_DATA
+    if rejected or status == "unauthorized":
+        return Status.NO_CREDS  # re-login required
     return Status.ERROR
 
 

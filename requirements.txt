@@ -1,4 +1,4 @@
 requests>=2.31
 pystray>=0.19 ; sys_platform != "darwin"
-Pillow>=10.0  ; sys_platform != "darwin"
+Pillow>=10.1  ; sys_platform != "darwin"
 rumps>=0.4    ; sys_platform == "darwin"

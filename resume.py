@@ -112,24 +112,25 @@ def run_auto(cwd, session_id, prompt, skip_permissions=False, max_turns=30, conf
     unless the user explicitly opts into --dangerously-skip-permissions.
     """
     log = _config_dir(config_dir) / f"claudometer-resume-{session_id[:8]}.log"
-    args = [CLAUDE, "--resume", session_id, "-p", prompt]
+    flags = ["--resume", session_id, "-p", prompt]
     if max_turns:
-        args += ["--max-turns", str(int(max_turns))]
+        flags += ["--max-turns", str(int(max_turns))]
     if skip_permissions:
-        args.append("--dangerously-skip-permissions")
+        flags.append("--dangerously-skip-permissions")
     else:
-        args += ["--permission-mode", "acceptEdits"]
+        flags += ["--permission-mode", "acceptEdits"]
     try:
         if sys.platform == "win32":
-            joined = " ".join(_ps(a) if (" " in a or a.startswith("-") is False) else a for a in args)
-            subprocess.Popen(
-                ["powershell", "-NoProfile", "-Command",
-                 f"Set-Location -LiteralPath {_ps(cwd)}; {joined} *> {_ps(str(log))}"],
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
+            # 'claude' must be bare so PowerShell runs it as a command (resolved
+            # on PATH); quote only values that contain spaces (the prompt).
+            rendered = " ".join(_ps(f) if " " in f else f for f in flags)
+            cmd = (f"Set-Location -LiteralPath {_ps(cwd)}; "
+                   f"claude {rendered} *> {_ps(str(log))}")
+            subprocess.Popen(["powershell", "-NoProfile", "-Command", cmd],
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         else:
             with log.open("w", encoding="utf-8") as fh:
-                subprocess.Popen(args, cwd=cwd, stdout=fh, stderr=subprocess.STDOUT)
+                subprocess.Popen([CLAUDE, *flags], cwd=cwd, stdout=fh, stderr=subprocess.STDOUT)
         return str(log)
     except Exception:
         return None
