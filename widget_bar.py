@@ -398,6 +398,7 @@ class BarWidget:
         self._resume_toast = None
         self._resume_retry_after = None
         self._resume_fire_tries = 0
+        self._resume_cooldown_until = 0.0  # monotonic time; blocks repeat auto-resume
         self._poll_seq = 0        # bumped by the poll thread on each new result
         self._processed_seq = 0   # last poll processed for alerts/resume (main thread)
 
@@ -589,8 +590,6 @@ class BarWidget:
         elif self._resume_state == "capped" and sp <= 90:  # headroom regained
             self._resume_state = "idle"
             self._fire_resume()
-        elif self._resume_state == "resumed" and sp >= 100:
-            self._resume_state = "capped"  # genuinely re-capped -> re-arm
 
     def _clear_resume_toast(self):
         self._resume_toast = None
@@ -618,6 +617,8 @@ class BarWidget:
             return
         self._resume_fire_tries = 0
         cwd, sid = snap["cwd"], snap["session_id"]
+        if self._resume_auto and time.monotonic() < self._resume_cooldown_until:
+            return  # recently auto-resumed — don't launch another unattended run
         try:
             if self._resume_toast is not None:
                 self._resume_toast.close()
@@ -641,9 +642,9 @@ class BarWidget:
             log = resume.run_auto(cwd, sid, self._resume_prompt,
                                   skip_permissions=self._resume_skip_perms,
                                   max_turns=self._resume_max_turns)
-            # don't auto-resume again until a genuine re-cap (avoids a second
-            # unattended run if the just-launched job pushes usage back to 100%)
-            self._resume_state = "resumed"
+            # cooldown: don't launch another unattended resume for a while, even if
+            # the just-launched job pushes usage back to the cap and it resets.
+            self._resume_cooldown_until = time.monotonic() + 1800
             if log:
                 self._resume_toast = ResumeToast(
                     self.root, self._theme, "Auto-resumed session",
