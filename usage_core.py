@@ -555,10 +555,9 @@ def format_breakdown(usage: Usage) -> dict:
 
     session = _find(usage, "session")
     weekly = _find(usage, "weekly_all")
-    # Drop a scoped meter that's both empty and inactive (e.g. a perpetual
-    # "Fable 0%") — it's noise; keep any scoped limit that's used or active.
-    scoped = [l for l in usage.limits
-              if l.kind == "weekly_scoped" and not (l.percent <= 0 and not l.is_active)]
+    # Show every per-model (scoped) meter the account has, even at 0% — it's a
+    # real limit the user expects to see (and the README documents it).
+    scoped = [l for l in usage.limits if l.kind == "weekly_scoped"]
 
     session_line = None
     if session:
