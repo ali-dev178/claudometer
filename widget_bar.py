@@ -12,6 +12,7 @@ Interactions: left-click = open/close popover · left-drag = move (remembered)
 import ctypes
 from ctypes import wintypes
 import json
+import sys
 import threading
 import time
 import traceback
@@ -20,7 +21,7 @@ from tkinter import messagebox
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from PIL import ImageTk
+from PIL import Image, ImageDraw, ImageTk
 
 import usage_core as core
 import render
@@ -33,8 +34,21 @@ POS_FILE = Path.home() / ".claude_widget_bar.json"
 TASKBAR_H = 48
 DRAG_THRESHOLD = 4
 
+# Windows-only native handles are set up lazily so this module imports on any OS
+# (the floating widget is cross-platform; only the taskbar/DPI/fullscreen extras
+# are Windows-specific and no-op elsewhere).
+_IS_WIN = sys.platform == "win32"
+if _IS_WIN:
+    _user32 = ctypes.windll.user32
+    _gdi32 = ctypes.windll.gdi32
+    _gdi32.GetPixel.restype = ctypes.c_uint
+else:
+    _user32 = _gdi32 = None
+
 
 def _set_dpi_aware():
+    if not _IS_WIN:
+        return
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except Exception:
@@ -45,20 +59,24 @@ def _set_dpi_aware():
 
 
 def _screen_w():
-    return ctypes.windll.user32.GetSystemMetrics(0)
+    if _IS_WIN:
+        return _user32.GetSystemMetrics(0)
+    r = tk._default_root
+    return r.winfo_screenwidth() if r is not None else 1920
 
 
 def _screen_size():
-    u = ctypes.windll.user32
-    return u.GetSystemMetrics(0), u.GetSystemMetrics(1)
-
-
-_user32 = ctypes.windll.user32
-_gdi32 = ctypes.windll.gdi32
-_gdi32.GetPixel.restype = ctypes.c_uint
+    if _IS_WIN:
+        return _user32.GetSystemMetrics(0), _user32.GetSystemMetrics(1)
+    r = tk._default_root
+    if r is not None:
+        return r.winfo_screenwidth(), r.winfo_screenheight()
+    return 1920, 1080
 
 
 def _get_pixel(x, y):
+    if not _IS_WIN:
+        return None  # no taskbar to sample off-Windows
     hdc = _user32.GetDC(0)
     if not hdc:
         return None
@@ -112,6 +130,8 @@ def _foreground_fullscreen(sw, sh):
 
 
 def _fullscreen_active():
+    if not _IS_WIN:
+        return False  # fullscreen auto-hide is a Windows-only extra
     if _quns_fullscreen():
         return True
     sw, sh = _screen_size()
@@ -136,6 +156,38 @@ def _open_url(url):
         _log_exc()
 
 
+def _make_transparent(win, theme):
+    """Make a borderless window's background transparent (so rounded cards float),
+    using the right mechanism per OS. Returns the bg 'key' color to also apply to
+    the window's Canvas. Falls back to an opaque bg where unsupported."""
+    if sys.platform == "darwin":
+        try:
+            win.attributes("-transparent", True)
+            win.configure(bg="systemTransparent")
+            return "systemTransparent"
+        except Exception:
+            pass  # fall through to opaque
+    key = render.THEMES.get(theme, render.THEMES["light"])["key"]
+    try:
+        if _IS_WIN:
+            win.attributes("-transparentcolor", key)
+    except Exception:
+        pass
+    win.configure(bg=key)
+    return key
+
+
+def _round_alpha(img, radius):
+    """RGBA copy of img with corners outside a rounded rect made transparent, so it
+    composites cleanly on any transparent window (Win keys it out, mac shows through)."""
+    img = img.convert("RGBA")
+    w, h = img.size
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, w - 1, h - 1], radius=radius, fill=255)
+    img.putalpha(mask)
+    return img
+
+
 # --------------------------------------------------------------------------- #
 # Details popover (image-based)
 # --------------------------------------------------------------------------- #
@@ -155,12 +207,13 @@ class Popover:
         self.anchor_x = anchor_x
         self.anchor_top = anchor_top
 
-        key = render.THEMES[theme]["key"]
         self.top = tk.Toplevel(root)
         self.top.overrideredirect(True)
-        self.top.attributes("-topmost", True)
-        self.top.configure(bg=key)
-        self.top.attributes("-transparentcolor", key)
+        try:
+            self.top.attributes("-topmost", True)
+        except Exception:
+            pass
+        key = _make_transparent(self.top, theme)
         self.canvas = tk.Canvas(self.top, bg=key, highlightthickness=0, bd=0)
         self.canvas.pack()
         self.canvas.bind("<Button-1>", self._click)
@@ -195,6 +248,7 @@ class Popover:
             return
         self._sig = sig
         img, hits = render.render_popover(disp, self.theme)
+        img = _round_alpha(img, 16)
         self._photo = ImageTk.PhotoImage(img)
         w, h = img.size
         self._hits = hits
@@ -251,13 +305,14 @@ class Toast:
     def __init__(self, root, theme, pct, title, subtitle, color_name, duration=6500,
                  on_close=None):
         self._on_close = on_close
-        key = render.THEMES[theme]["key"]
         self.top = tk.Toplevel(root)
         self.top.overrideredirect(True)
-        self.top.attributes("-topmost", True)
-        self.top.configure(bg=key)
-        self.top.attributes("-transparentcolor", key)
-        img = render.render_toast(pct, title, subtitle, color_name, theme)
+        try:
+            self.top.attributes("-topmost", True)
+        except Exception:
+            pass
+        key = _make_transparent(self.top, theme)
+        img = _round_alpha(render.render_toast(pct, title, subtitle, color_name, theme), 14)
         self._photo = ImageTk.PhotoImage(img)
         w, h = img.size
         c = tk.Canvas(self.top, width=w, height=h, bg=key, highlightthickness=0, bd=0)
@@ -309,12 +364,13 @@ class ResumeToast:
         self._closed = False
         self._after = None
 
-        key = render.THEMES[theme]["key"]
         self.top = tk.Toplevel(root)
         self.top.overrideredirect(True)
-        self.top.attributes("-topmost", True)
-        self.top.configure(bg=key)
-        self.top.attributes("-transparentcolor", key)
+        try:
+            self.top.attributes("-topmost", True)
+        except Exception:
+            pass
+        key = _make_transparent(self.top, theme)
         self.canvas = tk.Canvas(self.top, bg=key, highlightthickness=0, bd=0)
         self.canvas.pack()
         self.canvas.bind("<Button-1>", lambda e: self._click())
@@ -329,7 +385,7 @@ class ResumeToast:
         sub = self._subtitle
         if self._remaining is not None:
             sub = f"resuming in {self._remaining}s  ·  click to cancel"
-        img = render.render_action_toast(self._title, sub, self._action, self._theme)
+        img = _round_alpha(render.render_action_toast(self._title, sub, self._action, self._theme), 14)
         self._photo = ImageTk.PhotoImage(img)
         w, h = img.size
         self.canvas.configure(width=w, height=h)
@@ -797,7 +853,11 @@ class BarWidget:
         self.root = tk.Tk()
         self.root.title("Claudometer")
         self.root.overrideredirect(True)
-        self.root.attributes("-topmost", True)
+        try:
+            self.root.attributes("-topmost", True)
+        except Exception:
+            pass
+        self._card = not _IS_WIN   # off-Windows: float a rounded card (no taskbar to blend into)
         self.canvas = tk.Canvas(self.root, highlightthickness=0, bd=0)
         self.canvas.pack()
 
@@ -833,6 +893,8 @@ class BarWidget:
         self._processed_seq = 0   # last poll processed for alerts/resume (main thread)
 
         self._theme = self._forced_theme or "light"
+        if self._card:  # transparent window so the rounded card floats (macOS/Linux)
+            self.canvas.configure(bg=_make_transparent(self.root, self._theme))
         self._bg_hex = None
         self._state = core.PollState()
         self._disp = None
@@ -863,8 +925,9 @@ class BarWidget:
             return
         self._bg_hex = hexc
         self._theme = self._forced_theme or ("light" if _lum(rgb) > 140 else "dark")
-        self.root.configure(bg=hexc)
-        self.canvas.configure(bg=hexc)
+        if not self._card:  # card mode keeps its transparent bg (no taskbar to match)
+            self.root.configure(bg=hexc)
+            self.canvas.configure(bg=hexc)
         self._sig = None
 
     def _sample_bg(self):
@@ -1339,13 +1402,21 @@ class BarWidget:
         )
 
     def _draw(self, disp):
-        img = render.render_strip(disp, self._bg_hex, self._theme, scale=3, metrics=self._metrics)
+        if self._card:  # off-Windows: a rounded floating pill (its own bg + alpha corners)
+            T = render.THEMES.get(self._theme, render.THEMES["light"])
+            strip = render.render_strip(disp, T["panel_bot"], self._theme, scale=3, metrics=self._metrics)
+            img = _round_alpha(strip, min(strip.size[1] // 2, 15))
+        else:  # Windows: opaque strip painted in the sampled taskbar color (blends in)
+            img = render.render_strip(disp, self._bg_hex, self._theme, scale=3, metrics=self._metrics)
         self._photo = ImageTk.PhotoImage(img)
         w, h = img.size
         self.canvas.configure(width=w, height=h)
         if self._need_autoplace:
             sw, sh = _screen_size()
-            self.root.geometry(f"{w}x{h}+{sw - 250 - w}+{sh - TASKBAR_H + (TASKBAR_H - h) // 2}")
+            if self._card:
+                self.root.geometry(f"{w}x{h}+{sw - w - 24}+40")  # top-right on mac/linux
+            else:
+                self.root.geometry(f"{w}x{h}+{sw - 250 - w}+{sh - TASKBAR_H + (TASKBAR_H - h) // 2}")
             self._need_autoplace = False
         else:
             self.root.geometry(f"{w}x{h}")
