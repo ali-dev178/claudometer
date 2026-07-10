@@ -64,6 +64,10 @@ Today, checking where you stand means **opening the `/usage` panel or the app an
 
 <p align="center"><img src="assets/macos-menubar.png" alt="macOS menu bar" width="760"></p>
 
+**Always‑visible mode** — set `hide_on_fullscreen = false` and your stats stay readable even over a fullscreen movie, game, or presentation:
+
+<p align="center"><img src="assets/fullscreen.png" alt="Visible over a fullscreen movie" width="760"></p>
+
 ---
 
 ## Resume when your limit resets

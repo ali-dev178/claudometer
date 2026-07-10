@@ -222,6 +222,43 @@ def resume_showcase():
     bg.convert("RGB").save(os.path.join(OUT, "resume.png"))
 
 
+def fullscreen_showcase():
+    """The strip staying visible over a fullscreen movie (hide_on_fullscreen = false)."""
+    W, H = 1200, 675
+    bg = render._vgrad(W, H, "#0c1220", "#05070c").convert("RGBA")
+    bg.alpha_composite(radial(W, H, int(W * 0.60), int(H * 0.40), 460, (232, 138, 66), 150))
+    bg.alpha_composite(radial(W, H, int(W * 0.18), int(H * 0.72), 400, (46, 74, 132), 90))
+    # vignette (darken the edges like a cinematic frame)
+    vg = Image.new("L", (W, H), 255)
+    ImageDraw.Draw(vg).ellipse([int(-W * 0.15), int(-H * 0.15), int(W * 1.15), int(H * 1.15)], fill=0)
+    vg = vg.filter(ImageFilter.GaussianBlur(150)).point(lambda p: int(p * 0.72))
+    dark = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    dark.putalpha(vg)
+    bg.alpha_composite(dark)
+    d = ImageDraw.Draw(bg)
+
+    bar = 46  # letterbox bars
+    d.rectangle([0, 0, W, bar], fill=(0, 0, 0))
+    d.rectangle([0, H - bar, W, H], fill=(0, 0, 0))
+    fsub = render._font("reg", 22)
+    sub = "— We still have thirty-eight minutes."
+    d.text(((W - d.textlength(sub, font=fsub)) / 2, H - bar - 44), sub, font=fsub, fill=(236, 236, 236))
+
+    disp = {"session_pct": 42, "session_color": "green",
+            "session_resets_at": datetime.now(timezone.utc) + timedelta(minutes=38, seconds=50),
+            "weekly_pct": 8, "weekly_color": "green",
+            "weekly_resets_at": datetime.now(timezone.utc) + timedelta(days=2)}
+    strip = render.render_strip(disp, "#12151b", "dark", scale=3).convert("RGBA")
+    bg.alpha_composite(strip, (26, H - bar - 26 - strip.height))
+
+    ftag = render._font("sb", 12)
+    tag = "hide_on_fullscreen = false"
+    tw = d.textlength(tag, font=ftag)
+    d.rounded_rectangle([26, bar + 22, 26 + tw + 22, bar + 22 + 26], radius=13, fill=(0, 0, 0, 130))
+    d.text((37, bar + 22 + 13), tag, font=ftag, fill=(238, 238, 238), anchor="lm")
+    bg.convert("RGB").save(os.path.join(OUT, "fullscreen.png"))
+
+
 def app_icon():
     S = 256
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
@@ -240,6 +277,7 @@ if __name__ == "__main__":
     themes_side_by_side(disp)
     strip_closeup(disp)
     resume_showcase()
+    fullscreen_showcase()
     app_icon()
     print("wrote:", ", ".join(sorted(f for f in os.listdir(OUT)
                                      if f.endswith((".png", ".ico")))))
