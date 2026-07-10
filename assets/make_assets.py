@@ -192,6 +192,36 @@ def strip_closeup(disp):
     bg.save(os.path.join(OUT, "strip.png"))
 
 
+def _action_toast_rgba(title, subtitle, action, theme):
+    img = render.render_action_toast(title, subtitle, action, theme)
+    w, h = img.size
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, w - 1, h - 1], radius=14, fill=255)
+    out = img.convert("RGBA")
+    out.putalpha(mask)
+    return out
+
+
+def resume_showcase():
+    a = _action_toast_rgba("Session limit reset", "Click to resume where you left off",
+                           "Resume", "light")
+    b = _action_toast_rgba("Session reset — auto-resuming", "resuming in 18s  ·  click to cancel",
+                           "Cancel", "dark")
+    pad, gap = 40, 34
+    W = pad * 2 + a.width + gap + b.width
+    H = pad * 2 + max(a.height, b.height) + 26
+    bg = render._vgrad(W, H, "#eef1f6", "#dbe1ea").convert("RGBA")
+    place_card(bg, a, pad, pad, blur=20, alpha=55)
+    place_card(bg, b, pad + a.width + gap, pad, blur=20, alpha=55)
+    d = ImageDraw.Draw(bg)
+    f = render._font("sb", 12)
+    d.text((pad + a.width / 2, pad + a.height + 13), "Tier 1 — notify + one click",
+           font=f, fill="#6b7480", anchor="mm")
+    d.text((pad + a.width + gap + b.width / 2, pad + b.height + 13), "Tier 2 — auto (opt-in)",
+           font=f, fill="#6b7480", anchor="mm")
+    bg.convert("RGB").save(os.path.join(OUT, "resume.png"))
+
+
 def app_icon():
     S = 256
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
@@ -209,6 +239,7 @@ if __name__ == "__main__":
     hero_mac(disp)
     themes_side_by_side(disp)
     strip_closeup(disp)
+    resume_showcase()
     app_icon()
     print("wrote:", ", ".join(sorted(f for f in os.listdir(OUT)
                                      if f.endswith((".png", ".ico")))))

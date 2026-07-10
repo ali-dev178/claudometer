@@ -16,6 +16,12 @@ DEFAULTS = {
     "alert_thresholds": [80, 90],     # percentages that trigger an alert
     "show_cost": False,               # show an estimated-cost line in the popover
     "accent": None,                   # hex override for the accent color, or None
+    # Resume-on-reset (Tier 1 = notify + one click; Tier 2 = unattended)
+    "resume_notify": True,            # notify + one-click resume when the session limit resets
+    "resume_auto": False,             # Tier 2: automatically resume, unattended (opt-in, risky)
+    "resume_prompt": "Continue where you left off.",  # continuation prompt used for Tier 2
+    "resume_skip_permissions": False,  # Tier 2: pass --dangerously-skip-permissions (dangerous)
+    "resume_max_turns": 30,           # Tier 2: cap agentic turns per unattended resume
 }
 
 _VALID_THEMES = ("auto", "light", "dark")
@@ -94,4 +100,13 @@ def load() -> dict:
     cfg["show_cost"] = bool(cfg["show_cost"])
     if not (isinstance(cfg["accent"], str) and cfg["accent"].startswith("#")):
         cfg["accent"] = None
+    cfg["resume_notify"] = bool(cfg["resume_notify"])
+    cfg["resume_auto"] = bool(cfg["resume_auto"])
+    cfg["resume_skip_permissions"] = bool(cfg["resume_skip_permissions"])
+    if not isinstance(cfg["resume_prompt"], str) or not cfg["resume_prompt"].strip():
+        cfg["resume_prompt"] = DEFAULTS["resume_prompt"]
+    try:
+        cfg["resume_max_turns"] = max(1, min(200, int(cfg["resume_max_turns"])))
+    except (TypeError, ValueError):
+        cfg["resume_max_turns"] = DEFAULTS["resume_max_turns"]
     return cfg

@@ -22,3 +22,16 @@ show_cost = false
 
 # Override the accent color (brand mark, badge, links). Hex string, e.g.:
 # accent = "#5b61ea"
+
+# --- Resume when your 5-hour session limit resets -------------------------
+# Tier 1 (safe, default): when the window resets, show a one-click "Resume"
+# notification that opens a terminal in your session's folder to continue.
+resume_notify = true
+
+# Tier 2 (opt-in, RISKY): automatically resume UNATTENDED at reset — it can make
+# changes with no one watching. Off by default. Read the README before enabling.
+resume_auto = false
+resume_prompt = "Continue where you left off."   # what Tier 2 tells Claude
+resume_max_turns = 30                             # Tier 2: cap agentic turns
+# resume_skip_permissions = false   # true = --dangerously-skip-permissions
+#                                   # (default false uses the safer acceptEdits mode)

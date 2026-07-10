@@ -15,6 +15,7 @@ import json
 import threading
 import time
 import tkinter as tk
+from datetime import datetime, timezone
 from pathlib import Path
 
 from PIL import ImageTk
@@ -23,6 +24,7 @@ import usage_core as core
 import render
 import settings
 import cost
+import resume
 
 POS_FILE = Path.home() / ".claude_widget_bar.json"
 TASKBAR_H = 48
@@ -253,6 +255,89 @@ class Toast:
             pass
 
 
+class ResumeToast:
+    """A clickable resume notification.
+
+    Static mode: clicking runs the action; auto-closes after a timeout.
+    Countdown mode: counts down and runs on_expire at zero; a click cancels it.
+    """
+
+    def __init__(self, root, theme, title, subtitle, action_label, on_click,
+                 timeout_ms=120000, countdown_s=None, on_expire=None):
+        self._on_click = on_click
+        self._on_expire = on_expire
+        self._timeout_ms = timeout_ms
+        self._remaining = countdown_s
+        self._theme = theme
+        self._title = title
+        self._subtitle = subtitle
+        self._action = action_label
+        self._closed = False
+        self._after = None
+
+        key = render.THEMES[theme]["key"]
+        self.top = tk.Toplevel(root)
+        self.top.overrideredirect(True)
+        self.top.attributes("-topmost", True)
+        self.top.configure(bg=key)
+        self.top.attributes("-transparentcolor", key)
+        self.canvas = tk.Canvas(self.top, bg=key, highlightthickness=0, bd=0)
+        self.canvas.pack()
+        self.canvas.bind("<Button-1>", lambda e: self._click())
+
+        self._render()
+        if self._remaining is not None:
+            self._tick()
+        elif self._timeout_ms:
+            self._after = self.top.after(self._timeout_ms, self.close)
+
+    def _render(self):
+        sub = self._subtitle
+        if self._remaining is not None:
+            sub = f"resuming in {self._remaining}s  ·  click to cancel"
+        img = render.render_action_toast(self._title, sub, self._action, self._theme)
+        self._photo = ImageTk.PhotoImage(img)
+        w, h = img.size
+        self.canvas.configure(width=w, height=h)
+        self.canvas.delete("all")
+        self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
+        sw, sh = _screen_size()
+        self.top.geometry(f"{w}x{h}+{sw - w - 20}+{sh - TASKBAR_H - h - 16}")
+
+    def _tick(self):
+        if self._closed:
+            return
+        if self._remaining <= 0:
+            fn = self._on_expire
+            self.close()
+            if fn:
+                fn()
+            return
+        self._render()
+        self._remaining -= 1
+        self._after = self.top.after(1000, self._tick)
+
+    def _click(self):
+        countdown = self._remaining is not None
+        self.close()
+        if not countdown and self._on_click:
+            self._on_click()
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        if self._after:
+            try:
+                self.top.after_cancel(self._after)
+            except Exception:
+                pass
+        try:
+            self.top.destroy()
+        except Exception:
+            pass
+
+
 # --------------------------------------------------------------------------- #
 # Taskbar strip (image-based)
 # --------------------------------------------------------------------------- #
@@ -279,6 +364,15 @@ class BarWidget:
         self._alerted = {"session": set(), "weekly": set()}
         self._toast = None
         self._first_alert = True
+
+        self._resume_notify = cfg["resume_notify"]
+        self._resume_auto = cfg["resume_auto"]
+        self._resume_prompt = cfg["resume_prompt"]
+        self._resume_skip_perms = cfg["resume_skip_permissions"]
+        self._resume_max_turns = cfg["resume_max_turns"]
+        self._resume_state = "idle"  # idle | capped
+        self._resume_snapshot = None
+        self._resume_toast = None
 
         self._theme = self._forced_theme or "light"
         self._bg_hex = None
@@ -441,6 +535,72 @@ class BarWidget:
         except Exception:
             pass
 
+    # -- resume on reset -------------------------------------------------- #
+    def _track_resume(self, disp):
+        """Watch the 5-hour session: snapshot the active session when it caps,
+        and fire the resume flow when its window resets. Runs on the poll
+        thread; UI is created on the main thread via after()."""
+        if not (self._resume_notify or self._resume_auto):
+            return
+        sp = disp.get("session_pct")
+        if sp is None:
+            return
+        if self._resume_state == "idle":
+            if sp >= 100:  # session limit reached
+                snap = resume.last_session()
+                if snap:
+                    snap["resets_at"] = disp.get("session_resets_at")
+                    self._resume_snapshot = snap
+                    self._resume_state = "capped"
+        elif self._resume_state == "capped":
+            passed = False
+            ra = (self._resume_snapshot or {}).get("resets_at")
+            if ra is not None:
+                try:
+                    passed = datetime.now(timezone.utc) >= ra
+                except Exception:
+                    passed = False
+            if passed or sp <= 25:  # window has reset
+                snap = self._resume_snapshot
+                self._resume_snapshot = None
+                self._resume_state = "idle"
+                self.root.after(0, lambda: self._fire_resume(snap))
+
+    def _fire_resume(self, snap):
+        if not snap:
+            return
+        if self._hidden:  # over fullscreen — retry shortly, don't lose it
+            self.root.after(15000, lambda: self._fire_resume(snap))
+            return
+        try:
+            if self._resume_toast is not None:
+                self._resume_toast.close()
+            if self._resume_auto:
+                self._resume_toast = ResumeToast(
+                    self.root, self._theme, "Session reset — auto-resuming", "",
+                    "Cancel", on_click=None, countdown_s=20,
+                    on_expire=lambda: self._do_auto_resume(snap))
+            elif self._resume_notify:
+                self._resume_toast = ResumeToast(
+                    self.root, self._theme, "Session limit reset",
+                    "Click to resume where you left off", "Resume",
+                    on_click=lambda: resume.open_terminal(snap["cwd"], snap["session_id"]),
+                    timeout_ms=180000)
+        except Exception:
+            pass
+
+    def _do_auto_resume(self, snap):
+        try:
+            resume.run_auto(snap["cwd"], snap["session_id"], self._resume_prompt,
+                            skip_permissions=self._resume_skip_perms,
+                            max_turns=self._resume_max_turns)
+            self._resume_toast = ResumeToast(
+                self.root, self._theme, "Auto-resumed session",
+                "running headless · check the log", "OK", on_click=None,
+                timeout_ms=9000)
+        except Exception:
+            pass
+
     def _popup_menu(self, e):
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="Details…", command=self._toggle_popover)
@@ -508,6 +668,7 @@ class BarWidget:
             with self._lock:
                 self._disp = disp
             self._maybe_alert(disp)
+            self._track_resume(disp)
             wait = self._state.backoff or self._poll
             self._wake.wait(timeout=wait)
             self._wake.clear()

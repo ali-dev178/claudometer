@@ -48,6 +48,7 @@ Today, checking where you stand means **opening the `/usage` panel or the app an
 - 🪶 **Featherweight** — ~0.03% CPU idle, ~50 MB RAM. You won't notice it.
 - 🖥️ **Stays out of the way** — auto‑hides over fullscreen movies, games, and presentations.
 - 🔔 **Warns you in time** — optional desktop alerts when you cross 80% / 90%.
+- ⏭️ **Picks up where you left off** — when your session limit resets, one click resumes the interrupted work (or auto‑resume, if you opt in).
 - 🎨 **Looks the part** — supersampled rendering, light/dark aware, adapts to your taskbar.
 - ⚙️ **Yours to tune** — an optional config file for interval, theme, alerts, accent, and an estimated‑cost view.
 
@@ -62,6 +63,31 @@ Today, checking where you stand means **opening the `/usage` panel or the app an
 **macOS** — native menu‑bar item with a dropdown breakdown:
 
 <p align="center"><img src="assets/macos-menubar.png" alt="macOS menu bar" width="760"></p>
+
+---
+
+## Resume when your limit resets
+
+Hit the 5‑hour session limit mid‑task and everything grinds to a halt? Claudometer
+knows the *exact* reset time, so it can help you pick right back up.
+
+<p align="center"><img src="assets/resume.png" alt="Resume notifications" width="820"></p>
+
+- **Tier 1 — notify + one click** *(default, safe).* When your session resets, a
+  notification appears; click **Resume** and it opens a terminal in the interrupted
+  session's folder running `claude --resume <id>` for you to continue — supervised.
+- **Tier 2 — auto‑resume** *(opt‑in, off by default).* After a short *"resuming in
+  20s — click to cancel"* window, it resumes **unattended and headless** so work
+  continues while you're away.
+
+> ⚠️ **Tier 2 runs Claude Code with nobody watching.** It's gated behind
+> `resume_auto = true` and ships with guard rails: a turn cap (`--max-turns`) and
+> the safer `acceptEdits` permission mode by default (full
+> `--dangerously-skip-permissions` only if you *also* set
+> `resume_skip_permissions = true`). Enable it only for work you trust to run on
+> its own. Output is written to a log in `~/.claude/`.
+
+Configure both in the [config file](#configuration).
 
 ---
 
@@ -138,6 +164,11 @@ alerts = true                    # desktop toast on threshold crossings
 alert_thresholds = [80, 90]
 show_cost = false                # estimated token/$ line in the popover
 # accent = "#d97757"             # override the accent color
+
+resume_notify = true             # one-click resume when the session limit resets
+resume_auto = false              # Tier 2: unattended auto-resume (opt-in, risky)
+resume_prompt = "Continue where you left off."
+resume_max_turns = 30            # Tier 2: cap agentic turns
 ```
 
 Environment overrides:
@@ -213,8 +244,9 @@ py -m pip install -r requirements.txt
 py app.py bar
 ```
 `usage_core.py` holds the data/auth logic (no UI deps), `render.py` does all the
-Pillow drawing, and the platform adapters (`widget_bar.py`, `menubar_mac.py`,
-`tray_windows.py`) are thin. Regenerate the README images with
+Pillow drawing, `settings.py` / `cost.py` / `resume.py` add config, cost
+estimation, and session‑resume, and the platform adapters (`widget_bar.py`,
+`menubar_mac.py`, `tray_windows.py`) are thin. Regenerate the README images with
 `py assets/make_assets.py`.
 
 ## ⚠️ Disclaimer

@@ -360,3 +360,37 @@ def render_toast(pct, title, subtitle, color_name, theme, scale=3):
     d.text((tx, 26 * S), title, font=_font("sb", 13 * S), fill=T["neutral"], anchor="lm")
     d.text((tx, 45 * S), subtitle, font=_font("reg", 11 * S), fill=T["dim"], anchor="lm")
     return base.resize((W, H), Image.LANCZOS)
+
+
+def render_action_toast(title, subtitle, action_label, theme, scale=3):
+    """A toast with a left play-icon and a right accent button (whole toast is
+    clickable). Used for the resume-on-reset notification."""
+    T = THEMES.get(theme, THEMES["light"])
+    S = scale
+    W, H = 348, 72
+    Ws, Hs = W * S, H * S
+    base = Image.new("RGB", (Ws, Hs), T["key"])
+    grad = _vgrad(Ws, Hs, T["panel_top"], T["panel_bot"])
+    mask = Image.new("L", (Ws, Hs), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, Ws - 1, Hs - 1], radius=14 * S, fill=255)
+    base.paste(grad, (0, 0), mask)
+    d = ImageDraw.Draw(base)
+    d.rounded_rectangle([0, 0, Ws - 1, Hs - 1], radius=14 * S, outline=T["border"], width=max(1, S))
+    accent = T["accent"]
+
+    ix, iy, isz = 15 * S, 16 * S, 40 * S
+    d.rounded_rectangle([ix, iy, ix + isz, iy + isz], radius=11 * S, fill=accent)
+    cx, cy, tw = ix + isz / 2, iy + isz / 2, isz * 0.24
+    d.polygon([(cx - tw * 0.65, cy - tw), (cx - tw * 0.65, cy + tw), (cx + tw, cy)], fill="#ffffff")
+
+    f_btn = _font("sb", 11 * S)
+    bw = d.textlength(action_label, font=f_btn) + 28 * S
+    bx2, by1, by2 = Ws - 14 * S, (H / 2 - 14) * S, (H / 2 + 14) * S
+    bx1 = bx2 - bw
+    d.rounded_rectangle([bx1, by1, bx2, by2], radius=9 * S, fill=accent)
+    d.text(((bx1 + bx2) / 2, (by1 + by2) / 2), action_label, font=f_btn, fill="#ffffff", anchor="mm")
+
+    tx = ix + isz + 15 * S
+    d.text((tx, 27 * S), title, font=_font("sb", 13 * S), fill=T["neutral"], anchor="lm")
+    d.text((tx, 46 * S), subtitle, font=_font("reg", 11 * S), fill=T["dim"], anchor="lm")
+    return base.resize((W, H), Image.LANCZOS)
