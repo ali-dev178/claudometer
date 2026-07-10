@@ -229,7 +229,11 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
         cand.append((disp["session_pct"], disp.get("session_color", "grey")))
     if disp.get("weekly_pct") is not None:
         cand.append((disp["weekly_pct"], disp.get("weekly_color", "grey")))
-    dot_color = sev_color(T, max(cand, key=lambda c: c[0])[1]) if cand else T["dim"]
+    if cand:
+        dot_color = sev_color(T, max(cand, key=lambda c: c[0])[1])
+    else:  # status state (no percentages) — key the dot off face_color so a
+        dot_color = sev_color(T, disp.get("face_color", "grey"))  # 429 shows red, not grey
+
 
     tmp = ImageDraw.Draw(Image.new("RGB", (4, 4)))
 
