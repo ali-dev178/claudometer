@@ -109,14 +109,7 @@ Configure both in the [config file](#configuration).
 
 You need a **Claude Pro / Max / Team** subscription and to have **signed into Claude Code** at least once (that's where the credentials live).
 
-### Option A — Standalone binary (no Python)
-Grab `Claudometer.exe` (Windows) or `Claudometer-macos.zip` (macOS) from
-[**Releases**](https://github.com/ali-dev178/claudometer/releases) — unzip the
-macOS build to get `Claudometer.app` — then run it. On Windows, drag the taskbar
-readout where you like (it remembers the spot); on macOS it appears as a menu-bar
-item. Add it to startup / login items to launch automatically.
-
-### Option B — From source (Python 3.9+)
+### Option A — From source (Python 3.9+) · works today
 ```bash
 git clone https://github.com/ali-dev178/claudometer.git
 cd claudometer
@@ -132,7 +125,16 @@ python3 -m pip install -r requirements.txt
 python3 app.py             # adds a menu-bar item
 ```
 
-Build your own binaries with [`packaging/`](packaging/) (PyInstaller + CI).
+### Option B — Standalone binary (no Python needed to run)
+A `Claudometer.exe` (Windows) / `Claudometer.app` (macOS) that runs without a
+Python install. Build one in a minute with the scripts in
+[`packaging/`](packaging/) (PyInstaller). Prebuilt downloads will be published to
+[**Releases**](https://github.com/ali-dev178/claudometer/releases) once the
+release workflow is enabled.
+
+On Windows, drag the taskbar readout wherever you like (it remembers the spot);
+on macOS it appears as a menu‑bar item. Add it to startup / login items to launch
+automatically.
 
 > First run tip (Windows): Windows 11 may tuck new taskbar items away — drag Claudometer to where you want it; it remembers the position.
 
