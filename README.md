@@ -25,9 +25,9 @@
 
 Claude's Pro / Max / Team plans enforce a rolling **5‑hour session** limit and **weekly** limits. Use Claude Code heavily and it's easy to burn through them mid‑task — then get rate‑limited at the worst moment. Checking today means opening the `/usage` panel and *remembering* to look.
 
-**Claudometer keeps that number on‑screen all the time**, as clean floating text on your taskbar:
+**Claudometer keeps that number on‑screen all the time**, as clean floating text. It sits on your **taskbar** by default — sampling its color so it blends right in — but it's a free‑floating, always‑on‑top widget you can **drag anywhere**: the top of the screen, over a window, or onto a second monitor. It remembers where you put it.
 
-<p align="center"><img src="assets/strip.png" alt="Taskbar strip" width="300"></p>
+<p align="center"><img src="assets/strip.png" alt="Floating usage strip" width="300"></p>
 
 - **`Session 61%`** — your current 5‑hour window, with a live countdown to reset.
 - **`Weekly 18%`** — your 7‑day, all‑models usage.
@@ -151,7 +151,7 @@ Optional environment overrides:
 
 > On **macOS / Linux** the menu‑bar / tray shows live usage; alerts, cost, resume, and themes apply to the **Windows** strip for now (see [Platform support](#platform-support)).
 
-**Run modes:** `app.py bar` (Windows taskbar strip — default & recommended) · `app.py tray` (tray icon) · `app.py both` · `app.py` (auto per platform). Strip: left‑click = popover · drag = move · right‑click = menu.
+**Run modes:** `app.py bar` (Windows taskbar strip — default & recommended) · `app.py tray` (tray icon) · `app.py both` · `app.py` (auto per platform). Strip: left‑click = popover · **drag = move it anywhere on screen** (remembered) · right‑click = menu.
 
 **Auto‑start on login:** the Windows installer can set this up for you. Manual (from source) — **Windows:** add a shortcut to `pythonw.exe "…\app.py" bar` in `shell:startup`. **macOS:** add the standalone `Claudometer.app` to **System Settings → Login Items**, or use a LaunchAgent for a source install:
 
