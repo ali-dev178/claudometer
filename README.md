@@ -3,207 +3,131 @@
 
 <p align="center">
   <b>Your Claude usage limits, always visible — right on your taskbar.</b><br>
-  A tiny, elegant desktop widget that shows your live session &amp; weekly usage so you never hit a limit by surprise.
+  A tiny desktop widget that shows your live session &amp; weekly usage, so you never hit a limit by surprise.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-informational" alt="platform">
   <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="python">
+  <img src="https://img.shields.io/pypi/v/claudometer?color=success&label=pypi" alt="pypi">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
-  <img src="https://img.shields.io/badge/setup-zero%20config-success" alt="zero config">
 </p>
 
 <p align="center">
   <img src="assets/hero-windows.png" alt="Claudometer on Windows" width="820">
 </p>
 
-> **Unofficial project — not affiliated with, or endorsed by, Anthropic.** See the [disclaimer](#-disclaimer).
+> Unofficial — not affiliated with, or endorsed by, Anthropic. [Details ↓](#-disclaimer)
 
 ---
 
-## The problem
+## Why
 
-Claude's plans (Pro / Max / Team) enforce **usage limits** — a rolling **5‑hour session** limit and **weekly** limits. If you use Claude heavily (Claude Code, long sessions), it's easy to burn through them without realizing… until you're suddenly rate‑limited in the middle of something important.
+Claude's Pro / Max / Team plans enforce a rolling **5‑hour session** limit and **weekly** limits. Use Claude Code heavily and it's easy to burn through them mid‑task — then get rate‑limited at the worst moment. Checking today means opening the `/usage` panel and *remembering* to look.
 
-Today, checking where you stand means **opening the `/usage` panel or the app and reading it** — a context switch you have to *remember* to do. There's no ambient, at‑a‑glance signal.
-
-## The solution
-
-**Claudometer keeps your usage on‑screen at all times**, as clean floating text on your taskbar:
+**Claudometer keeps that number on‑screen all the time**, as clean floating text on your taskbar:
 
 <p align="center"><img src="assets/strip.png" alt="Taskbar strip" width="300"></p>
 
-- **`Session 61%`** — how much of your current 5‑hour window is used, with a **live countdown** to reset (`1h 21m left`).
-- **`Weekly 18%`** — your 7‑day all‑models usage.
-- A **color‑coded status dot** (🟢 &lt;50% · 🟡 50–80% · 🔴 &gt;80%) so severity registers in a glance — turning to a clear **"limit reached"** when you're maxed out, plus a graceful *offline* state when there's no data:
+- **`Session 61%`** — your current 5‑hour window, with a live countdown to reset.
+- **`Weekly 18%`** — your 7‑day, all‑models usage.
+- A **color dot** (🟢 &lt;50% · 🟡 50–80% · 🔴 &gt;80%) that flips to a clear **"limit reached"** when you're maxed out, plus a graceful *offline* state:
 
-<p align="center"><img src="assets/strip-states.png" alt="Color-coded severity and offline states" width="500"></p>
+<p align="center"><img src="assets/strip-states.png" alt="Severity and offline states" width="500"></p>
 
-**Click it** for a polished breakdown with per‑meter reset times and per‑model (e.g. Fable) usage:
+**Click it** for the full breakdown — per‑meter reset times, per‑model usage, light/dark:
 
-<p align="center"><img src="assets/popover-themes.png" alt="Light and dark popover" width="820"></p>
+<p align="center"><img src="assets/popover-themes.png" alt="Popover, light and dark" width="820"></p>
 
-### Why you'll want it
-- 🎯 **Pace yourself** — see when you're approaching a limit *before* you hit it.
-- ⚡ **Zero context‑switch** — the number is already there; no panel to open.
+### What you get
+- 🎯 **Pace yourself** — spot a limit *before* you hit it.
+- ⚡ **Zero context‑switch** — the number's already there; no panel to open.
 - 🔒 **Zero setup** — reuses your existing Claude login. Nothing to configure.
 - 🪶 **Featherweight** — ~0.03% CPU idle, ~50 MB RAM. You won't notice it.
-- 🖥️ **Stays out of the way** — optionally auto‑hides over fullscreen movies, games, and presentations (or set it to always show).
-- 🔔 **Warns you in time** — optional desktop alerts when you cross 80% / 90%.
-- ⏭️ **Picks up where you left off** — when your session limit resets, one click resumes the interrupted work (or auto‑resume, if you opt in).
-- 🎨 **Looks the part** — supersampled rendering, light/dark aware, adapts to your taskbar.
-- ⚙️ **Yours to tune** — a built‑in **settings panel** (no file editing) for interval, theme, meters, alerts, accent, cost view, fullscreen behavior and resume.
+- 🔔 **Alerts** — optional desktop toast when you cross 80% / 90%.
+- ⏭️ **Resume** — one click picks up interrupted work when your limit resets (auto‑resume optional).
+- 🖥️ **Out of the way** — auto‑hides over fullscreen movies/games (or set it to always show).
+- ⚙️ **Tunable** — a built‑in **settings panel** (no file editing) for theme, meters, alerts, accent, cost view, and more.
 
 ---
 
-## Screenshots
-
-**Windows** — floating strip on the taskbar + click‑to‑open popover with usage meters:
-
-<p align="center"><img src="assets/hero-windows.png" alt="Windows" width="760"></p>
+## More screenshots
 
 **macOS** — native menu‑bar item with a dropdown breakdown:
+<p align="center"><img src="assets/macos-menubar.png" alt="macOS menu bar" width="720"></p>
 
-<p align="center"><img src="assets/macos-menubar.png" alt="macOS menu bar" width="760"></p>
+**Threshold alerts** — a desktop toast the moment you cross a limit you set:
+<p align="center"><img src="assets/alerts.png" alt="Alert toasts" width="720"></p>
 
-**Threshold alerts** — a desktop toast the moment you cross a limit you set (default 80% and 90%), for both session and weekly:
+**Estimated cost** *(opt‑in)* — today's tokens + a rough dollar figure in the popover (a local estimate, not a bill):
+<p align="center"><img src="assets/popover-cost.png" alt="Cost line in the popover" width="420"></p>
 
-<p align="center"><img src="assets/alerts.png" alt="Threshold alert toasts" width="760"></p>
-
-**Estimated cost** *(opt‑in)* — turn on `show_cost` for a today's‑tokens and rough‑dollar line in the popover (a local estimate from your session logs — not a bill):
-
-<p align="center"><img src="assets/popover-cost.png" alt="Estimated cost line in the popover" width="430"></p>
-
-**Always‑visible mode** — set `hide_on_fullscreen = false` and your stats stay readable even over a fullscreen movie, game, or presentation:
-
-<p align="center"><img src="assets/fullscreen.png" alt="Visible over a fullscreen movie" width="760"></p>
-
----
-
-## Resume when your limit resets
-
-Hit the 5‑hour session limit mid‑task and everything grinds to a halt? Claudometer
-watches your usage recover, so it can help you pick right back up the moment it does.
-
-<p align="center"><img src="assets/resume.png" alt="Resume notifications" width="820"></p>
-
-- **Tier 1 — notify + one click** *(default, safe).* When your session resets, a
-  notification appears; click **Resume** and it opens a terminal in the interrupted
-  session's folder running `claude --resume <id>` for you to continue — supervised.
-- **Tier 2 — auto‑resume** *(opt‑in, off by default).* After a short *"resuming in
-  20s — click to cancel"* window, it resumes **unattended and headless** so work
-  continues while you're away.
-
-> ⚠️ **Tier 2 runs Claude Code with nobody watching.** It's gated behind
-> `resume_auto = true` and ships with guard rails: a turn cap (`--max-turns`) and
-> the safer `acceptEdits` permission mode by default (full
-> `--dangerously-skip-permissions` only if you *also* set
-> `resume_skip_permissions = true`). Enable it only for work you trust to run on
-> its own. Output is written to a log in `~/.claude/`.
-
-Configure both in the [config file](#configuration).
+**Always‑visible mode** — keep it readable even over a fullscreen movie or game:
+<p align="center"><img src="assets/fullscreen.png" alt="Visible over fullscreen" width="720"></p>
 
 ---
 
 ## Install
 
-You need a **Claude Pro / Max / Team** subscription and to have **signed into Claude Code** at least once (that's where the credentials live).
+Requires a **Claude Pro / Max / Team** subscription, signed into **Claude Code** at least once (that's where the login lives).
 
-> **Heads up:** the `pipx`, `scoop`, `brew`, and download methods below light up once the **first release is published** (a one‑time maintainer step — see [`packaging/`](packaging/README.md)). Until then, **[install from source](#from-source-python-39)** — that always works.
-
-### Easiest — one command (any OS) 🏆
-Installs in an isolated environment and puts `claudometer` on your PATH:
+**Easiest — one command, any OS:**
 ```bash
-pipx install claudometer      # don't have pipx?  →  python -m pip install --user pipx
-claudometer                   # launch it
+pipx install claudometer      # no pipx?  →  python -m pip install --user pipx
+claudometer
 ```
-Update anytime with `pipx upgrade claudometer`.
+Update later with `pipx upgrade claudometer`.
 
-### Windows
+**Windows:**
 ```powershell
 scoop install https://raw.githubusercontent.com/ali-dev178/claudometer/main/packaging/scoop/claudometer.json
 ```
-…or grab the **installer** (`ClaudometerSetup.exe`, ticks "start on sign‑in" for you) or the portable **`Claudometer.exe`** from
-[**Releases**](https://github.com/ali-dev178/claudometer/releases) and double‑click.
+…or download the installer (`ClaudometerSetup.exe`, offers "start on sign‑in") or the portable `Claudometer.exe` from [**Releases**](https://github.com/ali-dev178/claudometer/releases).
 
-### macOS
+**macOS:**
 ```bash
 brew install --cask ali-dev178/claudometer/claudometer
 ```
-…or download **`Claudometer.dmg`** from [**Releases**](https://github.com/ali-dev178/claudometer/releases) and drag it to Applications.
+…or download `Claudometer.dmg` from [**Releases**](https://github.com/ali-dev178/claudometer/releases) and drag it to Applications.
 
-### From source (Python 3.9+)
+**From source (Python 3.9+):**
 ```bash
 git clone https://github.com/ali-dev178/claudometer.git && cd claudometer
 pip install -r requirements.txt
 pythonw.exe app.py bar    # Windows (no console)   ·   python3 app.py   # macOS
 ```
 
-> **Unsigned builds:** the downloads aren't code‑signed yet, so on first launch Windows SmartScreen ("More info → Run anyway") or macOS Gatekeeper (right‑click → **Open**) may ask you to confirm. `pipx`, `scoop` and `brew` avoid this.
+> **Unsigned downloads:** on first launch, Windows ("More info → Run anyway") or macOS (right‑click → **Open**) may ask you to confirm. Installing via `pipx` / `scoop` / `brew` skips that.
 >
-> **First‑run tip (Windows):** Windows 11 may tuck new taskbar items away — drag Claudometer where you want it; it remembers the spot.
+> **Windows 11 tip:** new taskbar items can get tucked away — drag Claudometer where you want it; it remembers the spot.
 
-## Usage
+---
 
-| Command | What you get |
-|---|---|
-| `app.py bar` | **Windows:** floating taskbar strip + popover *(recommended)* |
-| `app.py tray` | **Windows/Linux:** notification‑area tray icon |
-| `app.py both` | **Windows:** taskbar strip **and** tray icon |
-| `app.py` | Default — **macOS:** menu bar · **Windows:** taskbar strip · **Linux:** tray |
+## Resume when your limit resets
 
-**Interactions (taskbar strip):** left‑click = open/close popover · drag = move (remembered) · right‑click = Details / Refresh / Quit.
+Hit the session limit mid‑task and everything stalls? Claudometer watches your usage recover and helps you pick right back up.
 
-## Auto‑start on login
+<p align="center"><img src="assets/resume.png" alt="Resume notifications" width="820"></p>
 
-**Windows** — press `Win`+`R`, run `shell:startup`, and add a shortcut to:
-```
-pythonw.exe "C:\path\to\claudometer\app.py" bar
-```
+- **Tier 1 — notify + one click** *(default, safe).* On reset, a notification appears; click **Resume** to open a terminal in the interrupted session's folder running `claude --resume` — you stay in control.
+- **Tier 2 — auto‑resume** *(opt‑in, off by default).* After a *"resuming in 20s — click to cancel"* window, it resumes **unattended** so work continues while you're away.
 
-**macOS** — add a LaunchAgent at `~/Library/LaunchAgents/com.claudometer.plist`:
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>com.claudometer</string>
-  <key>ProgramArguments</key>
-  <array><string>/usr/bin/python3</string><string>/absolute/path/to/claudometer/app.py</string></array>
-  <key>RunAtLoad</key><true/>
-</dict></plist>
-```
-then `launchctl load ~/Library/LaunchAgents/com.claudometer.plist`. (This plist is
-for the from-source install; if you use the standalone `Claudometer.app`, just add
-it to **System Settings → General → Login Items** instead.)
+> ⚠️ Tier 2 runs Claude Code with nobody watching. It's off unless you set `resume_auto = true`, and it's guard‑railed: a turn cap plus the safer `acceptEdits` mode by default (full `--dangerously-skip-permissions` only if you *also* opt in). Enable it only for work you trust to run on its own.
 
-## Configuration
+---
 
-Two ways to set things up — use whichever you prefer:
+## Configure
 
-### ⚙ In‑app settings panel (recommended)
+**In‑app (recommended):** click **⚙ Settings** in the popover (or right‑click the strip → *Settings…*). Adjust theme, meters, accent, poll interval, alerts, cost view, fullscreen behavior, and resume — changes apply **instantly** and save to `~/.claudometer.toml` for you.
 
-Click **⚙ Settings** in the popover (or right‑click the strip → *Settings…*). Adjust
-theme, meters, accent, poll interval, alerts, the cost view, fullscreen behavior and
-resume — changes apply **immediately** (no restart) and are written to
-`~/.claudometer.toml` for you, so you never have to touch the file.
+<p align="center"><img src="assets/settings.png" alt="Settings panel, light and dark" width="800"></p>
 
-<p align="center"><img src="assets/settings.png" alt="In-app settings panel (light & dark)" width="820"></p>
-
-> **macOS:** the menu‑bar app is a lighter adapter — its **Settings** submenu exposes
-> what it actually honors (which meters, poll interval) plus **Open config file…** for
-> the rest. Alerts, cost, resume, accent and theme currently apply to the **Windows**
-> strip only (see [Platform support](#platform-support)).
-
-### ✎ Or edit the file by hand
-
-Everything works with no config. To customise manually, copy
-[`claudometer.example.toml`](claudometer.example.toml) to `~/.claudometer.toml`:
-
+**Or edit the file by hand** — copy [`claudometer.example.toml`](claudometer.example.toml) to `~/.claudometer.toml`:
 ```toml
 poll = 90                        # seconds between polls (60–300)
 theme = "auto"                   # auto | light | dark
 metrics = ["session", "weekly"]  # which meters on the strip
-hide_on_fullscreen = true        # false = keep visible even over fullscreen apps
+hide_on_fullscreen = true        # false = stay visible, even over fullscreen apps
 alerts = true                    # desktop toast on threshold crossings
 alert_thresholds = [80, 90]
 show_cost = false                # estimated token/$ line in the popover
@@ -216,100 +140,82 @@ resume_max_turns = 30            # Tier 2: cap agentic turns
 # resume_skip_permissions = false  # Tier 2: --dangerously-skip-permissions (else acceptEdits)
 ```
 
-Environment overrides:
+Optional environment overrides:
 
 | Env var | Purpose |
 |---|---|
 | `CLAUDOMETER_CONFIG` | Path to the config file (default `~/.claudometer.toml`). |
-| `CLAUDE_CONFIG_DIR` | Where to read Claude credentials/transcripts (default `~/.claude`). |
-| `CLAUDE_WIDGET_POLL` | Poll interval in seconds (60–300). The interval source for the Windows/Linux **tray** (the macOS menu bar polls at a fixed 90s). |
-| `CLAUDE_WIDGET_FAKE` | Testing: `"95,40,0"` = session,weekly,scoped % (skips the network). |
+| `CLAUDE_CONFIG_DIR` | Where to read Claude credentials (default `~/.claude`). |
+| `CLAUDE_WIDGET_POLL` | Poll interval in seconds (60–300), for the tray/menu‑bar. |
+| `CLAUDE_WIDGET_FAKE` | Testing: `"95,40,0"` = session,weekly,scoped % (skips the network). Try `$env:CLAUDE_WIDGET_FAKE="95,40,0"; py app.py bar` to preview the red state. |
 
-Preview the red/alert state with no real load:
-```powershell
-$env:CLAUDE_WIDGET_FAKE="95,40,0"; py app.py bar
+> On **macOS / Linux** the menu‑bar / tray shows live usage; alerts, cost, resume, and themes apply to the **Windows** strip for now (see [Platform support](#platform-support)).
+
+**Run modes:** `app.py bar` (Windows taskbar strip — default & recommended) · `app.py tray` (tray icon) · `app.py both` · `app.py` (auto per platform). Strip: left‑click = popover · drag = move · right‑click = menu.
+
+**Auto‑start on login:** the Windows installer can set this up for you. Manual (from source) — **Windows:** add a shortcut to `pythonw.exe "…\app.py" bar` in `shell:startup`. **macOS:** add the standalone `Claudometer.app` to **System Settings → Login Items**, or use a LaunchAgent for a source install:
+
+<details><summary>macOS LaunchAgent (source install)</summary>
+
+`~/Library/LaunchAgents/com.claudometer.plist`:
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.claudometer</string>
+  <key>ProgramArguments</key>
+  <array><string>/usr/bin/python3</string><string>/absolute/path/to/claudometer/app.py</string></array>
+  <key>RunAtLoad</key><true/>
+</dict></plist>
 ```
+Then: `launchctl load ~/Library/LaunchAgents/com.claudometer.plist`
+</details>
 
 ---
 
 ## How it works
 
-Claudometer reads the OAuth token Claude Code already stores locally
-(`~/.claude/.credentials.json`, or the macOS Keychain) and polls Anthropic's
-**server‑reported** usage endpoint — the same source the `/usage` panel uses:
+Claudometer reads the OAuth token Claude Code already stores locally (`~/.claude/.credentials.json`, or the macOS Keychain) and polls Anthropic's **server‑reported** usage endpoint — the same source the `/usage` panel uses:
 
 ```
 GET https://api.anthropic.com/api/oauth/usage
 ```
 
-The response maps directly onto the UI: the 5‑hour window → **Session**, the
-7‑day all‑models window → **Weekly**, and any per‑model scoped limits → per‑model
-rows (e.g. **Fable**), shown only when your account actually has one. Tokens are
-refreshed automatically when they expire.
+So it shows **true plan %** from Anthropic's backend — *not* a local token‑cost guess (unlike tools that tally `*.jsonl` transcripts). Tokens refresh automatically when they expire.
 
-> This is *true plan %* from Anthropic's backend — **not** a local token‑cost
-> estimate (unlike tools that add up `*.jsonl` transcript costs).
+- **Privacy** — your token is read **locally**; the only network call is the authenticated request to `api.anthropic.com`. No third‑party servers, no telemetry, no analytics.
+- **Footprint** — ~0.03% CPU idle, ~50 MB RAM. The strip only redraws when a value changes; the popover only while it's open.
 
-### Privacy
-- Your token is read **locally**; the only network call is the authenticated
-  request to `api.anthropic.com`.
-- **No** third‑party servers, **no** telemetry, **no** analytics.
-
-### Behavior notes
-- **Fullscreen auto‑hide** (optional) — by default Claudometer hides itself
-  whenever a fullscreen app is active (movies, games, presentations), using
-  Windows' own `SHQueryUserNotificationState` plus a foreground‑covers‑the‑screen
-  check, then reappears when you exit. Set `hide_on_fullscreen = false` to keep it
-  visible even over fullscreen apps. On macOS the menu bar hides in fullscreen
-  natively.
-- **Performance** — ~0.03% of total CPU idle, ~0.2% while you have the popover
-  open, ~50 MB RAM. The strip only re‑renders when a value changes; the popover
-  only while it's open.
+---
 
 ## Platform support
 
 | Platform | UI | Status |
 |---|---|---|
-| **Windows 10/11** | Taskbar strip + click‑to‑open popover | ✅ Full |
-| **macOS** | Menu‑bar item + dropdown | ✅ Menu bar |
-| **Linux** | Notification‑area tray icon | 🧪 Experimental (`app.py tray`) |
+| **Windows 10/11** | Taskbar strip + click‑to‑open popover — **full feature set** | ✅ Full |
+| **macOS** | Menu‑bar item + dropdown (live usage) | ✅ |
+| **Linux** | Notification‑area tray icon (live usage) | 🧪 Experimental |
 
-> **Feature scope:** the taskbar strip (Windows) has the full feature set —
-> click‑to‑open popover, alerts, estimated cost, resume‑on‑reset, themes, accent,
-> and the config file. The macOS menu bar and Linux tray currently show live
-> usage only. Unifying these is on the roadmap.
+Alerts, estimated cost, resume‑on‑reset, themes, accent, and the config file are on the **Windows** strip today; the macOS menu bar and Linux tray show live usage. Unifying these is on the roadmap.
 
 ## Roadmap
 
-**Shipped:** ✅ desktop alerts · ✅ config file · ✅ estimated cost view · ✅ standalone binaries + release CI.
+**Shipped:** desktop alerts · config file + in‑app settings panel · estimated‑cost view · standalone binaries + release CI · pipx / Scoop / Homebrew installs.
 
-**Next up:**
-- 📈 A tiny **usage sparkline** over the session
-- 🍎 Unified floating popover on macOS (currently a native menu‑bar item)
-- 🧮 Per‑model cost breakdown & weekly totals
-- 📥 Published **winget** / **Homebrew** listings
+**Next:** usage sparkline over the session · unified floating popover on macOS · per‑model cost breakdown · published winget listing.
 
-Contributions and ideas welcome — open an issue or PR.
+Ideas and PRs welcome — open an issue.
 
 ## Contributing
 
 ```bash
-py -m pip install -r requirements.txt
-py app.py bar
+pip install -r requirements.txt && py app.py bar
 ```
-`usage_core.py` holds the data/auth logic (no UI deps), `render.py` does all the
-Pillow drawing, `settings.py` / `cost.py` / `resume.py` add config, cost
-estimation, and session‑resume, and the platform adapters (`widget_bar.py`,
-`menubar_mac.py`, `tray_windows.py`) are thin. Regenerate the README images with
-`py assets/make_assets.py`.
+`usage_core.py` = data/auth (no UI deps) · `render.py` = all the Pillow drawing · `settings.py` / `cost.py` / `resume.py` = config, cost estimation, session‑resume · the platform adapters (`widget_bar.py`, `menubar_mac.py`, `tray_windows.py`) are thin. Regenerate the README images with `py assets/make_assets.py`.
 
 ## ⚠️ Disclaimer
 
-Claudometer is an **independent, unofficial** tool. It is **not affiliated with,
-authorized, or endorsed by Anthropic**. It relies on an **undocumented** usage
-endpoint that may change or break at any time, and reads the local Claude Code
-credentials on your own machine. Use at your own risk, and in accordance with
-Anthropic's Terms of Service. "Claude" is a trademark of Anthropic, PBC.
+Claudometer is an independent, **unofficial** tool — **not affiliated with, authorized, or endorsed by Anthropic**. It relies on an **undocumented** usage endpoint that may change or break at any time, and reads your local Claude Code credentials on your own machine. Use at your own risk and in accordance with Anthropic's Terms of Service. "Claude" is a trademark of Anthropic, PBC.
 
 ## License
 
