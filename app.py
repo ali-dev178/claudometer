@@ -1,7 +1,7 @@
 """Entry point.
 
-Usage:
-    py app.py            # macOS: menu bar. Windows/Linux: tray icon (default)
+Usage (no arg default: macOS = menu bar, Windows = taskbar strip, Linux = tray):
+    py app.py            # default per platform (above)
     py app.py bar        # Windows: floating readable numbers over the taskbar
     py app.py tray       # Windows/Linux: tray icon only
     py app.py both       # Windows: tray icon + floating taskbar readout

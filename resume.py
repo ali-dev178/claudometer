@@ -77,7 +77,7 @@ def _ps(s):  # PowerShell single-quote
 
 def open_terminal(cwd, session_id):
     """Tier 1: open a visible terminal in *cwd* running `claude --resume <id>`."""
-    if not session_id or not cwd:
+    if not session_id or not cwd or not Path(cwd).exists():
         return False
     try:
         if sys.platform == "win32":

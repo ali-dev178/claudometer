@@ -387,7 +387,7 @@ class BarWidget:
                 _t["accent"] = cfg["accent"]
         self._alerted = {"session": set(), "weekly": set()}
         self._toast = None
-        self._first_alert = True
+        self._first_alert = {"session": True, "weekly": True}
 
         self._resume_notify = cfg["resume_notify"]
         self._resume_auto = cfg["resume_auto"]
@@ -395,9 +395,9 @@ class BarWidget:
         self._resume_skip_perms = cfg["resume_skip_permissions"]
         self._resume_max_turns = cfg["resume_max_turns"]
         self._resume_state = "idle"  # idle | capped
-        self._resume_reset_at = None
         self._resume_toast = None
         self._resume_retry_after = None
+        self._resume_fire_tries = 0
         self._poll_seq = 0        # bumped by the poll thread on each new result
         self._processed_seq = 0   # last poll processed for alerts/resume (main thread)
 
@@ -526,10 +526,6 @@ class BarWidget:
         upward. Runs on the main thread (called from _refresh_ui)."""
         if not self._alerts_on:
             return
-        if disp.get("session_pct") is None and disp.get("weekly_pct") is None:
-            return  # no numeric data yet — don't consume the first-run suppression
-        first = self._first_alert
-        self._first_alert = False
         for which in ("session", "weekly"):
             pct = disp.get(f"{which}_pct")
             if pct is None:
@@ -539,7 +535,10 @@ class BarWidget:
             # Sticky: keep a threshold "alerted" until pct falls well below it, so
             # boundary jitter can't re-fire; a real reset (big drop) clears it.
             self._alerted[which] = {t for t in (self._alerted[which] | reached) if pct >= t - 5}
-            if new and not first:
+            if self._first_alert[which]:  # seed per-window on its first data, no alert
+                self._first_alert[which] = False
+                continue
+            if new:
                 self._queue_toast(which, pct, disp)
 
     def _queue_toast(self, which, pct, disp):
@@ -569,7 +568,13 @@ class BarWidget:
     # -- resume on reset -------------------------------------------------- #
     def _track_resume(self, disp):
         """Watch the 5-hour session: mark it capped at 100%, and fire the resume
-        flow once the window has genuinely reset. Runs on the main thread."""
+        flow once utilization drops back below the cap (you've regained headroom).
+
+        Utilization is the ground truth for 'can I use Claude again' — the moment
+        it's under 100% you're no longer rate-limited. We deliberately DON'T gate
+        on session_resets_at, which is only a projection that drifts as the
+        rolling window slides. For a capped-and-waiting user, utilization only
+        decreases, so the <=90 crossing is reliably observed. Main thread."""
         if not (self._resume_notify or self._resume_auto):
             return
         sp = disp.get("session_pct")
@@ -577,23 +582,10 @@ class BarWidget:
             return
         if self._resume_state == "idle":
             if sp >= 100:  # session limit reached
-                self._resume_reset_at = disp.get("session_resets_at")
                 self._resume_state = "capped"
-        elif self._resume_state == "capped":
-            # Fire only when the window has really reset: the projected reset
-            # time has passed AND utilization dropped enough to give headroom.
-            # Requiring both avoids false fires from rolling-window tail roll-off.
-            ra = self._resume_reset_at
-            time_ok = ra is None
-            if ra is not None:
-                try:
-                    time_ok = datetime.now(timezone.utc) >= ra
-                except Exception:
-                    time_ok = True
-            if time_ok and sp <= 90:
-                self._resume_state = "idle"
-                self._resume_reset_at = None
-                self._fire_resume()
+        elif self._resume_state == "capped" and sp <= 90:  # headroom regained
+            self._resume_state = "idle"
+            self._fire_resume()
 
     def _clear_resume_toast(self):
         self._resume_toast = None
@@ -612,7 +604,14 @@ class BarWidget:
             return
         snap = resume.last_session()
         if not snap or not snap.get("cwd") or not Path(snap["cwd"]).exists():
+            # transient (sessions not written yet / dir gone) — retry a few times
+            self._resume_fire_tries += 1
+            if self._resume_fire_tries <= 5:
+                self._resume_retry_after = self.root.after(30000, self._fire_resume)
+            else:
+                self._resume_fire_tries = 0
             return
+        self._resume_fire_tries = 0
         cwd, sid = snap["cwd"], snap["session_id"]
         try:
             if self._resume_toast is not None:
@@ -696,6 +695,7 @@ class BarWidget:
     # -- loops ------------------------------------------------------------ #
     def _poll_loop(self):
         while True:
+            self._wake.clear()  # a refresh requested during the poll forces a re-poll
             result = None
             try:
                 result = core.poll_once(self._state)
@@ -725,7 +725,6 @@ class BarWidget:
                 self._poll_seq += 1
             wait = self._state.backoff or self._poll
             self._wake.wait(timeout=wait)
-            self._wake.clear()
 
     def _refresh_ui(self):
         # Hide over fullscreen apps (movies, games, presentations) like the
@@ -733,7 +732,8 @@ class BarWidget:
         fs = _fullscreen_active()
         if fs and not self._hidden:
             self._hidden = True
-            resume_was_showing = self._resume_toast is not None
+            # a resume is pending if a toast is up OR a retry is already scheduled
+            resume_pending = self._resume_toast is not None or self._resume_retry_after is not None
             if self._resume_retry_after is not None:
                 try:
                     self.root.after_cancel(self._resume_retry_after)
@@ -751,7 +751,7 @@ class BarWidget:
                 self.root.withdraw()
             except Exception:
                 pass
-            if resume_was_showing:  # don't drop a pending resume — defer it
+            if resume_pending:  # don't drop a pending/deferred resume — re-arm it
                 self._resume_retry_after = self.root.after(15000, self._fire_resume)
         elif not fs and self._hidden:
             self._hidden = False
@@ -792,7 +792,7 @@ class BarWidget:
                 self._draw(disp)
                 self._sig = sig
         self._topmost_ticks += 1
-        if self._topmost_ticks >= 6:
+        if self._topmost_ticks >= 6 and self._popover is None:  # don't steal popover focus
             self._topmost_ticks = 0
             try:
                 self.root.attributes("-topmost", True)

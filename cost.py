@@ -43,6 +43,11 @@ def _n(usage: dict, k: str) -> float:
     return v if isinstance(v, (int, float)) else 0  # tolerate explicit nulls
 
 
+def _tok(usage: dict) -> float:
+    return (_n(usage, "input_tokens") + _n(usage, "output_tokens")
+            + _n(usage, "cache_creation_input_tokens") + _n(usage, "cache_read_input_tokens"))
+
+
 def _line_cost(usage: dict, key: str) -> float:
     p = PRICING[key]
     return (_n(usage, "input_tokens") * p["input"]
@@ -61,8 +66,12 @@ def compute_today(config_dir=None):
 
     start = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
     cutoff = start.timestamp()
-    total_tokens, total_cost = 0, 0.0
-    seen = set()  # message ids already counted (Claude Code repeats usage per block-line)
+    # Claude Code writes one line per content block for an assistant message,
+    # all sharing the message id. Input/cache tokens are identical across them
+    # but output_tokens GROW (streaming snapshots), so keep the LAST occurrence
+    # per id (the complete cumulative usage) rather than summing or keeping first.
+    by_id = {}                          # message id -> (usage, key), last wins
+    extra_tokens, extra_cost = 0, 0.0   # lines without an id (counted as-is)
 
     for f in proj.rglob("*.jsonl"):
         try:
@@ -89,27 +98,24 @@ def compute_today(config_dir=None):
                         else:
                             continue  # no valid timestamp -> not counted as "today"
                         msg = obj.get("message", {})
-                        # Claude Code writes one line per content block, each
-                        # carrying the SAME cumulative usage — count each id once.
-                        mid = msg.get("id")
-                        if mid is not None:
-                            if mid in seen:
-                                continue
-                            seen.add(mid)
                         key = _key_for(msg.get("model", ""))
                         if not key:
                             continue
                         u = msg.get("usage", {})
-                        total_tokens += (_n(u, "input_tokens") + _n(u, "output_tokens")
-                                         + _n(u, "cache_creation_input_tokens")
-                                         + _n(u, "cache_read_input_tokens"))
-                        total_cost += _line_cost(u, key)
+                        mid = msg.get("id")
+                        if mid is not None:
+                            by_id[mid] = (u, key)
+                        else:
+                            extra_tokens += _tok(u)
+                            extra_cost += _line_cost(u, key)
                     except Exception:
                         continue
         except OSError:
             continue
 
-    return {"tokens": total_tokens, "cost": total_cost}
+    total_tokens = extra_tokens + sum(_tok(u) for u, _ in by_id.values())
+    total_cost = extra_cost + sum(_line_cost(u, key) for u, key in by_id.values())
+    return {"tokens": int(total_tokens), "cost": total_cost}
 
 
 if __name__ == "__main__":

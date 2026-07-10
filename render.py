@@ -115,12 +115,14 @@ def _elide(draw, text, font, max_w):
     """Truncate text with an ellipsis so it fits within max_w pixels."""
     text = str(text)
     if max_w <= 0:
-        return "…"  # fail closed: no room -> ellipsis, never overflow
+        return ""  # fail closed: no room at all
     if draw.textlength(text, font=font) <= max_w:
         return text
     while text and draw.textlength(text + "…", font=font) > max_w:
         text = text[:-1]
-    return (text + "…") if text else "…"
+    if text:
+        return text + "…"
+    return "…" if draw.textlength("…", font=font) <= max_w else ""
 
 
 def _fmt_usd(x):
@@ -411,6 +413,7 @@ def render_action_toast(title, subtitle, action_label, theme, scale=3):
     d.polygon([(cx - tw * 0.65, cy - tw), (cx - tw * 0.65, cy + tw), (cx + tw, cy)], fill="#ffffff")
 
     f_btn = _font("sb", 11 * S)
+    action_label = _elide(d, action_label, f_btn, int(W * S * 0.4) - 28 * S)  # cap button
     bw = d.textlength(action_label, font=f_btn) + 28 * S
     bx2, by1, by2 = Ws - 14 * S, (H / 2 - 14) * S, (H / 2 + 14) * S
     bx1 = bx2 - bw

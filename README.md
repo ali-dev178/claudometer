@@ -128,7 +128,7 @@ Build your own binaries with [`packaging/`](packaging/) (PyInstaller + CI).
 | `app.py bar` | **Windows:** floating taskbar strip + popover *(recommended)* |
 | `app.py tray` | **Windows/Linux:** notification‑area tray icon |
 | `app.py both` | **Windows:** taskbar strip **and** tray icon |
-| `app.py` | Default — **macOS:** menu bar · **Windows/Linux:** tray |
+| `app.py` | Default — **macOS:** menu bar · **Windows:** taskbar strip · **Linux:** tray |
 
 **Interactions (taskbar strip):** left‑click = open/close popover · drag = move (remembered) · right‑click = Details / Refresh / Quit.
 

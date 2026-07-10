@@ -420,10 +420,12 @@ def poll_once(state: PollState):
     # Proactive refresh if the token is about to expire. A RefreshRejected
     # (invalid_grant) means re-login is required — track it to surface NO_CREDS.
     rejected = False
+    refreshed = False
     if _expiring_soon(creds) and refresh_tok:
         try:
             token = _refresh_and_persist(refresh_tok, full)
             refresh_tok = full.get("claudeAiOauth", {}).get("refreshToken", refresh_tok)  # rotated
+            refreshed = True
         except RefreshRejected:
             rejected = True
         except RefreshFailed:
@@ -431,8 +433,8 @@ def poll_once(state: PollState):
 
     status, usage = fetch_usage(token, plan, rate_tier)
 
-    # Reactive refresh: exactly one retry on 401.
-    if status == "unauthorized" and refresh_tok and not rejected:
+    # Reactive refresh: one retry on 401 (skip if we just proactively refreshed).
+    if status == "unauthorized" and refresh_tok and not rejected and not refreshed:
         try:
             token = _refresh_and_persist(refresh_tok, full)
             status, usage = fetch_usage(token, plan, rate_tier)
