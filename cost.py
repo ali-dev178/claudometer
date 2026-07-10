@@ -98,23 +98,22 @@ def compute_today(config_dir=None):
                         else:
                             continue  # no valid timestamp -> not counted as "today"
                         msg = obj.get("message", {})
-                        key = _key_for(msg.get("model", ""))
-                        if not key:
-                            continue
+                        key = _key_for(msg.get("model", ""))  # may be None (unpriced)
                         u = msg.get("usage", {})
                         mid = msg.get("id")
                         if mid is not None:
-                            by_id[mid] = (u, key)
+                            by_id[mid] = (u, key)  # tokens still count; cost only if key
                         else:
                             extra_tokens += _tok(u)
-                            extra_cost += _line_cost(u, key)
+                            if key:
+                                extra_cost += _line_cost(u, key)
                     except Exception:
                         continue
         except OSError:
             continue
 
     total_tokens = extra_tokens + sum(_tok(u) for u, _ in by_id.values())
-    total_cost = extra_cost + sum(_line_cost(u, key) for u, key in by_id.values())
+    total_cost = extra_cost + sum(_line_cost(u, key) for u, key in by_id.values() if key)
     return {"tokens": int(total_tokens), "cost": total_cost}
 
 

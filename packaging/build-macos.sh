@@ -10,7 +10,6 @@ cd "$(dirname "$0")/.."
 #   iconutil -c icns icon.iconset -o assets/icon.icns   (then add: --icon assets/icon.icns)
 
 python3 -m PyInstaller --onefile --windowed --name Claudometer \
-    --collect-submodules PIL \
     --osx-bundle-identifier com.claudometer.app \
     app.py
 

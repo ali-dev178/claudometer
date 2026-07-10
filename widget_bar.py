@@ -589,6 +589,8 @@ class BarWidget:
         elif self._resume_state == "capped" and sp <= 90:  # headroom regained
             self._resume_state = "idle"
             self._fire_resume()
+        elif self._resume_state == "resumed" and sp >= 100:
+            self._resume_state = "capped"  # genuinely re-capped -> re-arm
 
     def _clear_resume_toast(self):
         self._resume_toast = None
@@ -639,6 +641,9 @@ class BarWidget:
             log = resume.run_auto(cwd, sid, self._resume_prompt,
                                   skip_permissions=self._resume_skip_perms,
                                   max_turns=self._resume_max_turns)
+            # don't auto-resume again until a genuine re-cap (avoids a second
+            # unattended run if the just-launched job pushes usage back to 100%)
+            self._resume_state = "resumed"
             if log:
                 self._resume_toast = ResumeToast(
                     self.root, self._theme, "Auto-resumed session",

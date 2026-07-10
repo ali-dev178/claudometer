@@ -15,7 +15,7 @@ DOT = {"green": "🟢", "amber": "🟡", "red": "🔴", "grey": "⚪"}
 
 class MenuApp(rumps.App):
     def __init__(self):
-        super().__init__("…", quit_button=None)
+        super().__init__(name="Claudometer", title="…", quit_button=None)
         self._state = core.PollState()
         self.menu = ["Loading…"]
         self._tick(None)  # immediate first render

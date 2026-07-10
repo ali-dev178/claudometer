@@ -116,7 +116,7 @@ def run_auto(cwd, session_id, prompt, skip_permissions=False, max_turns=30, conf
     --permission-mode acceptEdits (edits allowed, other commands still gated)
     unless the user explicitly opts into --dangerously-skip-permissions.
     """
-    if not session_id:
+    if not session_id or not cwd or not Path(cwd).exists():
         return None
     safe = "".join(c for c in str(session_id) if c.isalnum() or c in "-_")[:40] or "session"
     log = _config_dir(config_dir) / f"claudometer-resume-{safe}.log"

@@ -289,8 +289,16 @@ def refresh_token(refresh_tok: str) -> dict:
             if resp.status_code == 200:
                 return resp.json()
             if resp.status_code in (400, 401):
-                # invalid_grant / invalid token: retrying the other host won't help.
-                raise RefreshRejected(f"{resp.status_code}: {resp.text[:200]}")
+                # Only a real invalid_grant means re-login. Other 400/401s can be
+                # transient/host-specific during the console->platform migration —
+                # try the other host, then treat as a transient RefreshFailed.
+                err = ""
+                try:
+                    err = str((resp.json() or {}).get("error") or "").lower()
+                except Exception:
+                    pass
+                if err in ("invalid_grant", "invalid_client", "unauthorized_client"):
+                    raise RefreshRejected(f"{resp.status_code}: {err}")
             last_err = f"{resp.status_code}: {resp.text[:200]}"
         except (requests.ConnectionError, requests.Timeout) as exc:
             last_err = str(exc)

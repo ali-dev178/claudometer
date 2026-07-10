@@ -4,9 +4,9 @@ Zero-dependency: uses the stdlib ``tomllib`` when present (Python 3.11+),
 otherwise a tiny built-in parser for the flat keys we support. Everything has a
 sensible default, so the file is entirely optional. Changes apply on restart.
 
-The built-in fallback parser (Python < 3.11 only) handles single-line values:
-keep arrays on one line and avoid backslash-escaped quotes. On 3.11+ full TOML
-is supported via tomllib.
+The built-in fallback parser (Python < 3.11 only) is line-oriented: it does NOT
+support multiline strings/arrays, [tables], or string escape sequences (\\n, \\t,
+\\uXXXX, ...). Keep values single-line. Python 3.11+ uses tomllib for full TOML.
 """
 
 import os
@@ -131,7 +131,8 @@ def load() -> dict:
 
     # normalize / validate
     try:
-        cfg["poll"] = max(60, min(300, int(cfg["poll"])))
+        cfg["poll"] = (DEFAULTS["poll"] if isinstance(cfg["poll"], bool)
+                       else max(60, min(300, int(cfg["poll"]))))
     except (TypeError, ValueError):
         cfg["poll"] = DEFAULTS["poll"]
     if cfg["theme"] not in _VALID_THEMES:
@@ -142,6 +143,8 @@ def load() -> dict:
     cfg["alerts"] = bool(cfg["alerts"])
     thr = []
     for t in cfg["alert_thresholds"] if isinstance(cfg["alert_thresholds"], list) else []:
+        if isinstance(t, bool):
+            continue
         try:
             v = int(t)
         except (TypeError, ValueError):
@@ -158,7 +161,8 @@ def load() -> dict:
     if not isinstance(cfg["resume_prompt"], str) or not cfg["resume_prompt"].strip():
         cfg["resume_prompt"] = DEFAULTS["resume_prompt"]
     try:
-        cfg["resume_max_turns"] = max(1, min(200, int(cfg["resume_max_turns"])))
+        cfg["resume_max_turns"] = (DEFAULTS["resume_max_turns"] if isinstance(cfg["resume_max_turns"], bool)
+                                   else max(1, min(200, int(cfg["resume_max_turns"]))))
     except (TypeError, ValueError):
         cfg["resume_max_turns"] = DEFAULTS["resume_max_turns"]
     return cfg

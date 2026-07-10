@@ -151,7 +151,9 @@ pythonw.exe "C:\path\to\claudometer\app.py" bar
   <key>RunAtLoad</key><true/>
 </dict></plist>
 ```
-then `launchctl load ~/Library/LaunchAgents/com.claudometer.plist`.
+then `launchctl load ~/Library/LaunchAgents/com.claudometer.plist`. (This plist is
+for the from-source install; if you use the standalone `Claudometer.app`, just add
+it to **System Settings → General → Login Items** instead.)
 
 ## Configuration
 

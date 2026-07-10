@@ -19,7 +19,7 @@ THEMES = {
         "key": "#f3f5f8",
         "panel_top": "#ffffff", "panel_bot": "#f5f8fc",
         "border": "#e5e9ef", "hair": "#eef1f5",
-        "neutral": "#161b22", "dim": "#6b7480", "faint": "#98a1ad",
+        "neutral": "#161b22", "dim": "#6b7480", "faint": "#98a1ad", "grey": "#6b7480",
         "track": "#e9edf2",
         "accent": "#d97757", "accent_soft": "#f8ece5",
         "green": "#12a150", "amber": "#d99400", "red": "#e5484d",
@@ -28,7 +28,7 @@ THEMES = {
         "key": "#0b0e14",
         "panel_top": "#191f2b", "panel_bot": "#12161f",
         "border": "#2a3342", "hair": "#222a37",
-        "neutral": "#e9edf4", "dim": "#9aa4b3", "faint": "#69727e",
+        "neutral": "#e9edf4", "dim": "#9aa4b3", "faint": "#69727e", "grey": "#9aa4b3",
         "track": "#262f3d",
         "accent": "#e58e6f", "accent_soft": "#2d241f",
         "green": "#2ec26a", "amber": "#e2a53c", "red": "#ff6b6e",
@@ -156,7 +156,7 @@ def _rrbar(d, x1, y1, x2, y2, pct, color, track):
     d.rounded_rectangle([x1, y1, x2, y2], radius=r, fill=track)
     fw = (x2 - x1) * min(max(pct or 0, 0), 100) / 100.0
     if fw > 0:
-        d.rounded_rectangle([x1, y1, x1 + max(fw, 2 * r), y2], radius=r, fill=color)
+        d.rounded_rectangle([x1, y1, min(x2, x1 + max(fw, 2 * r)), y2], radius=r, fill=color)
 
 
 def _big_pct(d, x, ymid, pct, fbig, fpct, color, dim):
