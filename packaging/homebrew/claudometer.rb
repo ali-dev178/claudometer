@@ -1,18 +1,22 @@
-# Homebrew Cask TEMPLATE. Fill <...>, host the zipped .app on a GitHub Release,
-# then publish via your own tap:  brew install <you>/tap/claudometer
+# Homebrew Cask. The version + sha256 are filled by packaging/update-manifests.py
+# after a release. Publish via your own tap repo (homebrew-claudometer), then:
+#   brew install --cask ali-dev178/claudometer/claudometer
 cask "claudometer" do
-  version "0.1.0"
-  sha256 "<SHA256_OF_ZIP>"
+  version "1.0.0"
+  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
 
-  url "https://github.com/<you>/claudometer/releases/download/v#{version}/Claudometer-macos.zip"
+  url "https://github.com/ali-dev178/claudometer/releases/download/v#{version}/Claudometer-macos.zip"
   name "Claudometer"
-  desc "Live Claude usage limits in your menu bar"
-  homepage "https://github.com/<you>/claudometer"
+  desc "Live Claude usage limits (session & weekly) in your menu bar"
+  homepage "https://github.com/ali-dev178/claudometer"
 
   app "Claudometer.app"
 
   caveats <<~EOS
     Claudometer reads your local Claude Code credentials and shows usage in the
-    menu bar. Requires a Claude Pro/Max/Team subscription signed into Claude Code.
+    macOS menu bar. Requires a Claude Pro/Max/Team subscription signed into Claude Code.
+
+    This is an unsigned build: on first launch macOS may block it. Right-click the
+    app and choose "Open", or allow it in System Settings > Privacy & Security.
   EOS
 end

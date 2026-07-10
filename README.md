@@ -109,34 +109,39 @@ Configure both in the [config file](#configuration).
 
 You need a **Claude Pro / Max / Team** subscription and to have **signed into Claude Code** at least once (that's where the credentials live).
 
-### Option A — From source (Python 3.9+) · works today
+> **Heads up:** the `pipx`, `scoop`, `brew`, and download methods below light up once the **first release is published** (a one‑time maintainer step — see [`packaging/`](packaging/README.md)). Until then, **[install from source](#from-source-python-39)** — that always works.
+
+### Easiest — one command (any OS) 🏆
+Installs in an isolated environment and puts `claudometer` on your PATH:
 ```bash
-git clone https://github.com/ali-dev178/claudometer.git
-cd claudometer
+pipx install claudometer      # don't have pipx?  →  python -m pip install --user pipx
+claudometer                   # launch it
 ```
-**Windows**
+Update anytime with `pipx upgrade claudometer`.
+
+### Windows
 ```powershell
-py -m pip install -r requirements.txt
-pythonw.exe app.py bar     # runs with no console window
+scoop install https://raw.githubusercontent.com/ali-dev178/claudometer/main/packaging/scoop/claudometer.json
 ```
-**macOS**
+…or grab the **installer** (`ClaudometerSetup.exe`, ticks "start on sign‑in" for you) or the portable **`Claudometer.exe`** from
+[**Releases**](https://github.com/ali-dev178/claudometer/releases) and double‑click.
+
+### macOS
 ```bash
-python3 -m pip install -r requirements.txt
-python3 app.py             # adds a menu-bar item
+brew install --cask ali-dev178/claudometer/claudometer
+```
+…or download **`Claudometer.dmg`** from [**Releases**](https://github.com/ali-dev178/claudometer/releases) and drag it to Applications.
+
+### From source (Python 3.9+)
+```bash
+git clone https://github.com/ali-dev178/claudometer.git && cd claudometer
+pip install -r requirements.txt
+pythonw.exe app.py bar    # Windows (no console)   ·   python3 app.py   # macOS
 ```
 
-### Option B — Standalone binary (no Python needed to run)
-A `Claudometer.exe` (Windows) / `Claudometer.app` (macOS) that runs without a
-Python install. Build one in a minute with the scripts in
-[`packaging/`](packaging/) (PyInstaller). Prebuilt downloads will be published to
-[**Releases**](https://github.com/ali-dev178/claudometer/releases) once the
-release workflow is enabled.
-
-On Windows, drag the taskbar readout wherever you like (it remembers the spot);
-on macOS it appears as a menu‑bar item. Add it to startup / login items to launch
-automatically.
-
-> First run tip (Windows): Windows 11 may tuck new taskbar items away — drag Claudometer to where you want it; it remembers the position.
+> **Unsigned builds:** the downloads aren't code‑signed yet, so on first launch Windows SmartScreen ("More info → Run anyway") or macOS Gatekeeper (right‑click → **Open**) may ask you to confirm. `pipx`, `scoop` and `brew` avoid this.
+>
+> **First‑run tip (Windows):** Windows 11 may tuck new taskbar items away — drag Claudometer where you want it; it remembers the spot.
 
 ## Usage
 

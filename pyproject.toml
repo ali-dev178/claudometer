@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claudometer"
+dynamic = ["version"]
+description = "Live Claude usage limits (session & weekly) on your taskbar / menu bar — so you never hit a limit by surprise."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Muhammad Ali", email = "ali.dev178@gmail.com" }]
+keywords = ["claude", "claude-code", "anthropic", "usage", "taskbar", "menubar", "widget", "tray"]
+classifiers = [
+    "Environment :: Win32 (MS Windows)",
+    "Environment :: MacOS X",
+    "Environment :: X11 Applications",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "requests>=2.31",
+    'pystray>=0.19 ; sys_platform != "darwin"',
+    'Pillow>=10.1 ; sys_platform != "darwin"',
+    'rumps>=0.4 ; sys_platform == "darwin"',
+]
+
+[project.urls]
+Homepage = "https://github.com/ali-dev178/claudometer"
+Repository = "https://github.com/ali-dev178/claudometer"
+Issues = "https://github.com/ali-dev178/claudometer/issues"
+
+# GUI entry point: on Windows this makes a pythonw-based launcher (no console
+# window flashes when you run `claudometer`); on macOS/Linux it's a normal script.
+[project.gui-scripts]
+claudometer = "app:main"
+
+[tool.setuptools]
+# Flat layout: the app is a set of top-level modules. pipx installs each app in
+# its own isolated venv, so the generic module names never collide with anything.
+py-modules = [
+    "app", "widget_bar", "render", "usage_core", "settings",
+    "cost", "resume", "config", "tray_windows", "menubar_mac",
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "config.APP_VERSION" }

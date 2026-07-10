@@ -1,22 +1,31 @@
-# winget manifest TEMPLATE (portable install of the standalone .exe).
-# Fill the <...> placeholders and submit to https://github.com/microsoft/winget-pkgs
-# (three-file manifest recommended for real submissions; this singleton is a start).
-PackageIdentifier: <YourPublisher>.Claudometer
-PackageVersion: 0.1.0
+# winget manifest (portable install of the standalone .exe). Version + SHA256 are
+# filled by packaging/update-manifests.py. Submit to microsoft/winget-pkgs
+# (a three-file manifest is recommended for real submissions; this singleton is a start).
+PackageIdentifier: MuhammadAli.Claudometer
+PackageVersion: 1.0.0
 PackageLocale: en-US
-Publisher: <Your Name>
+Publisher: Muhammad Ali
+PublisherUrl: https://github.com/ali-dev178
 PackageName: Claudometer
+PackageUrl: https://github.com/ali-dev178/claudometer
 License: MIT
-ShortDescription: Live Claude usage limits, always visible on your taskbar.
+LicenseUrl: https://github.com/ali-dev178/claudometer/blob/main/LICENSE
+ShortDescription: Live Claude usage limits (session & weekly), always visible on your taskbar.
 Moniker: claudometer
 Tags:
   - claude
+  - claude-code
+  - anthropic
   - productivity
   - taskbar
 Installers:
+  # Point at the Inno installer (ClaudometerSetup.exe) so `winget install` creates
+  # real Start-menu/desktop/startup shortcuts — a bare portable .exe would only add
+  # a PATH alias, leaving a GUI/tray app with nothing clickable to launch.
   - Architecture: x64
-    InstallerType: portable
-    InstallerUrl: https://github.com/<you>/claudometer/releases/download/v0.1.0/Claudometer.exe
-    InstallerSha256: <SHA256_OF_EXE>
+    InstallerType: inno
+    Scope: user
+    InstallerUrl: https://github.com/ali-dev178/claudometer/releases/download/v1.0.0/ClaudometerSetup.exe
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
 ManifestType: singleton
 ManifestVersion: 1.6.0
