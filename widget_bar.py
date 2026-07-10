@@ -1098,7 +1098,7 @@ class BarWidget:
     # -- demo / self-test tour ------------------------------------------- #
     # A scripted, fully offline sequence that drives the REAL alert/resume/render
     # code paths through every state — so you (and new users) can verify each
-    # feature in ~40s instead of waiting for real usage to reach those conditions.
+    # feature in ~50s instead of waiting for real usage to reach those conditions.
     def _demo_timeline(self):
         now = datetime.now(timezone.utc)
 
@@ -1112,19 +1112,25 @@ class BarWidget:
             d.update(extra)
             return d
 
-        offline = {"_demo": True, "plan": None, "session": "offline (demo)",
-                   "session_pct": None, "weekly_pct": None,
-                   "session_color": "grey", "weekly_color": "grey", "model_rows": []}
+        def status(session, color):  # a non-usage state (offline / rate-limited)
+            return {"_demo": True, "plan": None, "session": session,
+                    "session_pct": None, "weekly_pct": None, "face_color": color,
+                    "session_color": color, "weekly_color": color, "model_rows": []}
+
         return [
-            (step(20, "green", 8, "green", 180), 4.0),    # comfortable — green
-            (step(62, "amber", 14, "green", 120), 4.0),   # getting close — amber
-            (step(84, "red", 20, "green", 40), 5.0),      # crosses 80% → alert toast
-            (step(92, "red", 22, "green", 18), 5.0),      # crosses 90% → alert toast
-            (step(100, "red", 24, "amber", 6), 5.0),      # 100% → "limit reached"
-            (step(85, "red", 24, "amber", 300), 6.0),     # drops ≤90 → resume notice
-            (step(40, "green", 26, "amber", 240,
-                  cost_tokens=2_450_000, cost_usd=8.74), 5.0),  # cost line (click to see)
-            (offline, 4.0),                               # graceful offline state
+            (step(20, "green", 8, "green", 180), 4.0),    # 1  comfortable — green
+            (step(62, "amber", 15, "green", 120), 4.0),   # 2  getting close — amber
+            (step(84, "red", 22, "green", 40), 4.5),      # 3  session crosses 80% → alert
+            (step(93, "red", 24, "green", 16), 4.5),      # 4  session crosses 90% → alert
+            (step(48, "amber", 88, "red", 90), 4.5),      # 5  WEEKLY crosses 80% → alert
+            (step(100, "red", 30, "amber", 6), 4.5),      # 6  100% → "limit reached"
+            (step(85, "red", 30, "amber", 300), 6.0),     # 7  drop ≤90 → resume (Tier 1 notify)
+            (step(40, "green", 30, "amber", 240,
+                  cost_tokens=2_450_000, cost_usd=8.74), 5.0),   # 8  cost line (click to see)
+            (status("usage limit reached", "red"), 4.5),  # 9  rate-limited (429) state
+            (step(100, "red", 30, "amber", 5), 4.5),      # 10 limit reached again (capped)
+            (step(88, "red", 30, "amber", 260), 6.0),     # 11 drop ≤90 → resume (Tier 2 auto)
+            (status("offline (demo)", "grey"), 4.0),      # 12 graceful offline state
         ]
 
     def _toggle_demo(self):
@@ -1137,6 +1143,7 @@ class BarWidget:
         if self._demo:
             return
         self._demo = True
+        self._demo_resume_n = 0
         self._reset_alert_resume_state()
         self._demo_seq = self._demo_timeline()
         self._demo_i = 0
@@ -1188,13 +1195,22 @@ class BarWidget:
             pass  # window closed
 
     def _show_demo_resume(self):
+        # Alternate the two resume tiers so the tour shows both over its run.
+        self._demo_resume_n = getattr(self, "_demo_resume_n", 0) + 1
         try:
             if self._resume_toast is not None:
                 self._resume_toast.close()
-            self._resume_toast = ResumeToast(
-                self.root, self._theme, "Session limit reset (demo)",
-                "This is where you'd click Resume to continue", "Resume",
-                on_click=lambda: None, timeout_ms=8000, on_close=self._clear_resume_toast)
+            if self._demo_resume_n % 2 == 0:   # Tier 2 — unattended auto-resume
+                self._resume_toast = ResumeToast(
+                    self.root, self._theme, "Session reset — auto-resuming (demo)",
+                    "resuming in 6s · click to cancel", "Cancel",
+                    on_click=None, countdown_s=6, on_expire=lambda: None,
+                    on_close=self._clear_resume_toast)
+            else:                               # Tier 1 — notify + one click
+                self._resume_toast = ResumeToast(
+                    self.root, self._theme, "Session limit reset (demo)",
+                    "This is where you'd click Resume to continue", "Resume",
+                    on_click=lambda: None, timeout_ms=8000, on_close=self._clear_resume_toast)
         except Exception:
             _log_exc()
 

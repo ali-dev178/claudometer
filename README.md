@@ -159,7 +159,14 @@ Optional environment overrides:
 **Run modes:** `app.py bar` (Windows taskbar strip — default & recommended) · `app.py tray` (tray icon) · `app.py both` · `app.py` (auto per platform). Strip: left‑click = popover · **drag = move it anywhere on screen** (remembered) · right‑click = menu.
 
 > ### ▶ Try a demo
-> Want to see every feature without waiting to hit a real limit? Click **Settings → ▶ Try a demo** (or right‑click the strip → **Try a demo**, or run `app.py demo`). Your widget switches **in place** — one window, not a second — into a ~40‑second offline tour: green → amber → red → **limit reached**, firing the threshold alerts and the resume notification, all badged **DEMO**. Pick **◼ Exit demo** to snap back to your real usage. No network or credentials touched.
+> Want to see every feature without waiting to hit a real limit? Click **Settings → ▶ Try a demo** (or right‑click the strip → **Try a demo**, or run `app.py demo`). Your widget switches **in place** (one window, not a second) into a ~50‑second offline tour covering **every state** — all clearly badged **DEMO**:
+> - the color dot cycling **green → amber → red**
+> - **session** *and* **weekly** threshold alerts (80% / 90%)
+> - the **limit‑reached** and **rate‑limited** states
+> - resume‑on‑reset — both **Tier 1** (notify + one click) and **Tier 2** (auto‑resume countdown)
+> - the estimated **cost** line (click the strip to see it) and the graceful **offline** state
+>
+> Pick **◼ Exit demo** to snap back to your real usage. No network, no credentials, nothing real touched.
 
 **Auto‑start on login:** the Windows installer can set this up for you. Manual (from source) — **Windows:** add a shortcut to `pythonw.exe "…\app.py" bar` in `shell:startup`. **macOS:** add the standalone `Claudometer.app` to **System Settings → Login Items**, or use a LaunchAgent for a source install:
 
