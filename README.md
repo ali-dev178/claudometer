@@ -111,14 +111,14 @@ You need a **Claude Pro / Max / Team** subscription and to have **signed into Cl
 
 ### Option A — Standalone binary (no Python)
 Grab `Claudometer.exe` (Windows) or `Claudometer-macos.zip` (macOS) from
-[**Releases**](https://github.com/<your-username>/claudometer/releases) — unzip the
+[**Releases**](https://github.com/ali-dev178/claudometer/releases) — unzip the
 macOS build to get `Claudometer.app` — then run it. On Windows, drag the taskbar
 readout where you like (it remembers the spot); on macOS it appears as a menu-bar
 item. Add it to startup / login items to launch automatically.
 
 ### Option B — From source (Python 3.9+)
 ```bash
-git clone https://github.com/<your-username>/claudometer.git
+git clone https://github.com/ali-dev178/claudometer.git
 cd claudometer
 ```
 **Windows**
