@@ -3,7 +3,7 @@
 #   brew install --cask ali-dev178/claudometer/claudometer
 cask "claudometer" do
   version "1.0.0"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 "731161a5374ca1940d75374f6aa281031226c255ca0c6b9ea743c557639619cc"
 
   url "https://github.com/ali-dev178/claudometer/releases/download/v#{version}/Claudometer-macos.zip"
   name "Claudometer"
