@@ -1,12 +1,12 @@
 {
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Live Claude usage limits (session & weekly) on your Windows taskbar.",
   "homepage": "https://github.com/ali-dev178/claudometer",
   "license": "MIT",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/ali-dev178/claudometer/releases/download/v1.1.1/Claudometer.exe#/Claudometer.exe",
-      "hash": "06e46e5925f31c4e60c0793c503fcf58d9a5d5bbf8abc6426adf14c6517fc3af"
+      "url": "https://github.com/ali-dev178/claudometer/releases/download/v1.1.2/Claudometer.exe#/Claudometer.exe",
+      "hash": "778527c5e6bc7f55b6da65b095dd64800d676fb75d00a6d38a4e1b79e0ef8cb9"
     }
   },
   "bin": "Claudometer.exe",
