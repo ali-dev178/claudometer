@@ -490,9 +490,10 @@ class SettingsWindow:
 
     WIN_W = 366
 
-    def __init__(self, root, theme, cfg, on_apply, on_close=None):
+    def __init__(self, root, theme, cfg, on_apply, on_close=None, on_demo=None):
         self._on_apply = on_apply
         self._on_close = on_close
+        self._on_demo = on_demo
         self._cfg = dict(cfg)
         self._closed = False
         self._theme = theme
@@ -621,6 +622,10 @@ class SettingsWindow:
         tk.Button(self._fbar, text="Cancel", command=self.close, bg=field, fg=fg,
                   activebackground=field, activeforeground=fg, bd=0, relief="flat",
                   font=("Segoe UI", 10), padx=18, pady=6, cursor="hand2").pack(side="right", padx=(0, 10))
+        if self._on_demo:  # preview every feature in a safe, offline demo
+            tk.Button(self._fbar, text="▶  Try a demo", command=self._demo, bg=field, fg=T["accent"],
+                      activebackground=field, activeforeground=T["accent"], bd=0, relief="flat",
+                      font=("Segoe UI", 10), padx=14, pady=6, cursor="hand2").pack(side="left")
 
         # footer: version + a link to the project (releases / news / star)
         foot = tk.Frame(body, bg=bg)
@@ -753,6 +758,11 @@ class SettingsWindow:
             self.top.geometry(f"+{(sw - w) // 2}+{max(20, (sh - h) // 3)}")
         except Exception:
             pass
+
+    def _demo(self):
+        self.close()
+        if self._on_demo:
+            self._on_demo()
 
     def focus(self):
         self.top.lift()
@@ -1192,7 +1202,8 @@ class BarWidget:
         try:
             self._settings_win = SettingsWindow(
                 self.root, self._theme, self._current_cfg(),
-                on_apply=self._apply_settings, on_close=self._on_settings_closed)
+                on_apply=self._apply_settings, on_close=self._on_settings_closed,
+                on_demo=(None if self._demo else self._launch_demo))
         except Exception:
             _log_exc()
             self._settings_win = None

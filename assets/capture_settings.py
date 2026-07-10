@@ -56,7 +56,8 @@ def _grab(theme):
     root = tk.Tk()
     root.geometry("100x24+0+0")  # tiny visible master so the child stays mapped
     cfg = settings.load(); cfg["resume_auto"] = True  # advanced opens by default
-    win = widget_bar.SettingsWindow(root, theme, cfg, on_apply=lambda c: None)
+    win = widget_bar.SettingsWindow(root, theme, cfg, on_apply=lambda c: None,
+                                    on_demo=lambda: None)
     win.top.deiconify(); win.top.lift()
     for _ in range(30):
         win.top.update_idletasks(); win.top.update()
