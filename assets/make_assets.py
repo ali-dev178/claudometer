@@ -2,6 +2,13 @@
 
 Composites the REAL rendered widget (from render.py) onto mocked Windows and
 macOS desktops with soft drop shadows. Run:  py assets/make_assets.py
+
+This covers every rendered surface: the strip (+ severity/offline states), the
+popover (light/dark, per-model, cost), threshold alert toasts, resume toasts,
+the fullscreen overlay, the mac menu bar and the app icon. The one surface it
+can't draw is the native Settings window (real Tk widgets) — regenerate that
+with  py assets/capture_settings.py  (Windows, needs a display).
+Keep these in sync: whenever the UI changes, re-run both scripts.
 """
 
 import os
@@ -222,6 +229,87 @@ def resume_showcase():
     bg.convert("RGB").save(os.path.join(OUT, "resume.png"))
 
 
+def _toast_rgba(pct, title, subtitle, color, theme):
+    img = render.render_toast(pct, title, subtitle, color, theme)
+    w, h = img.size
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, w - 1, h - 1], radius=14, fill=255)
+    out = img.convert("RGBA")
+    out.putalpha(mask)
+    return out
+
+
+def alerts_showcase():
+    """Desktop threshold alerts (the toast you get when you cross 80% / 90%)."""
+    a = _toast_rgba(80, "Session usage at 80%", "1h 8m left", "amber", "light")
+    b = _toast_rgba(92, "Weekly usage at 92%", "resets Thu 10:59 AM", "red", "dark")
+    pad, gap = 40, 34
+    W = pad * 2 + a.width + gap + b.width
+    H = pad * 2 + max(a.height, b.height) + 26
+    bg = render._vgrad(W, H, "#eef1f6", "#dbe1ea").convert("RGBA")
+    place_card(bg, a, pad, pad, blur=20, alpha=55)
+    place_card(bg, b, pad + a.width + gap, pad, blur=20, alpha=55)
+    d = ImageDraw.Draw(bg)
+    f = render._font("sb", 12)
+    d.text((pad + a.width / 2, pad + a.height + 13), "Approaching (80%)",
+           font=f, fill="#6b7480", anchor="mm")
+    d.text((pad + a.width + gap + b.width / 2, pad + b.height + 13), "Critical (90%+)",
+           font=f, fill="#6b7480", anchor="mm")
+    bg.convert("RGB").save(os.path.join(OUT, "alerts.png"))
+
+
+def strip_states():
+    """The strip's color-coded severity plus the graceful offline state."""
+    now = datetime.now(timezone.utc)
+    states = [
+        ({"session_pct": 22, "session_color": "green", "weekly_pct": 6, "weekly_color": "green",
+          "session_resets_at": now + timedelta(hours=3, minutes=40)}, "Comfortable"),
+        ({"session_pct": 61, "session_color": "amber", "weekly_pct": 18, "weekly_color": "green",
+          "session_resets_at": now + timedelta(hours=1, minutes=22)}, "Getting close"),
+        ({"session_pct": 94, "session_color": "red", "weekly_pct": 42, "weekly_color": "amber",
+          "session_resets_at": now + timedelta(minutes=48)}, "Near the limit"),
+        ({"session": "offline — last known"}, "Offline / no data"),
+    ]
+    bgc = "#e8edf3"
+    strips = [(render.render_strip(disp, bgc, "light", scale=3), lbl) for disp, lbl in states]
+    pad, gap, labelw = 26, 22, 150
+    W = pad * 2 + labelw + max(s.width for s, _ in strips)
+    H = pad * 2 + sum(s.height for s, _ in strips) + gap * (len(strips) - 1)
+    bg = Image.new("RGB", (W, H), bgc)
+    d = ImageDraw.Draw(bg)
+    f = render._font("reg", 13)
+    y = pad
+    for s, lbl in strips:
+        bg.paste(s, (pad + labelw, y))
+        d.text((pad, y + s.height // 2), lbl, font=f, fill="#6b7480", anchor="lm")
+        y += s.height + gap
+    bg.save(os.path.join(OUT, "strip-states.png"))
+
+
+def cost_showcase():
+    """The popover with the opt-in estimated-cost line."""
+    now = datetime.now(timezone.utc)
+    disp = {
+        "plan": "Plan: Max (5x)",
+        "session_pct": 61, "session_color": "amber",
+        "session_resets_at": now + timedelta(minutes=82),
+        "weekly_pct": 18, "weekly_color": "green",
+        "weekly_resets_at": now + timedelta(days=3, hours=2),
+        "model_rows": [{"label": "Fable", "pct": 4, "color": "green"}],
+        "cost_tokens": 2_450_000, "cost_usd": 8.74,
+    }
+    pop = popover_rgba(disp, "light")
+    pad = 44
+    W, H = pop.width + pad * 2, pop.height + pad * 2 + 26
+    bg = render._vgrad(W, H, "#eef1f6", "#dbe1ea").convert("RGBA")
+    place_card(bg, pop, pad, pad, blur=22, alpha=55)
+    d = ImageDraw.Draw(bg)
+    f = render._font("sb", 12)
+    d.text((pad + pop.width / 2, pad + pop.height + 13), "Estimated cost today (opt-in)",
+           font=f, fill="#6b7480", anchor="mm")
+    bg.convert("RGB").save(os.path.join(OUT, "popover-cost.png"))
+
+
 def fullscreen_showcase():
     """The strip staying visible over a fullscreen movie (hide_on_fullscreen = false)."""
     W, H = 1200, 675
@@ -276,6 +364,9 @@ if __name__ == "__main__":
     hero_mac(disp)
     themes_side_by_side(disp)
     strip_closeup(disp)
+    strip_states()
+    alerts_showcase()
+    cost_showcase()
     resume_showcase()
     fullscreen_showcase()
     app_icon()

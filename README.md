@@ -35,7 +35,9 @@ Today, checking where you stand means **opening the `/usage` panel or the app an
 
 - **`Session 61%`** — how much of your current 5‑hour window is used, with a **live countdown** to reset (`1h 21m left`).
 - **`Weekly 18%`** — your 7‑day all‑models usage.
-- A **color‑coded status dot** (🟢 &lt;50% · 🟡 50–80% · 🔴 &gt;80%) so severity registers in a glance.
+- A **color‑coded status dot** (🟢 &lt;50% · 🟡 50–80% · 🔴 &gt;80%) so severity registers in a glance — and a graceful *offline* state when there's no data:
+
+<p align="center"><img src="assets/strip-states.png" alt="Color-coded severity and offline states" width="500"></p>
 
 **Click it** for a polished breakdown with per‑meter reset times and per‑model (e.g. Opus) usage:
 
@@ -63,6 +65,14 @@ Today, checking where you stand means **opening the `/usage` panel or the app an
 **macOS** — native menu‑bar item with a dropdown breakdown:
 
 <p align="center"><img src="assets/macos-menubar.png" alt="macOS menu bar" width="760"></p>
+
+**Threshold alerts** — a desktop toast the moment you cross a limit you set (default 80% and 90%), for both session and weekly:
+
+<p align="center"><img src="assets/alerts.png" alt="Threshold alert toasts" width="760"></p>
+
+**Estimated cost** *(opt‑in)* — turn on `show_cost` for a today's‑tokens and rough‑dollar line in the popover (a local estimate from your session logs — not a bill):
+
+<p align="center"><img src="assets/popover-cost.png" alt="Estimated cost line in the popover" width="430"></p>
 
 **Always‑visible mode** — set `hide_on_fullscreen = false` and your stats stay readable even over a fullscreen movie, game, or presentation:
 
