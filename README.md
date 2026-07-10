@@ -25,9 +25,14 @@
 
 Claude's Pro / Max / Team plans enforce a rolling **5‑hour session** limit and **weekly** limits. Use Claude Code heavily and it's easy to burn through them mid‑task — then get rate‑limited at the worst moment. Checking today means opening the `/usage` panel and *remembering* to look.
 
-**Claudometer keeps that number on‑screen all the time**, as clean floating text. It sits on your **taskbar** by default — sampling its color so it blends right in — but it's a free‑floating, always‑on‑top widget you can **drag anywhere**: the top of the screen, over a window, or onto a second monitor. It remembers where you put it.
+**Claudometer keeps that number on‑screen all the time**, as clean floating text that sits on your **taskbar** by default — sampling its color so it blends right in:
 
 <p align="center"><img src="assets/strip.png" alt="Floating usage strip" width="300"></p>
+
+> ### 🖱️ Put it anywhere
+> It's a **free‑floating, always‑on‑top** widget — not locked to the taskbar. Drag it to a screen edge, over a window, or onto a second monitor, and it **remembers the spot**.
+
+<p align="center"><img src="assets/anywhere.png" alt="Drag the widget anywhere on screen — not just the taskbar" width="780"></p>
 
 - **`Session 61%`** — your current 5‑hour window, with a live countdown to reset.
 - **`Weekly 18%`** — your 7‑day, all‑models usage.

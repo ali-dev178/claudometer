@@ -312,6 +312,98 @@ def cost_showcase():
     bg.convert("RGB").save(os.path.join(OUT, "popover-cost.png"))
 
 
+def _dashed(d, p1, p2, color, width, dash=15, gap=11):
+    x1, y1 = p1
+    x2, y2 = p2
+    dx, dy = x2 - x1, y2 - y1
+    dist = max(1.0, (dx * dx + dy * dy) ** 0.5)
+    steps = int(dist // (dash + gap))
+    for i in range(steps + 1):
+        a = (i * (dash + gap)) / dist
+        b = min((i * (dash + gap) + dash) / dist, 1.0)
+        d.line([x1 + dx * a, y1 + dy * a, x1 + dx * b, y1 + dy * b], fill=color, width=width)
+
+
+def _arrowhead(d, p1, p2, color, size=11):
+    x1, y1 = p1
+    x2, y2 = p2
+    dx, dy = x2 - x1, y2 - y1
+    dist = max(1.0, (dx * dx + dy * dy) ** 0.5)
+    ux, uy = dx / dist, dy / dist
+    px, py = -uy, ux
+    d.polygon([(x2, y2),
+               (x2 - ux * size + px * size * 0.6, y2 - uy * size + py * size * 0.6),
+               (x2 - ux * size - px * size * 0.6, y2 - uy * size - py * size * 0.6)], fill=color)
+
+
+def anywhere_showcase():
+    """The strip is a free-floating widget — draggable anywhere, not just the taskbar."""
+    W, H = 1200, 720
+    now = datetime.now(timezone.utc)
+    disp = {"session_pct": 61, "session_color": "amber",
+            "session_resets_at": now + timedelta(minutes=82),
+            "weekly_pct": 18, "weekly_color": "green"}
+    bg = render._vgrad(W, H, "#26406e", "#0e1626").convert("RGBA")
+    bg.alpha_composite(radial(W, H, int(W * 0.72), 120, 540, (96, 138, 210), 95))
+    bg.alpha_composite(radial(W, H, int(W * 0.20), int(H * 0.55), 440, (60, 80, 150), 60))
+    d = ImageDraw.Draw(bg)
+
+    # a faux app window, to show the strip floats over your content
+    ww, wh, wx, wy = 560, 340, 140, 210
+    win = Image.new("RGBA", (ww, wh), (0, 0, 0, 0))
+    wd = ImageDraw.Draw(win)
+    wd.rounded_rectangle([0, 0, ww - 1, wh - 1], radius=14, fill=(252, 253, 255, 250))
+    wd.rectangle([0, 24, ww - 1, 42], fill=(237, 240, 245, 255))
+    wd.rounded_rectangle([0, 0, ww - 1, 42], radius=14, fill=(237, 240, 245, 255))
+    for i, c in enumerate(("#ff5f57", "#febc2e", "#28c840")):
+        wd.ellipse([16 + i * 20, 15, 28 + i * 20, 27], fill=c)
+    for i in range(5):
+        wd.rounded_rectangle([24, 66 + i * 48, ww - 24, 66 + i * 48 + 24], radius=6, fill=(233, 237, 242, 255))
+    wsh, wpad = drop_shadow((ww, wh), 14, 30, 65)
+    bg.alpha_composite(wsh, (wx - wpad, wy - wpad + 12))
+    bg.alpha_composite(win, (wx, wy))
+
+    # taskbar (for contrast — the strip is NOT on it here)
+    tb = 52
+    d.rectangle([0, H - tb, W, H], fill="#f2f4f7")
+    icons = ["#3b6fd6", "#5c636e", "#e5a100", "#2ea043", "#d97757", "#8250df"]
+    x0 = W // 2 - (len(icons) * 44) // 2
+    iy = H - tb + (tb - 26) // 2
+    for i, c in enumerate(icons):
+        d.rounded_rectangle([x0 + i * 44, iy, x0 + i * 44 + 26, iy + 26], radius=6, fill=c)
+    d.text((W - 18, H - tb + 16), "10:24 AM", font=render._font("sb", 12), fill="#1f242b", anchor="rm")
+
+    # faint "ghost" of the strip on the taskbar (where it usually lives)
+    ghost = render.render_strip(disp, "#f2f4f7", "light", scale=3).convert("RGBA")
+    ghost.putalpha(ghost.split()[3].point(lambda p: int(p * 0.32)))
+    gx, gy = 26, H - tb + (tb - ghost.height) // 2
+    bg.alpha_composite(ghost, (gx, gy))
+
+    # the strip floating up on the desktop, clearly OFF the taskbar
+    strip = render.render_strip(disp, "#243a63", "dark", scale=3).convert("RGBA")
+    sx, sy = W - strip.width - 70, 96
+    ssh, spad = drop_shadow(strip.size, 8, 22, 95)
+    bg.alpha_composite(ssh, (sx - spad, sy - spad + 8))
+    bg.alpha_composite(strip, (sx, sy))
+
+    # dashed "drag" arrow ghost -> floating, on an overlay so alpha blends
+    ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    od = ImageDraw.Draw(ov)
+    p1 = (gx + ghost.width + 22, gy + ghost.height // 2)
+    p2 = (sx - 18, sy + strip.height // 2 + 6)
+    _dashed(od, p1, p2, (255, 255, 255, 200), 3)
+    _arrowhead(od, p1, p2, (255, 255, 255, 235), 12)
+    lbl = "drag it anywhere"
+    f = render._font("sb", 15)
+    mx, my = (p1[0] + p2[0]) // 2, (p1[1] + p2[1]) // 2 - 4
+    tw = od.textlength(lbl, font=f)
+    od.rounded_rectangle([mx - tw / 2 - 11, my - 14, mx + tw / 2 + 11, my + 14], radius=14, fill=(0, 0, 0, 150))
+    od.text((mx, my), lbl, font=f, fill=(240, 240, 240), anchor="mm")
+    bg.alpha_composite(ov)
+
+    bg.convert("RGB").save(os.path.join(OUT, "anywhere.png"))
+
+
 def fullscreen_showcase():
     """The strip staying visible over a fullscreen movie (hide_on_fullscreen = false)."""
     W, H = 1200, 675
@@ -367,6 +459,7 @@ if __name__ == "__main__":
     themes_side_by_side(disp)
     strip_closeup(disp)
     strip_states()
+    anywhere_showcase()
     alerts_showcase()
     cost_showcase()
     resume_showcase()
