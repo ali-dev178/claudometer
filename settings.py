@@ -38,12 +38,18 @@ def config_path() -> Path:
 
 
 def _strip_comment(v):
-    """Drop an inline # comment, respecting quotes (so "#5b61ea" survives)."""
-    out, quote = [], None
+    """Drop an inline # comment, respecting quotes (so "#5b61ea" survives).
+    A backslash-escaped quote inside a "…" string does not end the string."""
+    out, quote, esc = [], None, False
     for ch in v:
-        if quote:
+        if esc:
             out.append(ch)
-            if ch == quote:
+            esc = False
+        elif quote:
+            out.append(ch)
+            if ch == "\\" and quote == '"':
+                esc = True
+            elif ch == quote:
                 quote = None
         elif ch in "\"'":
             quote = ch
@@ -56,12 +62,17 @@ def _strip_comment(v):
 
 
 def _split_top(s):
-    """Split on top-level commas, respecting quotes."""
-    parts, buf, quote = [], [], None
+    """Split on top-level commas, respecting quotes and backslash escapes."""
+    parts, buf, quote, esc = [], [], None, False
     for ch in s:
-        if quote:
+        if esc:
             buf.append(ch)
-            if ch == quote:
+            esc = False
+        elif quote:
+            buf.append(ch)
+            if ch == "\\" and quote == '"':
+                esc = True
+            elif ch == quote:
                 quote = None
         elif ch in "\"'":
             quote = ch
@@ -76,13 +87,28 @@ def _split_top(s):
     return parts
 
 
+def _unescape(s):
+    """Reverse the escaping _toml_str emits (\\\\ -> \\, \\" -> ")."""
+    out, i, n = [], 0, len(s)
+    while i < n:
+        if s[i] == "\\" and i + 1 < n:
+            out.append(s[i + 1])
+            i += 2
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
+
+
 def _mini_val(v):
     v = v.strip()
     if v.startswith("[") and v.endswith("]"):
         inner = v[1:-1].strip()
         return [_mini_val(x) for x in _split_top(inner) if x.strip()] if inner else []
     if len(v) >= 2 and v[0] in "\"'" and v[-1] == v[0]:
-        return v[1:-1]
+        inner = v[1:-1]
+        # double-quoted strings carry escapes; single-quoted are literal (TOML)
+        return _unescape(inner) if v[0] == '"' else inner
     low = v.lower()
     if low in ("true", "false"):
         return low == "true"
@@ -168,3 +194,94 @@ def load() -> dict:
     except (TypeError, ValueError):
         cfg["resume_max_turns"] = DEFAULTS["resume_max_turns"]
     return cfg
+
+
+# --------------------------------------------------------------------------- #
+# Writing the config back (used by the in-app settings panel)
+# --------------------------------------------------------------------------- #
+def _toml_str(s) -> str:
+    return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _toml_val(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, list):
+        return "[" + ", ".join(_toml_val(x) for x in v) + "]"
+    return _toml_str(v)
+
+
+def to_toml(cfg: dict) -> str:
+    """Serialize a config dict to commented TOML matching the example file."""
+    L = [
+        "# Claudometer configuration — managed by the in-app settings panel.",
+        "# You can still hand-edit this file; changes apply on restart (some live).",
+        "",
+        "# Seconds between usage polls (clamped 60-300).",
+        f"poll = {_toml_val(cfg['poll'])}",
+        "",
+        '# "auto" follows your taskbar; force with "light" or "dark".',
+        f"theme = {_toml_val(cfg['theme'])}",
+        "",
+        '# Meters shown on the strip: any of "session", "weekly".',
+        f"metrics = {_toml_val(cfg['metrics'])}",
+        "",
+        "# Hide over fullscreen apps; false = always visible.",
+        f"hide_on_fullscreen = {_toml_val(cfg['hide_on_fullscreen'])}",
+        "",
+        "# Desktop toast alerts when you cross a usage threshold.",
+        f"alerts = {_toml_val(cfg['alerts'])}",
+        f"alert_thresholds = {_toml_val(cfg['alert_thresholds'])}",
+        "",
+        "# Estimated token/cost line in the popover.",
+        f"show_cost = {_toml_val(cfg['show_cost'])}",
+        "",
+        "# Accent color override (hex).",
+    ]
+    L.append(f"accent = {_toml_val(cfg['accent'])}" if cfg.get("accent") else '# accent = "#d97757"')
+    L += [
+        "",
+        "# --- Resume when your 5-hour session limit resets ---",
+        f"resume_notify = {_toml_val(cfg['resume_notify'])}",
+        f"resume_auto = {_toml_val(cfg['resume_auto'])}   # Tier 2: unattended (risky)",
+        f"resume_prompt = {_toml_val(cfg['resume_prompt'])}",
+        f"resume_max_turns = {_toml_val(cfg['resume_max_turns'])}",
+        f"resume_skip_permissions = {_toml_val(cfg['resume_skip_permissions'])}",
+    ]
+    extras = [k for k in cfg if k not in DEFAULTS]
+    if extras:
+        L.append("")
+        for k in extras:
+            L.append(f"{k} = {_toml_val(cfg[k])}")
+    L.append("")
+    return "\n".join(L)
+
+
+def save(cfg: dict) -> None:
+    """Atomically write the config to disk (temp file + os.replace)."""
+    p = config_path()
+    merged = dict(cfg)
+    try:  # keep any keys we don't manage that the user added by hand
+        if p.exists():
+            for k, v in _parse(p.read_text(encoding="utf-8")).items():
+                if k not in DEFAULTS and k not in merged:
+                    merged[k] = v
+    except Exception:
+        pass
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.parent / ("%s.%d.tmp" % (p.name, os.getpid()))  # unique per process
+    tmp.write_text(to_toml(merged), encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)  # best-effort; POSIX-only, a no-op on Windows
+    except OSError:
+        pass
+    try:
+        os.replace(str(tmp), str(p))
+    except OSError:
+        try:
+            os.remove(str(tmp))  # don't leave the temp behind on failure
+        except OSError:
+            pass
+        raise

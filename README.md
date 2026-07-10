@@ -50,7 +50,7 @@ Today, checking where you stand means **opening the `/usage` panel or the app an
 - 🔔 **Warns you in time** — optional desktop alerts when you cross 80% / 90%.
 - ⏭️ **Picks up where you left off** — when your session limit resets, one click resumes the interrupted work (or auto‑resume, if you opt in).
 - 🎨 **Looks the part** — supersampled rendering, light/dark aware, adapts to your taskbar.
-- ⚙️ **Yours to tune** — an optional config file for interval, theme, alerts, accent, and an estimated‑cost view.
+- ⚙️ **Yours to tune** — a built‑in **settings panel** (no file editing) for interval, theme, meters, alerts, accent, cost view, fullscreen behavior and resume.
 
 ---
 
@@ -161,11 +161,25 @@ it to **System Settings → General → Login Items** instead.)
 
 ## Configuration
 
-> The config file, alerts, cost view, resume, theme and accent apply to the
-> **Windows taskbar strip** (`bar` mode). The macOS menu bar and Linux tray show
-> usage but ignore these options (see [Platform support](#platform-support)).
+Two ways to set things up — use whichever you prefer:
 
-Everything works with no config. To customise, copy
+### ⚙ In‑app settings panel (recommended)
+
+Click **⚙ Settings** in the popover (or right‑click the strip → *Settings…*). Adjust
+theme, meters, accent, poll interval, alerts, the cost view, fullscreen behavior and
+resume — changes apply **immediately** (no restart) and are written to
+`~/.claudometer.toml` for you, so you never have to touch the file.
+
+<p align="center"><img src="assets/settings.png" alt="In-app settings panel (light & dark)" width="820"></p>
+
+> **macOS:** the menu‑bar app is a lighter adapter — its **Settings** submenu exposes
+> what it actually honors (which meters, poll interval) plus **Open config file…** for
+> the rest. Alerts, cost, resume, accent and theme currently apply to the **Windows**
+> strip only (see [Platform support](#platform-support)).
+
+### ✎ Or edit the file by hand
+
+Everything works with no config. To customise manually, copy
 [`claudometer.example.toml`](claudometer.example.toml) to `~/.claudometer.toml`:
 
 ```toml

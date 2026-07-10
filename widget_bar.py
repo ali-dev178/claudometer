@@ -16,6 +16,7 @@ import threading
 import time
 import traceback
 import tkinter as tk
+from tkinter import messagebox
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -131,11 +132,12 @@ def _log_exc(_exc=None):
 # --------------------------------------------------------------------------- #
 class Popover:
     def __init__(self, root, theme, get_disp, anchor_x, anchor_top,
-                 on_refresh, on_quit, on_close):
+                 on_refresh, on_quit, on_settings, on_close):
         self.theme = theme
         self.get_disp = get_disp
         self.on_refresh = on_refresh
         self.on_quit = on_quit
+        self.on_settings = on_settings
         self.on_close = on_close
         self._closed = False
         self._after = None
@@ -202,6 +204,10 @@ class Popover:
                     self.on_refresh()
                 elif name == "quit":
                     self.on_quit()
+                elif name == "settings":
+                    self.close()
+                    if self.on_settings:
+                        self.on_settings()
                 return
 
     def _tick(self):
@@ -363,6 +369,288 @@ class ResumeToast:
 
 
 # --------------------------------------------------------------------------- #
+# Settings panel (native, theme-matched) — writes the config + applies live
+# --------------------------------------------------------------------------- #
+class SettingsWindow:
+    """A themed native settings window opened from the popover gear. It writes
+    ~/.claudometer.toml via settings.save() and hands the new config to
+    on_apply() so the running widget updates live (no restart needed)."""
+
+    def __init__(self, root, theme, cfg, on_apply, on_close=None):
+        self._on_apply = on_apply
+        self._on_close = on_close
+        self._cfg = dict(cfg)
+        self._closed = False
+        T = render.THEMES.get(theme, render.THEMES["light"])
+        self.T = T
+        bg, fg, dim, field = T["panel_bot"], T["neutral"], T["dim"], T["track"]
+
+        self.top = tk.Toplevel(root)
+        self.top.title("Claudometer — Settings")
+        self.top.configure(bg=bg)
+        self.top.resizable(False, False)
+        self.top.protocol("WM_DELETE_WINDOW", self.close)
+        self.top.bind("<Escape>", lambda e: self.close())
+
+        m = cfg.get("metrics") or ["session", "weekly"]
+        thr = cfg.get("alert_thresholds") or [80, 90]
+        self.v_theme = tk.StringVar(value=cfg.get("theme", "auto"))
+        self.v_session = tk.BooleanVar(value="session" in m)
+        self.v_weekly = tk.BooleanVar(value="weekly" in m)
+        self.v_accent = tk.StringVar(value=cfg.get("accent") or "")
+        self.v_poll = tk.IntVar(value=cfg.get("poll", 90))
+        self.v_alerts = tk.BooleanVar(value=cfg.get("alerts", True))
+        self.v_t1 = tk.IntVar(value=thr[0] if len(thr) > 0 else 80)
+        self.v_t2 = tk.IntVar(value=thr[1] if len(thr) > 1 else 90)
+        self.v_cost = tk.BooleanVar(value=cfg.get("show_cost", False))
+        self.v_fs = tk.BooleanVar(value=cfg.get("hide_on_fullscreen", True))
+        self.v_notify = tk.BooleanVar(value=cfg.get("resume_notify", True))
+        self.v_auto = tk.BooleanVar(value=cfg.get("resume_auto", False))
+        self.v_skip = tk.BooleanVar(value=cfg.get("resume_skip_permissions", False))
+        self.v_prompt = tk.StringVar(value=cfg.get("resume_prompt", ""))
+        self.v_maxturns = tk.IntVar(value=cfg.get("resume_max_turns", 30))
+
+        pad = {"padx": 16}
+
+        def section(title):
+            tk.Label(self.top, text=title.upper(), bg=bg, fg=dim,
+                     font=("Segoe UI Semibold", 8)).pack(anchor="w", pady=(12, 3), **pad)
+
+        def row():
+            f = tk.Frame(self.top, bg=bg)
+            f.pack(fill="x", **pad)
+            return f
+
+        def check(parent, text, var, cmd=None):
+            return tk.Checkbutton(parent, text=text, variable=var, bg=bg, fg=fg,
+                                  selectcolor=field, activebackground=bg, activeforeground=fg,
+                                  highlightthickness=0, bd=0, anchor="w", command=cmd,
+                                  font=("Segoe UI", 9))
+
+        def label(parent, text):
+            return tk.Label(parent, text=text, bg=bg, fg=fg, font=("Segoe UI", 9))
+
+        tk.Label(self.top, text="Settings", bg=bg, fg=fg,
+                 font=("Segoe UI Semibold", 14)).pack(anchor="w", pady=(14, 1), **pad)
+        tk.Label(self.top, text="Applies immediately · saved to ~/.claudometer.toml",
+                 bg=bg, fg=dim, font=("Segoe UI", 8)).pack(anchor="w", pady=(0, 2), **pad)
+
+        # ----- Display -----
+        section("Display")
+        r = row()
+        label(r, "Theme").pack(side="left")
+        om = tk.OptionMenu(r, self.v_theme, "auto", "light", "dark")
+        om.configure(bg=field, fg=fg, activebackground=field, activeforeground=fg,
+                     highlightthickness=0, bd=0, font=("Segoe UI", 9), width=8)
+        om["menu"].configure(bg=field, fg=fg)
+        om.pack(side="right")
+
+        r = row()
+        label(r, "Meters").pack(side="left")
+        check(r, "Weekly", self.v_weekly).pack(side="right")
+        check(r, "Session", self.v_session).pack(side="right")
+
+        r = row()
+        label(r, "Accent (hex)").pack(side="left")
+        self._swatch = tk.Label(r, text="   ", bg=(cfg.get("accent") or T["accent"]))
+        self._swatch.pack(side="right", padx=(6, 0))
+        tk.Entry(r, textvariable=self.v_accent, width=10, bg=field, fg=fg,
+                 insertbackground=fg, bd=1, relief="flat", font=("Consolas", 9)).pack(side="right")
+        self.v_accent.trace_add("write", lambda *a: self._update_swatch())
+
+        r = row()
+        label(r, "Poll interval").pack(side="left")
+        self._poll_lbl = tk.Label(r, text=f"{self.v_poll.get()}s", bg=bg, fg=dim,
+                                  width=5, anchor="e", font=("Segoe UI", 9))
+        self._poll_lbl.pack(side="right")
+        tk.Scale(r, from_=60, to=300, orient="horizontal", variable=self.v_poll,
+                 bg=bg, fg=fg, troughcolor=field, highlightthickness=0, bd=0, showvalue=False,
+                 length=150, command=lambda v: self._poll_lbl.configure(text=f"{int(float(v))}s")
+                 ).pack(side="right")
+
+        # ----- Alerts -----
+        section("Alerts")
+        check(self.top, "Desktop alert when crossing a threshold", self.v_alerts).pack(anchor="w", **pad)
+        r = row()
+        label(r, "Alert at").pack(side="left")
+        tk.Label(r, text="%", bg=bg, fg=dim, font=("Segoe UI", 9)).pack(side="right")
+        tk.Spinbox(r, from_=1, to=100, width=4, textvariable=self.v_t2, bg=field, fg=fg,
+                   insertbackground=fg, bd=1, relief="flat", justify="center").pack(side="right", padx=4)
+        tk.Label(r, text="and", bg=bg, fg=dim, font=("Segoe UI", 9)).pack(side="right", padx=2)
+        tk.Spinbox(r, from_=1, to=100, width=4, textvariable=self.v_t1, bg=field, fg=fg,
+                   insertbackground=fg, bd=1, relief="flat", justify="center").pack(side="right", padx=4)
+        check(self.top, "Show estimated cost in the popover", self.v_cost).pack(anchor="w", **pad)
+        check(self.top, "Hide over fullscreen apps", self.v_fs).pack(anchor="w", **pad)
+
+        # ----- Resume -----
+        section("Resume on reset")
+        check(self.top, "Notify + one-click resume when the session resets",
+              self.v_notify).pack(anchor="w", **pad)
+        self._adv_open = False
+        self._adv_btn = tk.Label(self.top, text="▸  Advanced — auto-resume ⚠",
+                                 bg=bg, fg=T["accent"], font=("Segoe UI", 9), cursor="hand2")
+        self._adv_btn.pack(anchor="w", pady=(6, 0), **pad)
+        self._adv_btn.bind("<Button-1>", lambda e: self._toggle_advanced())
+        self._adv = tk.Frame(self.top, bg=bg)
+        check(self._adv, "Auto-resume unattended (risky)", self.v_auto,
+              cmd=self._confirm_auto).pack(anchor="w", pady=(4, 0))
+        check(self._adv, "Skip permission prompts (dangerous)", self.v_skip,
+              cmd=self._confirm_skip).pack(anchor="w")
+        rp = tk.Frame(self._adv, bg=bg)
+        rp.pack(fill="x", pady=(4, 0))
+        tk.Label(rp, text="Prompt", bg=bg, fg=fg, font=("Segoe UI", 9)).pack(side="left")
+        tk.Entry(rp, textvariable=self.v_prompt, bg=field, fg=fg, insertbackground=fg,
+                 bd=1, relief="flat", font=("Segoe UI", 9)).pack(side="right", fill="x", expand=True, padx=(8, 0))
+        rm = tk.Frame(self._adv, bg=bg)
+        rm.pack(fill="x", pady=(4, 0))
+        tk.Label(rm, text="Max turns", bg=bg, fg=fg, font=("Segoe UI", 9)).pack(side="left")
+        tk.Spinbox(rm, from_=1, to=200, width=5, textvariable=self.v_maxturns, bg=field, fg=fg,
+                   insertbackground=fg, bd=1, relief="flat", justify="center").pack(side="right")
+
+        self._fbar = tk.Frame(self.top, bg=bg)
+        self._fbar.pack(fill="x", pady=14, **pad)
+        tk.Button(self._fbar, text="Save", command=self._save, bg=T["accent"], fg="#ffffff",
+                  activebackground=T["accent"], activeforeground="#ffffff", bd=0, relief="flat",
+                  font=("Segoe UI Semibold", 9), padx=18, pady=4, cursor="hand2").pack(side="right")
+        tk.Button(self._fbar, text="Cancel", command=self.close, bg=field, fg=fg,
+                  activebackground=field, activeforeground=fg, bd=0, relief="flat",
+                  font=("Segoe UI", 9), padx=14, pady=4, cursor="hand2").pack(side="right", padx=(0, 8))
+
+        if cfg.get("resume_auto") or cfg.get("resume_skip_permissions"):
+            self._toggle_advanced()
+        self._center(root)
+        self.top.transient(root)
+        self.top.lift()
+        self.top.focus_force()
+
+    def _update_swatch(self):
+        import re
+        v = self.v_accent.get().strip()
+        # only preview what _save() will accept (6-digit hex); else show default
+        color = v if re.fullmatch(r"#[0-9a-fA-F]{6}", v) else self.T["accent"]
+        try:
+            self._swatch.configure(bg=color)
+        except tk.TclError:
+            pass
+
+    def _toggle_advanced(self):
+        self._adv_open = not self._adv_open
+        if self._adv_open:
+            self._adv.pack(fill="x", padx=16, before=self._fbar)
+            self._adv_btn.configure(text="▾  Advanced — auto-resume ⚠")
+        else:
+            self._adv.pack_forget()
+            self._adv_btn.configure(text="▸  Advanced — auto-resume ⚠")
+        self.top.update_idletasks()
+        self.top.geometry("")
+
+    def _confirm_auto(self):
+        if self.v_auto.get():
+            ok = messagebox.askyesno(
+                "Enable unattended auto-resume?",
+                "Auto-resume runs Claude Code with NOBODY watching when your session "
+                "resets — it can make changes on its own.\n\nEnable it?",
+                parent=self.top, icon="warning")
+            if not ok:
+                self.v_auto.set(False)
+        if not self.v_auto.get():
+            self.v_skip.set(False)
+
+    def _confirm_skip(self):
+        if not self.v_skip.get():
+            return
+        if not self.v_auto.get():
+            messagebox.showinfo("Auto-resume required",
+                                "Turn on auto-resume first.", parent=self.top)
+            self.v_skip.set(False)
+            return
+        ok = messagebox.askyesno(
+            "Skip all permission prompts?",
+            "This runs auto-resume with --dangerously-skip-permissions: Claude can "
+            "edit files and run commands with NO approval.\n\nAre you sure?",
+            parent=self.top, icon="warning")
+        if not ok:
+            self.v_skip.set(False)
+
+    def _save(self):
+        import re
+        acc = self.v_accent.get().strip()
+        if acc and not re.fullmatch(r"#[0-9a-fA-F]{6}", acc):
+            messagebox.showerror("Invalid accent",
+                                 "Accent must be a hex color like #d97757 (or blank).",
+                                 parent=self.top)
+            return
+        metrics = [name for name, var in (("session", self.v_session), ("weekly", self.v_weekly))
+                   if var.get()]
+        if not metrics:
+            messagebox.showerror("Pick a meter",
+                                 "Choose at least one of Session / Weekly.", parent=self.top)
+            return
+        try:
+            t1, t2 = int(self.v_t1.get()), int(self.v_t2.get())
+        except Exception:
+            t1, t2 = 80, 90
+        thr = sorted({max(1, min(100, t)) for t in (t1, t2)})
+        try:
+            poll = max(60, min(300, int(self.v_poll.get())))
+        except Exception:
+            poll = 90
+        try:
+            maxturns = max(1, min(200, int(self.v_maxturns.get())))
+        except Exception:
+            maxturns = 30
+        cfg = dict(self._cfg)
+        cfg.update({
+            "poll": poll,
+            "theme": self.v_theme.get() if self.v_theme.get() in ("auto", "light", "dark") else "auto",
+            "metrics": metrics,
+            "accent": acc or None,
+            "alerts": bool(self.v_alerts.get()),
+            "alert_thresholds": thr,
+            "show_cost": bool(self.v_cost.get()),
+            "hide_on_fullscreen": bool(self.v_fs.get()),
+            "resume_notify": bool(self.v_notify.get()),
+            "resume_auto": bool(self.v_auto.get()),
+            "resume_skip_permissions": bool(self.v_skip.get() and self.v_auto.get()),
+            "resume_prompt": self.v_prompt.get().strip() or self._cfg.get("resume_prompt")
+                             or "Continue where you left off.",
+            "resume_max_turns": maxturns,
+        })
+        try:
+            self._on_apply(cfg)
+        except Exception:
+            _log_exc()
+        self.close()
+
+    def _center(self, root):
+        self.top.update_idletasks()
+        w, h = self.top.winfo_width(), self.top.winfo_height()
+        try:
+            sw, sh = _screen_size()
+            self.top.geometry(f"+{(sw - w) // 2}+{max(20, (sh - h) // 3)}")
+        except Exception:
+            pass
+
+    def focus(self):
+        self.top.lift()
+        self.top.focus_force()
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.top.destroy()
+        except Exception:
+            pass
+        if self._on_close:
+            try:
+                self._on_close()
+            except Exception:
+                pass
+
+
+# --------------------------------------------------------------------------- #
 # Taskbar strip (image-based)
 # --------------------------------------------------------------------------- #
 class BarWidget:
@@ -383,9 +671,12 @@ class BarWidget:
         self._thresholds = cfg["alert_thresholds"]
         self._show_cost = cfg["show_cost"]
         self._hide_on_fullscreen = cfg["hide_on_fullscreen"]
+        self._orig_accents = {k: render.THEMES[k]["accent"] for k in render.THEMES}
+        self._accent = cfg["accent"]
         if cfg["accent"]:
             for _t in render.THEMES.values():
                 _t["accent"] = cfg["accent"]
+        self._settings_win = None
         self._alerted = {"session": set(), "weekly": set()}
         self._toast = None
         self._first_alert = {"session": True, "weekly": True}
@@ -515,7 +806,7 @@ class BarWidget:
         self._popover = Popover(
             self.root, self._theme, self._get_disp,
             self.root.winfo_x(), self.root.winfo_y(),
-            self._refresh_now, self._quit, self._on_popover_closed,
+            self._refresh_now, self._quit, self._open_settings, self._on_popover_closed,
         )
 
     def _on_popover_closed(self):
@@ -663,6 +954,7 @@ class BarWidget:
     def _popup_menu(self, e):
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="Details…", command=self._toggle_popover)
+        menu.add_command(label="Settings…", command=self._open_settings)
         menu.add_command(label="Refresh now", command=self._refresh_now)
         menu.add_separator()
         menu.add_command(label="Quit", command=self._quit)
@@ -677,6 +969,97 @@ class BarWidget:
     def _quit(self):
         self._save_pos()
         self.root.destroy()
+
+    # -- settings --------------------------------------------------------- #
+    def _open_settings(self):
+        if self._settings_win is not None:
+            try:
+                self._settings_win.focus()
+                return
+            except Exception:
+                self._settings_win = None
+        try:
+            self._settings_win = SettingsWindow(
+                self.root, self._theme, self._current_cfg(),
+                on_apply=self._apply_settings, on_close=self._on_settings_closed)
+        except Exception:
+            _log_exc()
+            self._settings_win = None
+
+    def _on_settings_closed(self):
+        self._settings_win = None
+
+    def _current_cfg(self):
+        return {
+            "poll": self._poll,
+            "theme": self._forced_theme or "auto",
+            "metrics": list(self._metrics),
+            "hide_on_fullscreen": self._hide_on_fullscreen,
+            "alerts": self._alerts_on,
+            "alert_thresholds": list(self._thresholds),
+            "show_cost": self._show_cost,
+            "accent": self._accent,
+            "resume_notify": self._resume_notify,
+            "resume_auto": self._resume_auto,
+            "resume_prompt": self._resume_prompt,
+            "resume_skip_permissions": self._resume_skip_perms,
+            "resume_max_turns": self._resume_max_turns,
+        }
+
+    def _apply_settings(self, cfg):
+        """Apply new settings live (no restart) and persist them to disk."""
+        alerts_changed = (self._alerts_on != cfg["alerts"]
+                          or self._thresholds != cfg["alert_thresholds"])
+        auto_was_on = self._resume_auto
+        self._poll = cfg["poll"]
+        self._metrics = tuple(cfg["metrics"])
+        self._alerts_on = cfg["alerts"]
+        self._thresholds = cfg["alert_thresholds"]
+        self._show_cost = cfg["show_cost"]
+        self._hide_on_fullscreen = cfg["hide_on_fullscreen"]
+        self._resume_notify = cfg["resume_notify"]
+        self._resume_auto = cfg["resume_auto"]
+        self._resume_prompt = cfg["resume_prompt"]
+        self._resume_skip_perms = cfg["resume_skip_permissions"]
+        self._resume_max_turns = cfg["resume_max_turns"]
+        # accent: apply, or restore the theme's original when cleared
+        self._accent = cfg["accent"]
+        for k in render.THEMES:
+            render.THEMES[k]["accent"] = cfg["accent"] or self._orig_accents[k]
+        # theme: live. Clearing _bg_hex stops the next taskbar sample from
+        # early-returning without recomputing _theme (needed for forced -> auto).
+        self._forced_theme = cfg["theme"] if cfg["theme"] in ("light", "dark") else None
+        if self._forced_theme:
+            self._theme = self._forced_theme
+        self._bg_hex = None
+        self._bg_ticks = 3   # re-sample the taskbar on the next tick
+        self._sig = None     # force a strip re-render on the next tick
+        # Only reseed alert state when the alert config actually changed, so a
+        # crossing landing on the poll after an unrelated save isn't swallowed.
+        if alerts_changed:
+            self._alerted = {"session": set(), "weekly": set()}
+            self._first_alert = {"session": True, "weekly": True}
+        # If unattended auto-resume was just turned off, stand down any live
+        # countdown / pending retry so a just-disabled run can't still fire.
+        if auto_was_on and not self._resume_auto:
+            if self._resume_toast is not None:
+                try:
+                    self._resume_toast.close()
+                except Exception:
+                    pass
+                self._resume_toast = None
+            if self._resume_retry_after is not None:
+                try:
+                    self.root.after_cancel(self._resume_retry_after)
+                except Exception:
+                    pass
+                self._resume_retry_after = None
+            self._resume_state = "idle"
+        try:
+            settings.save(cfg)
+        except Exception:
+            _log_exc()
+        self._wake.set()  # nudge the poll thread so poll/cost apply immediately
 
     # -- drawing ---------------------------------------------------------- #
     def _strip_sig(self, disp):

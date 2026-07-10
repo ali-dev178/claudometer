@@ -1,7 +1,9 @@
 # Claudometer configuration — OPTIONAL.
+# Tip: the in-app Settings panel (⚙ in the popover) edits all of this for you —
+# you rarely need to touch this file by hand.
 # Copy to  ~/.claudometer.toml  (or set CLAUDOMETER_CONFIG=/path/to/file).
-# Everything has a sensible default; delete any line to use it. Changes apply
-# on restart.
+# Everything has a sensible default; delete any line to use it. Hand-edits apply
+# on restart; changes made in the settings panel apply immediately.
 
 # Seconds between usage polls (clamped to 60–300).
 poll = 90

@@ -151,6 +151,17 @@ def _spark(d, cx, cy, s, color):
               fill=color)
 
 
+def _gear(d, cx, cy, r, color, w):
+    """A small settings gear icon (ring + teeth + hub)."""
+    dirs = [(1, 0), (0.707, 0.707), (0, 1), (-0.707, 0.707),
+            (-1, 0), (-0.707, -0.707), (0, -1), (0.707, -0.707)]
+    for dx, dy in dirs:
+        d.line([cx + dx * r * 0.72, cy + dy * r * 0.72,
+                cx + dx * r * 1.28, cy + dy * r * 1.28], fill=color, width=w)
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=color, width=w)
+    d.ellipse([cx - r * 0.34, cy - r * 0.34, cx + r * 0.34, cy + r * 0.34], fill=color)
+
+
 def _rrbar(d, x1, y1, x2, y2, pct, color, track):
     r = (y2 - y1) / 2
     d.rounded_rectangle([x1, y1, x2, y2], radius=r, fill=track)
@@ -353,9 +364,18 @@ def render_popover(disp, theme, scale=3):
     rx2 = qx1 - 18 * S
     rx1 = rx2 - ref_w
     d.text((rx2, fy), "Refresh", font=f_foot, fill=T["accent"], anchor="rm")
+    # Settings (gear + label), left of Refresh
+    set_w = d.textlength("Settings", font=f_foot)
+    sx2 = rx1 - 18 * S
+    sx1 = sx2 - set_w
+    d.text((sx2, fy), "Settings", font=f_foot, fill=T["dim"], anchor="rm")
+    gr = 5 * S
+    gx = sx1 - 7 * S - gr
+    _gear(d, gx, fy, gr, T["dim"], max(1, int(1.4 * S)))
 
     out = base.resize((W, H), Image.LANCZOS)
     hits = {
+        "settings": ((gx - gr * 1.3) / S, (fy - 12 * S) / S, sx2 / S, (fy + 12 * S) / S),
         "refresh": (rx1 / S, (fy - 12 * S) / S, rx2 / S, (fy + 12 * S) / S),
         "quit": (qx1 / S, (fy - 12 * S) / S, qx2 / S, (fy + 12 * S) / S),
     }
