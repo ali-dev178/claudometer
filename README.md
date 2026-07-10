@@ -159,7 +159,7 @@ Optional environment overrides:
 **Run modes:** `app.py bar` (Windows taskbar strip — default & recommended) · `app.py tray` (tray icon) · `app.py both` · `app.py` (auto per platform). Strip: left‑click = popover · **drag = move it anywhere on screen** (remembered) · right‑click = menu.
 
 > ### ▶ Try a demo
-> Want to see every feature without waiting to hit a real limit? Run **`app.py demo`** (or right‑click the strip → **Try a demo**) for a ~40‑second offline tour that cycles through green → amber → red → **limit reached**, fires the threshold alerts, and shows the resume notification — all clearly badged **DEMO**, no real usage or credentials touched.
+> Want to see every feature without waiting to hit a real limit? Click **Settings → ▶ Try a demo** (or right‑click the strip → **Try a demo**, or run `app.py demo`). Your widget switches **in place** — one window, not a second — into a ~40‑second offline tour: green → amber → red → **limit reached**, firing the threshold alerts and the resume notification, all badged **DEMO**. Pick **◼ Exit demo** to snap back to your real usage. No network or credentials touched.
 
 **Auto‑start on login:** the Windows installer can set this up for you. Manual (from source) — **Windows:** add a shortcut to `pythonw.exe "…\app.py" bar` in `shell:startup`. **macOS:** add the standalone `Claudometer.app` to **System Settings → Login Items**, or use a LaunchAgent for a source install:
 

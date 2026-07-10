@@ -490,10 +490,11 @@ class SettingsWindow:
 
     WIN_W = 366
 
-    def __init__(self, root, theme, cfg, on_apply, on_close=None, on_demo=None):
+    def __init__(self, root, theme, cfg, on_apply, on_close=None, on_demo=None, demo_active=False):
         self._on_apply = on_apply
         self._on_close = on_close
         self._on_demo = on_demo
+        self._demo_active = demo_active
         self._cfg = dict(cfg)
         self._closed = False
         self._theme = theme
@@ -622,8 +623,9 @@ class SettingsWindow:
         tk.Button(self._fbar, text="Cancel", command=self.close, bg=field, fg=fg,
                   activebackground=field, activeforeground=fg, bd=0, relief="flat",
                   font=("Segoe UI", 10), padx=18, pady=6, cursor="hand2").pack(side="right", padx=(0, 10))
-        if self._on_demo:  # preview every feature in a safe, offline demo
-            tk.Button(self._fbar, text="▶  Try a demo", command=self._demo, bg=field, fg=T["accent"],
+        if self._on_demo:  # preview every feature in a safe, offline demo (toggles)
+            tk.Button(self._fbar, text=("◼  Exit demo" if self._demo_active else "▶  Try a demo"),
+                      command=self._demo, bg=field, fg=T["accent"],
                       activebackground=field, activeforeground=T["accent"], bd=0, relief="flat",
                       font=("Segoe UI", 10), padx=14, pady=6, cursor="hand2").pack(side="left")
 
@@ -788,7 +790,9 @@ class SettingsWindow:
 # --------------------------------------------------------------------------- #
 class BarWidget:
     def __init__(self, demo=False):
-        self._demo = demo   # scripted, offline "try every feature" tour
+        self._demo = False            # toggled on/off in place by _enter/_exit_demo
+        self._start_in_demo = demo    # `app.py demo` → auto-enter after startup
+        self._demo_after = None
         _set_dpi_aware()
         self.root = tk.Tk()
         self.root.title("Claudometer")
@@ -843,21 +847,14 @@ class BarWidget:
         self._photo = None
         self._hidden = False
 
-        if self._demo:  # force the features on so the tour actually exercises them
-            self._alerts_on = True
-            self._thresholds = [80, 90]
-            self._resume_notify = True
-            self._hide_on_fullscreen = False
-
         self._apply_bg((233, 238, 243))  # provisional; refined by sampling
         self._place_initial()
         self._bind_events()
         self._draw(core.status_display(core.Status.NO_DATA))
-        if self._demo:
-            self.root.after(600, self._start_demo)  # scripted tour, no poll thread
-        else:
-            threading.Thread(target=self._poll_loop, daemon=True).start()
+        threading.Thread(target=self._poll_loop, daemon=True).start()
         self.root.after(400, self._refresh_ui)
+        if self._start_in_demo:  # `app.py demo` — drop straight into the tour
+            self.root.after(500, self._enter_demo)
 
     # -- background matching --------------------------------------------- #
     def _apply_bg(self, rgb):
@@ -961,13 +958,14 @@ class BarWidget:
         """Fire a toast when session/weekly crosses a configured threshold upward.
         Runs on the main thread. Skipped while hidden (fullscreen) so a crossing
         isn't marked-alerted-but-suppressed — it's re-detected on unhide."""
-        if not self._alerts_on or self._hidden:
+        if not (self._alerts_on or self._demo) or self._hidden:
             return
+        thresholds = [80, 90] if self._demo else self._thresholds  # tour uses fixed marks
         for which in ("session", "weekly"):
             pct = disp.get(f"{which}_pct")
             if pct is None:
                 continue
-            reached = {t for t in self._thresholds if pct >= t}
+            reached = {t for t in thresholds if pct >= t}
             new = reached - self._alerted[which]
             # Sticky: keep a threshold "alerted" until pct falls well below it, so
             # boundary jitter can't re-fire; a real reset (big drop) clears it.
@@ -1012,7 +1010,7 @@ class BarWidget:
         on session_resets_at, which is only a projection that drifts as the
         rolling window slides. For a capped-and-waiting user, utilization only
         decreases, so the <=90 crossing is reliably observed. Main thread."""
-        if not (self._resume_notify or self._resume_auto):
+        if not (self._resume_notify or self._resume_auto or self._demo):
             return
         if self._resume_toast is not None or self._resume_retry_after is not None:
             return  # a resume is already in flight — don't re-detect or re-fire
@@ -1129,21 +1127,65 @@ class BarWidget:
             (offline, 4.0),                               # graceful offline state
         ]
 
-    def _start_demo(self):
+    def _toggle_demo(self):
+        self._exit_demo() if self._demo else self._enter_demo()
+
+    def _enter_demo(self):
+        # Switch THIS widget into the tour in place — no second window. The poll
+        # thread stops publishing while _demo is set; the scripted driver owns the
+        # display until you exit.
+        if self._demo:
+            return
+        self._demo = True
+        self._reset_alert_resume_state()
         self._demo_seq = self._demo_timeline()
         self._demo_i = 0
         self._demo_tick()
 
+    def _exit_demo(self):
+        if not self._demo:
+            return
+        self._demo = False
+        if self._demo_after is not None:
+            try:
+                self.root.after_cancel(self._demo_after)
+            except Exception:
+                pass
+            self._demo_after = None
+        for t in (self._toast, self._resume_toast):
+            if t is not None:
+                try:
+                    t.close()
+                except Exception:
+                    pass
+        self._toast = self._resume_toast = None
+        self._reset_alert_resume_state()
+        self._sig = None    # force a redraw once real data arrives
+        self._wake.set()    # wake the poll thread to fetch + publish now
+
+    def _reset_alert_resume_state(self):
+        self._alerted = {"session": set(), "weekly": set()}
+        self._first_alert = {"session": True, "weekly": True}
+        self._resume_state = "idle"
+        if self._resume_retry_after is not None:
+            try:
+                self.root.after_cancel(self._resume_retry_after)
+            except Exception:
+                pass
+            self._resume_retry_after = None
+
     def _demo_tick(self):
+        if not self._demo:
+            return  # exited — stop the loop
         disp, hold = self._demo_seq[self._demo_i % len(self._demo_seq)]
         with self._lock:
             self._disp = dict(disp)
             self._poll_seq += 1
         self._demo_i += 1
         try:
-            self.root.after(int(hold * 1000), self._demo_tick)
+            self._demo_after = self.root.after(int(hold * 1000), self._demo_tick)
         except Exception:
-            pass  # window closed — stop the loop
+            pass  # window closed
 
     def _show_demo_resume(self):
         try:
@@ -1156,26 +1198,13 @@ class BarWidget:
         except Exception:
             _log_exc()
 
-    def _launch_demo(self):
-        import os
-        import sys
-        import subprocess
-        try:
-            if getattr(sys, "frozen", False):
-                subprocess.Popen([sys.executable, "demo"])
-            else:
-                here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py")
-                subprocess.Popen([sys.executable, here, "demo"])
-        except Exception:
-            _log_exc()
-
     def _popup_menu(self, e):
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="Details…", command=self._toggle_popover)
         menu.add_command(label="Settings…", command=self._open_settings)
         menu.add_command(label="Refresh now", command=self._refresh_now)
-        if not self._demo:
-            menu.add_command(label="▶  Try a demo", command=self._launch_demo)
+        menu.add_command(label=("◼  Exit demo" if self._demo else "▶  Try a demo"),
+                         command=self._toggle_demo)
         menu.add_separator()
         menu.add_command(label="View on GitHub", command=lambda: _open_url(config.REPO_URL))
         menu.add_command(label="Quit", command=self._quit)
@@ -1203,7 +1232,7 @@ class BarWidget:
             self._settings_win = SettingsWindow(
                 self.root, self._theme, self._current_cfg(),
                 on_apply=self._apply_settings, on_close=self._on_settings_closed,
-                on_demo=(None if self._demo else self._launch_demo))
+                on_demo=self._toggle_demo, demo_active=self._demo)
         except Exception:
             _log_exc()
             self._settings_win = None
@@ -1311,6 +1340,9 @@ class BarWidget:
     def _poll_loop(self):
         while True:
             self._wake.clear()  # a refresh requested during the poll forces a re-poll
+            if self._demo:      # the tour owns the display — don't poll or publish
+                self._wake.wait(timeout=1.0)
+                continue
             result = None
             try:
                 result = core.poll_once(self._state)
@@ -1336,15 +1368,16 @@ class BarWidget:
             # and resume (which build Toplevels/timers) run in _refresh_ui on the
             # main thread; here we only publish data + bump the sequence.
             with self._lock:
-                self._disp = disp
-                self._poll_seq += 1
+                if not self._demo:  # a demo may have started mid-poll — don't clobber it
+                    self._disp = disp
+                    self._poll_seq += 1
             wait = self._state.backoff or self._poll
             self._wake.wait(timeout=wait)
 
     def _refresh_ui(self):
         # Hide over fullscreen apps (movies, games, presentations) like the
         # taskbar does; show again when they exit. Disabled via hide_on_fullscreen.
-        fs = self._hide_on_fullscreen and _fullscreen_active()
+        fs = self._hide_on_fullscreen and not self._demo and _fullscreen_active()
         if fs and not self._hidden:
             self._hidden = True
             # a resume is pending if a toast is up OR a retry is already scheduled
