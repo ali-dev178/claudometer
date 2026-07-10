@@ -158,6 +158,9 @@ Optional environment overrides:
 
 **Run modes:** `app.py bar` (Windows taskbar strip — default & recommended) · `app.py tray` (tray icon) · `app.py both` · `app.py` (auto per platform). Strip: left‑click = popover · **drag = move it anywhere on screen** (remembered) · right‑click = menu.
 
+> ### ▶ Try a demo
+> Want to see every feature without waiting to hit a real limit? Run **`app.py demo`** (or right‑click the strip → **Try a demo**) for a ~40‑second offline tour that cycles through green → amber → red → **limit reached**, fires the threshold alerts, and shows the resume notification — all clearly badged **DEMO**, no real usage or credentials touched.
+
 **Auto‑start on login:** the Windows installer can set this up for you. Manual (from source) — **Windows:** add a shortcut to `pythonw.exe "…\app.py" bar` in `shell:startup`. **macOS:** add the standalone `Claudometer.app` to **System Settings → Login Items**, or use a LaunchAgent for a source install:
 
 <details><summary>macOS LaunchAgent (source install)</summary>
@@ -214,9 +217,10 @@ Ideas and PRs welcome — open an issue.
 ## Contributing
 
 ```bash
-pip install -r requirements.txt && py app.py bar
+pip install -r requirements.txt && py app.py bar   # run it
+pip install -r requirements-dev.txt && pytest        # run the tests (also in CI)
 ```
-`usage_core.py` = data/auth (no UI deps) · `render.py` = all the Pillow drawing · `settings.py` / `cost.py` / `resume.py` = config, cost estimation, session‑resume · the platform adapters (`widget_bar.py`, `menubar_mac.py`, `tray_windows.py`) are thin. Regenerate the README images with `py assets/make_assets.py`.
+`usage_core.py` = data/auth (no UI deps) · `render.py` = all the Pillow drawing · `settings.py` / `cost.py` / `resume.py` = config, cost estimation, session‑resume · the platform adapters (`widget_bar.py`, `menubar_mac.py`, `tray_windows.py`) are thin. The `tests/` suite (~385 checks on the core logic) runs on every push via [CI](.github/workflows/ci.yml); regenerate the README images with `py assets/make_assets.py`.
 
 ## ⚠️ Disclaimer
 

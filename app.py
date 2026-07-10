@@ -5,6 +5,7 @@ Usage (no arg default: macOS = menu bar, Windows = taskbar strip, Linux = tray):
     py app.py bar        # Windows: floating readable numbers over the taskbar
     py app.py tray       # Windows/Linux: tray icon only
     py app.py both       # Windows: tray icon + floating taskbar readout
+    py app.py demo       # Windows: scripted, offline tour through every feature
 """
 
 import os
@@ -32,10 +33,13 @@ def main() -> None:
 
     if not mode:  # packaged/no-arg default: the flagship on Windows, tray on Linux
         mode = "bar" if sys.platform == "win32" else "tray"
-    if mode in ("bar", "both") and sys.platform != "win32":
-        mode = "tray"  # bar/both are Windows-only (widget_bar needs ctypes.windll)
+    if mode in ("bar", "both", "demo") and sys.platform != "win32":
+        mode = "tray"  # bar/both/demo are Windows-only (widget_bar needs ctypes.windll)
 
-    if mode == "bar":
+    if mode == "demo":  # scripted, offline "try every feature" tour
+        from widget_bar import BarWidget
+        BarWidget(demo=True).run()
+    elif mode == "bar":
         _run_bar()
     elif mode == "both":
         # Run the tray in a separate process (its own message loop) and the

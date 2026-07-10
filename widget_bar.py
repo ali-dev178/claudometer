@@ -17,7 +17,7 @@ import time
 import traceback
 import tkinter as tk
 from tkinter import messagebox
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from PIL import ImageTk
@@ -777,7 +777,8 @@ class SettingsWindow:
 # Taskbar strip (image-based)
 # --------------------------------------------------------------------------- #
 class BarWidget:
-    def __init__(self):
+    def __init__(self, demo=False):
+        self._demo = demo   # scripted, offline "try every feature" tour
         _set_dpi_aware()
         self.root = tk.Tk()
         self.root.title("Claudometer")
@@ -832,11 +833,20 @@ class BarWidget:
         self._photo = None
         self._hidden = False
 
+        if self._demo:  # force the features on so the tour actually exercises them
+            self._alerts_on = True
+            self._thresholds = [80, 90]
+            self._resume_notify = True
+            self._hide_on_fullscreen = False
+
         self._apply_bg((233, 238, 243))  # provisional; refined by sampling
         self._place_initial()
         self._bind_events()
         self._draw(core.status_display(core.Status.NO_DATA))
-        threading.Thread(target=self._poll_loop, daemon=True).start()
+        if self._demo:
+            self.root.after(600, self._start_demo)  # scripted tour, no poll thread
+        else:
+            threading.Thread(target=self._poll_loop, daemon=True).start()
         self.root.after(400, self._refresh_ui)
 
     # -- background matching --------------------------------------------- #
@@ -1010,6 +1020,9 @@ class BarWidget:
         self._resume_toast = None
 
     def _fire_resume(self):
+        if self._demo:  # demo: show the notification, but never touch a real session
+            self._show_demo_resume()
+            return
         # Resolve the session to resume lazily, at fire time — the most recent
         # session reflects the user's latest work better than a hours-old capture.
         if self._resume_retry_after is not None:  # replace any pending retry
@@ -1074,11 +1087,85 @@ class BarWidget:
         except Exception:
             _log_exc()
 
+    # -- demo / self-test tour ------------------------------------------- #
+    # A scripted, fully offline sequence that drives the REAL alert/resume/render
+    # code paths through every state — so you (and new users) can verify each
+    # feature in ~40s instead of waiting for real usage to reach those conditions.
+    def _demo_timeline(self):
+        now = datetime.now(timezone.utc)
+
+        def step(sp, sc, wp, wc, mins, **extra):
+            d = {"_demo": True, "plan": "DEMO",
+                 "session_pct": sp, "session_color": sc,
+                 "session_resets_at": now + timedelta(minutes=mins),
+                 "weekly_pct": wp, "weekly_color": wc,
+                 "weekly_resets_at": now + timedelta(days=3),
+                 "model_rows": [{"label": "Fable", "pct": 4, "color": "green"}]}
+            d.update(extra)
+            return d
+
+        offline = {"_demo": True, "plan": None, "session": "offline (demo)",
+                   "session_pct": None, "weekly_pct": None,
+                   "session_color": "grey", "weekly_color": "grey", "model_rows": []}
+        return [
+            (step(20, "green", 8, "green", 180), 4.0),    # comfortable — green
+            (step(62, "amber", 14, "green", 120), 4.0),   # getting close — amber
+            (step(84, "red", 20, "green", 40), 5.0),      # crosses 80% → alert toast
+            (step(92, "red", 22, "green", 18), 5.0),      # crosses 90% → alert toast
+            (step(100, "red", 24, "amber", 6), 5.0),      # 100% → "limit reached"
+            (step(85, "red", 24, "amber", 300), 6.0),     # drops ≤90 → resume notice
+            (step(40, "green", 26, "amber", 240,
+                  cost_tokens=2_450_000, cost_usd=8.74), 5.0),  # cost line (click to see)
+            (offline, 4.0),                               # graceful offline state
+        ]
+
+    def _start_demo(self):
+        self._demo_seq = self._demo_timeline()
+        self._demo_i = 0
+        self._demo_tick()
+
+    def _demo_tick(self):
+        disp, hold = self._demo_seq[self._demo_i % len(self._demo_seq)]
+        with self._lock:
+            self._disp = dict(disp)
+            self._poll_seq += 1
+        self._demo_i += 1
+        try:
+            self.root.after(int(hold * 1000), self._demo_tick)
+        except Exception:
+            pass  # window closed — stop the loop
+
+    def _show_demo_resume(self):
+        try:
+            if self._resume_toast is not None:
+                self._resume_toast.close()
+            self._resume_toast = ResumeToast(
+                self.root, self._theme, "Session limit reset (demo)",
+                "This is where you'd click Resume to continue", "Resume",
+                on_click=lambda: None, timeout_ms=8000, on_close=self._clear_resume_toast)
+        except Exception:
+            _log_exc()
+
+    def _launch_demo(self):
+        import os
+        import sys
+        import subprocess
+        try:
+            if getattr(sys, "frozen", False):
+                subprocess.Popen([sys.executable, "demo"])
+            else:
+                here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py")
+                subprocess.Popen([sys.executable, here, "demo"])
+        except Exception:
+            _log_exc()
+
     def _popup_menu(self, e):
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="Details…", command=self._toggle_popover)
         menu.add_command(label="Settings…", command=self._open_settings)
         menu.add_command(label="Refresh now", command=self._refresh_now)
+        if not self._demo:
+            menu.add_command(label="▶  Try a demo", command=self._launch_demo)
         menu.add_separator()
         menu.add_command(label="View on GitHub", command=lambda: _open_url(config.REPO_URL))
         menu.add_command(label="Quit", command=self._quit)

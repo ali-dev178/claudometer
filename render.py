@@ -223,6 +223,8 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
                        (f"{disp['weekly_pct']}%", f_num, sev_color(T, disp.get("weekly_color", "grey")))])
     if not groups:
         groups.append([("Claude  " + (disp.get("session") or "—"), f_dim, T["dim"])])
+    if disp.get("_demo"):  # unmistakable marker so simulated data isn't mistaken for real
+        groups.insert(0, [("DEMO", f_num, sev_color(T, "amber"))])
 
     cand = []
     if disp.get("session_pct") is not None:

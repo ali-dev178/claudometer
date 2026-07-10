@@ -1,0 +1,27 @@
+name: CI
+
+# Run the test suite on every push to main and every pull request.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 = minimum supported (exercises the mini-parser fallback, no tomllib);
+        # 3.12 = current. The core-logic tests are pure/cross-platform.
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: python -m pip install -r requirements.txt pytest
+      - name: Run tests
+        run: python -m pytest -q
