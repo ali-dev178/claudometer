@@ -29,10 +29,11 @@ Claude's Pro / Max / Team plans enforce a rolling **5‑hour session** limit and
 
 <p align="center"><img src="assets/strip.png" alt="Floating usage strip" width="300"></p>
 
-> ### 🖱️ Put it anywhere
-> It's a **free‑floating, always‑on‑top** widget — not locked to the taskbar. Drag it to a screen edge, over a window, or onto a second monitor, and it **remembers the spot**.
+> ### 🖱️ Put it anywhere *(Windows)*
+> The **Windows** taskbar strip is a **free‑floating, always‑on‑top** widget — not locked to the taskbar. Drag it to a screen edge, over a window, or onto a second monitor, and it **remembers the spot**.
+> *(On macOS it's a native menu‑bar item, which isn't draggable around the screen; a floating Mac widget is on the [roadmap](#roadmap).)*
 
-<p align="center"><img src="assets/anywhere.png" alt="Drag the widget anywhere on screen — not just the taskbar" width="780"></p>
+<p align="center"><img src="assets/anywhere.png" alt="Drag the Windows strip anywhere on screen — not just the taskbar" width="780"></p>
 
 - **`Session 61%`** — your current 5‑hour window, with a live countdown to reset.
 - **`Weekly 18%`** — your 7‑day, all‑models usage.
@@ -211,7 +212,7 @@ So it shows **true plan %** from Anthropic's backend — *not* a local token‑c
 | **macOS** | Menu‑bar item + dropdown (live usage) | ✅ |
 | **Linux** | Notification‑area tray icon (live usage) | 🧪 Experimental |
 
-Alerts, estimated cost, resume‑on‑reset, themes, accent, and the config file are on the **Windows** strip today; the macOS menu bar and Linux tray show live usage. Unifying these is on the roadmap.
+Free‑floating placement (drag anywhere), alerts, estimated cost, resume‑on‑reset, themes, accent, the config file, and the demo mode are on the **Windows** strip today; the macOS menu bar and Linux tray show live usage. Unifying these is on the roadmap.
 
 ## Roadmap
 
