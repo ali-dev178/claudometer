@@ -371,16 +371,122 @@ class ResumeToast:
 # --------------------------------------------------------------------------- #
 # Settings panel (native, theme-matched) — writes the config + applies live
 # --------------------------------------------------------------------------- #
+class _ImgWidget:
+    """Base for a control drawn as a Pillow image on a tk.Label, redrawn on change."""
+
+    def __init__(self, parent, bg):
+        self.lbl = tk.Label(parent, bd=0, bg=bg, cursor="hand2")
+
+    def pack(self, **kw):
+        self.lbl.pack(**kw)
+        return self
+
+    def _show(self, pil):
+        self._img = ImageTk.PhotoImage(pil)
+        self.lbl.configure(image=self._img)
+
+
+class _ToggleW(_ImgWidget):
+    def __init__(self, parent, var, theme, bg, command=None):
+        super().__init__(parent, bg)
+        self.var, self.theme, self.command = var, theme, command
+        self.lbl.bind("<Button-1>", self._click)
+        var.trace_add("write", lambda *a: self._draw())
+        self._draw()
+
+    def _draw(self):
+        self._show(render.render_toggle(bool(self.var.get()), self.theme))
+
+    def _click(self, _):
+        self.var.set(not self.var.get())
+        if self.command:
+            self.command()
+
+
+class _SegmentW(_ImgWidget):
+    def __init__(self, parent, var, values, labels, theme, bg):
+        super().__init__(parent, bg)
+        self.var, self.values, self.labels, self.theme = var, values, labels, theme
+        self._segw = 1
+        self.lbl.bind("<Button-1>", self._click)
+        var.trace_add("write", lambda *a: self._draw())
+        self._draw()
+
+    def _draw(self):
+        sel = self.values.index(self.var.get()) if self.var.get() in self.values else 0
+        img, self._segw = render.render_segment(self.labels, sel, self.theme)
+        self._show(img)
+
+    def _click(self, e):
+        i = min(max(int(e.x // self._segw), 0), len(self.values) - 1)
+        self.var.set(self.values[i])
+
+
+class _SliderW(_ImgWidget):
+    def __init__(self, parent, var, lo, hi, theme, bg, width=150):
+        super().__init__(parent, bg)
+        self.var, self.lo, self.hi, self.theme, self.width = var, lo, hi, theme, width
+        self.lbl.bind("<Button-1>", self._set)
+        self.lbl.bind("<B1-Motion>", self._set)
+        var.trace_add("write", lambda *a: self._draw())
+        self._draw()
+
+    def _val(self):
+        try:
+            return int(self.var.get())
+        except Exception:
+            return self.lo
+
+    def _draw(self):
+        frac = (self._val() - self.lo) / float(self.hi - self.lo)
+        self._show(render.render_slider(frac, self.theme, self.width))
+
+    def _set(self, e):
+        m = 10
+        frac = (e.x - m) / float(max(1, self.width - 2 * m))
+        self.var.set(int(round(min(max(frac, 0), 1) * (self.hi - self.lo) + self.lo)))
+
+
+class _StepperW(_ImgWidget):
+    def __init__(self, parent, var, lo, hi, theme, bg, width=94):
+        super().__init__(parent, bg)
+        self.var, self.lo, self.hi, self.theme, self.width = var, lo, hi, theme, width
+        self.lbl.bind("<Button-1>", self._click)
+        var.trace_add("write", lambda *a: self._draw())
+        self._draw()
+
+    def _val(self):
+        try:
+            return int(self.var.get())
+        except Exception:
+            return self.lo
+
+    def _draw(self):
+        self._show(render.render_stepper(self._val(), self.theme, width=self.width))
+
+    def _click(self, e):
+        v = self._val()
+        if e.x < self.width / 3:
+            v -= 1
+        elif e.x > 2 * self.width / 3:
+            v += 1
+        self.var.set(min(max(v, self.lo), self.hi))
+
+
 class SettingsWindow:
-    """A themed native settings window opened from the popover gear. It writes
-    ~/.claudometer.toml via settings.save() and hands the new config to
+    """A premium, theme-matched native settings window opened from the popover
+    gear. Controls are drawn through the same Pillow pipeline as the popover. It
+    writes ~/.claudometer.toml via settings.save() and hands the new config to
     on_apply() so the running widget updates live (no restart needed)."""
+
+    WIN_W = 366
 
     def __init__(self, root, theme, cfg, on_apply, on_close=None):
         self._on_apply = on_apply
         self._on_close = on_close
         self._cfg = dict(cfg)
         self._closed = False
+        self._theme = theme
         T = render.THEMES.get(theme, render.THEMES["light"])
         self.T = T
         bg, fg, dim, field = T["panel_bot"], T["neutral"], T["dim"], T["track"]
@@ -410,111 +516,102 @@ class SettingsWindow:
         self.v_prompt = tk.StringVar(value=cfg.get("resume_prompt", ""))
         self.v_maxturns = tk.IntVar(value=cfg.get("resume_max_turns", 30))
 
-        pad = {"padx": 16}
+        # rendered header banner (sparkle + title + subtitle)
+        self._hdr = ImageTk.PhotoImage(render.render_settings_header(theme, self.WIN_W))
+        tk.Label(self.top, image=self._hdr, bd=0, bg=bg).pack()
 
-        def section(title):
-            tk.Label(self.top, text=title.upper(), bg=bg, fg=dim,
-                     font=("Segoe UI Semibold", 8)).pack(anchor="w", pady=(12, 3), **pad)
+        body = tk.Frame(self.top, bg=bg)
+        body.pack(fill="x", padx=20)
+        LBL = ("Segoe UI", 9)
 
-        def row():
-            f = tk.Frame(self.top, bg=bg)
-            f.pack(fill="x", **pad)
+        def section(title, first=False):
+            tk.Label(body, text=title.upper(), bg=bg, fg=T["accent"],
+                     font=("Segoe UI Semibold", 8)).pack(anchor="w", pady=(10 if first else 15, 5))
+
+        def row(parent=None):
+            f = tk.Frame(parent or body, bg=bg)
+            f.pack(fill="x", pady=4)
             return f
 
-        def check(parent, text, var, cmd=None):
-            return tk.Checkbutton(parent, text=text, variable=var, bg=bg, fg=fg,
-                                  selectcolor=field, activebackground=bg, activeforeground=fg,
-                                  highlightthickness=0, bd=0, anchor="w", command=cmd,
-                                  font=("Segoe UI", 9))
-
         def label(parent, text):
-            return tk.Label(parent, text=text, bg=bg, fg=fg, font=("Segoe UI", 9))
+            return tk.Label(parent, text=text, bg=bg, fg=fg, font=LBL, anchor="w")
 
-        tk.Label(self.top, text="Settings", bg=bg, fg=fg,
-                 font=("Segoe UI Semibold", 14)).pack(anchor="w", pady=(14, 1), **pad)
-        tk.Label(self.top, text="Applies immediately · saved to ~/.claudometer.toml",
-                 bg=bg, fg=dim, font=("Segoe UI", 8)).pack(anchor="w", pady=(0, 2), **pad)
+        def toggle_row(text, var, parent=None, cmd=None):
+            r = row(parent)
+            label(r, text).pack(side="left")
+            _ToggleW(r, var, theme, bg, command=cmd).pack(side="right")
 
         # ----- Display -----
-        section("Display")
+        section("Display", first=True)
         r = row()
         label(r, "Theme").pack(side="left")
-        om = tk.OptionMenu(r, self.v_theme, "auto", "light", "dark")
-        om.configure(bg=field, fg=fg, activebackground=field, activeforeground=fg,
-                     highlightthickness=0, bd=0, font=("Segoe UI", 9), width=8)
-        om["menu"].configure(bg=field, fg=fg)
-        om.pack(side="right")
+        _SegmentW(r, self.v_theme, ["auto", "light", "dark"], ["Auto", "Light", "Dark"],
+                  theme, bg).pack(side="right")
+        toggle_row("Session meter", self.v_session)
+        toggle_row("Weekly meter", self.v_weekly)
 
         r = row()
-        label(r, "Meters").pack(side="left")
-        check(r, "Weekly", self.v_weekly).pack(side="right")
-        check(r, "Session", self.v_session).pack(side="right")
-
-        r = row()
-        label(r, "Accent (hex)").pack(side="left")
-        self._swatch = tk.Label(r, text="   ", bg=(cfg.get("accent") or T["accent"]))
-        self._swatch.pack(side="right", padx=(6, 0))
-        tk.Entry(r, textvariable=self.v_accent, width=10, bg=field, fg=fg,
-                 insertbackground=fg, bd=1, relief="flat", font=("Consolas", 9)).pack(side="right")
+        label(r, "Accent").pack(side="left")
+        self._swatch = tk.Label(r, width=2, bg=(cfg.get("accent") or T["accent"]), bd=0)
+        self._swatch.pack(side="right", padx=(8, 0), ipady=6)
+        tk.Entry(r, textvariable=self.v_accent, width=9, justify="center", bg=field, fg=fg,
+                 insertbackground=fg, bd=0, relief="flat", font=("Consolas", 9)).pack(side="right", ipady=4)
         self.v_accent.trace_add("write", lambda *a: self._update_swatch())
+        pr = row()
+        tk.Label(pr, text="", bg=bg, font=LBL).pack(side="left")
+        for val in ("", "#d97757", "#5b8def", "#12a150", "#8250df", "#e5484d"):
+            sw = tk.Label(pr, width=2, bg=(val or T["accent"]), bd=0, cursor="hand2")
+            sw.pack(side="left", padx=3, ipady=6)
+            sw.bind("<Button-1>", lambda e, v=val: self.v_accent.set(v))
 
         r = row()
         label(r, "Poll interval").pack(side="left")
         self._poll_lbl = tk.Label(r, text=f"{self.v_poll.get()}s", bg=bg, fg=dim,
-                                  width=5, anchor="e", font=("Segoe UI", 9))
+                                  width=5, anchor="e", font=LBL)
         self._poll_lbl.pack(side="right")
-        tk.Scale(r, from_=60, to=300, orient="horizontal", variable=self.v_poll,
-                 bg=bg, fg=fg, troughcolor=field, highlightthickness=0, bd=0, showvalue=False,
-                 length=150, command=lambda v: self._poll_lbl.configure(text=f"{int(float(v))}s")
-                 ).pack(side="right")
+        _SliderW(r, self.v_poll, 60, 300, theme, bg, width=150).pack(side="right", padx=(0, 8))
+        self.v_poll.trace_add("write", lambda *a: self._poll_lbl.configure(
+            text=f"{self._safe_int(self.v_poll, 90)}s"))
 
         # ----- Alerts -----
         section("Alerts")
-        check(self.top, "Desktop alert when crossing a threshold", self.v_alerts).pack(anchor="w", **pad)
+        toggle_row("Desktop alert on threshold", self.v_alerts)
         r = row()
         label(r, "Alert at").pack(side="left")
-        tk.Label(r, text="%", bg=bg, fg=dim, font=("Segoe UI", 9)).pack(side="right")
-        tk.Spinbox(r, from_=1, to=100, width=4, textvariable=self.v_t2, bg=field, fg=fg,
-                   insertbackground=fg, bd=1, relief="flat", justify="center").pack(side="right", padx=4)
-        tk.Label(r, text="and", bg=bg, fg=dim, font=("Segoe UI", 9)).pack(side="right", padx=2)
-        tk.Spinbox(r, from_=1, to=100, width=4, textvariable=self.v_t1, bg=field, fg=fg,
-                   insertbackground=fg, bd=1, relief="flat", justify="center").pack(side="right", padx=4)
-        check(self.top, "Show estimated cost in the popover", self.v_cost).pack(anchor="w", **pad)
-        check(self.top, "Hide over fullscreen apps", self.v_fs).pack(anchor="w", **pad)
+        tk.Label(r, text="%", bg=bg, fg=dim, font=LBL).pack(side="right", padx=(6, 0))
+        _StepperW(r, self.v_t2, 1, 100, theme, bg, width=86).pack(side="right", padx=(6, 0))
+        tk.Label(r, text="and", bg=bg, fg=dim, font=LBL).pack(side="right", padx=6)
+        _StepperW(r, self.v_t1, 1, 100, theme, bg, width=86).pack(side="right")
+        toggle_row("Show estimated cost", self.v_cost)
+        toggle_row("Hide over fullscreen apps", self.v_fs)
 
         # ----- Resume -----
         section("Resume on reset")
-        check(self.top, "Notify + one-click resume when the session resets",
-              self.v_notify).pack(anchor="w", **pad)
+        toggle_row("Notify + one-click resume", self.v_notify)
         self._adv_open = False
-        self._adv_btn = tk.Label(self.top, text="▸  Advanced — auto-resume ⚠",
-                                 bg=bg, fg=T["accent"], font=("Segoe UI", 9), cursor="hand2")
-        self._adv_btn.pack(anchor="w", pady=(6, 0), **pad)
+        self._adv_btn = tk.Label(body, text="▸  Advanced — auto-resume ⚠",
+                                 bg=bg, fg=T["accent"], font=LBL, cursor="hand2")
+        self._adv_btn.pack(anchor="w", pady=(8, 0))
         self._adv_btn.bind("<Button-1>", lambda e: self._toggle_advanced())
-        self._adv = tk.Frame(self.top, bg=bg)
-        check(self._adv, "Auto-resume unattended (risky)", self.v_auto,
-              cmd=self._confirm_auto).pack(anchor="w", pady=(4, 0))
-        check(self._adv, "Skip permission prompts (dangerous)", self.v_skip,
-              cmd=self._confirm_skip).pack(anchor="w")
-        rp = tk.Frame(self._adv, bg=bg)
-        rp.pack(fill="x", pady=(4, 0))
-        tk.Label(rp, text="Prompt", bg=bg, fg=fg, font=("Segoe UI", 9)).pack(side="left")
+        self._adv = tk.Frame(body, bg=bg)
+        toggle_row("Auto-resume unattended (risky)", self.v_auto, parent=self._adv, cmd=self._confirm_auto)
+        toggle_row("Skip permission prompts (dangerous)", self.v_skip, parent=self._adv, cmd=self._confirm_skip)
+        rp = row(self._adv)
+        label(rp, "Prompt").pack(side="left")
         tk.Entry(rp, textvariable=self.v_prompt, bg=field, fg=fg, insertbackground=fg,
-                 bd=1, relief="flat", font=("Segoe UI", 9)).pack(side="right", fill="x", expand=True, padx=(8, 0))
-        rm = tk.Frame(self._adv, bg=bg)
-        rm.pack(fill="x", pady=(4, 0))
-        tk.Label(rm, text="Max turns", bg=bg, fg=fg, font=("Segoe UI", 9)).pack(side="left")
-        tk.Spinbox(rm, from_=1, to=200, width=5, textvariable=self.v_maxturns, bg=field, fg=fg,
-                   insertbackground=fg, bd=1, relief="flat", justify="center").pack(side="right")
+                 bd=0, relief="flat", font=LBL).pack(side="right", fill="x", expand=True, padx=(10, 0), ipady=4)
+        rm = row(self._adv)
+        label(rm, "Max turns").pack(side="left")
+        _StepperW(rm, self.v_maxturns, 1, 200, theme, bg, width=96).pack(side="right")
 
-        self._fbar = tk.Frame(self.top, bg=bg)
-        self._fbar.pack(fill="x", pady=14, **pad)
+        self._fbar = tk.Frame(body, bg=bg)
+        self._fbar.pack(fill="x", pady=(18, 18))
         tk.Button(self._fbar, text="Save", command=self._save, bg=T["accent"], fg="#ffffff",
                   activebackground=T["accent"], activeforeground="#ffffff", bd=0, relief="flat",
-                  font=("Segoe UI Semibold", 9), padx=18, pady=4, cursor="hand2").pack(side="right")
+                  font=("Segoe UI Semibold", 10), padx=24, pady=6, cursor="hand2").pack(side="right")
         tk.Button(self._fbar, text="Cancel", command=self.close, bg=field, fg=fg,
                   activebackground=field, activeforeground=fg, bd=0, relief="flat",
-                  font=("Segoe UI", 9), padx=14, pady=4, cursor="hand2").pack(side="right", padx=(0, 8))
+                  font=("Segoe UI", 10), padx=18, pady=6, cursor="hand2").pack(side="right", padx=(0, 10))
 
         if cfg.get("resume_auto") or cfg.get("resume_skip_permissions"):
             self._toggle_advanced()
@@ -522,6 +619,13 @@ class SettingsWindow:
         self.top.transient(root)
         self.top.lift()
         self.top.focus_force()
+
+    @staticmethod
+    def _safe_int(var, default):
+        try:
+            return int(var.get())
+        except Exception:
+            return default
 
     def _update_swatch(self):
         import re
@@ -536,7 +640,7 @@ class SettingsWindow:
     def _toggle_advanced(self):
         self._adv_open = not self._adv_open
         if self._adv_open:
-            self._adv.pack(fill="x", padx=16, before=self._fbar)
+            self._adv.pack(fill="x", before=self._fbar)
             self._adv_btn.configure(text="▾  Advanced — auto-resume ⚠")
         else:
             self._adv.pack_forget()

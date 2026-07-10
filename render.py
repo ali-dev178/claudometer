@@ -9,7 +9,7 @@ UI is composed as images and shown through ImageTk.
 import os
 from datetime import datetime, timezone
 
-from PIL import Image, ImageColor, ImageDraw, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
 
 # --------------------------------------------------------------------------- #
 # Palettes
@@ -20,7 +20,7 @@ THEMES = {
         "panel_top": "#ffffff", "panel_bot": "#f5f8fc",
         "border": "#e5e9ef", "hair": "#eef1f5",
         "neutral": "#161b22", "dim": "#6b7480", "faint": "#98a1ad", "grey": "#6b7480",
-        "track": "#e9edf2",
+        "track": "#e9edf2", "toggle_off": "#c4ccd6",
         "accent": "#d97757", "accent_soft": "#f8ece5",
         "green": "#12a150", "amber": "#d99400", "red": "#e5484d",
     },
@@ -29,7 +29,7 @@ THEMES = {
         "panel_top": "#191f2b", "panel_bot": "#12161f",
         "border": "#2a3342", "hair": "#222a37",
         "neutral": "#e9edf4", "dim": "#9aa4b3", "faint": "#69727e", "grey": "#9aa4b3",
-        "track": "#262f3d",
+        "track": "#262f3d", "toggle_off": "#3b4552",
         "accent": "#e58e6f", "accent_soft": "#2d241f",
         "green": "#2ec26a", "amber": "#e2a53c", "red": "#ff6b6e",
     },
@@ -447,3 +447,123 @@ def render_action_toast(title, subtitle, action_label, theme, scale=3):
     d.text((tx, 27 * S), _elide(d, title, ft, avail), font=ft, fill=T["neutral"], anchor="lm")
     d.text((tx, 46 * S), _elide(d, subtitle, fs, avail), font=fs, fill=T["dim"], anchor="lm")
     return base.resize((W, H), Image.LANCZOS)
+
+
+# --------------------------------------------------------------------------- #
+# Premium settings-panel controls (drawn supersampled, like everything else)
+# --------------------------------------------------------------------------- #
+def _soft_disc(size, cx, cy, r, S, alpha=60):
+    """A blurred shadow disc for knobs."""
+    sh = Image.new("RGBA", size, (0, 0, 0, 0))
+    ImageDraw.Draw(sh).ellipse([cx - r, cy - r + S, cx + r, cy + r + S], fill=(0, 0, 0, alpha))
+    return sh.filter(ImageFilter.GaussianBlur(2 * S))
+
+
+def render_toggle(on, theme, scale=3):
+    T = THEMES.get(theme, THEMES["light"])
+    S = scale
+    W, H = 46, 26
+    Ws, Hs = W * S, H * S
+    img = Image.new("RGBA", (Ws, Hs), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    r = Hs / 2
+    d.rounded_rectangle([0, 0, Ws - 1, Hs - 1], radius=r,
+                        fill=T["accent"] if on else T.get("toggle_off", T["track"]))
+    kr = r - 3 * S
+    kcx = (Ws - r) if on else r
+    img.alpha_composite(_soft_disc((Ws, Hs), kcx, r, kr, S))
+    ImageDraw.Draw(img).ellipse([kcx - kr, r - kr, kcx + kr, r + kr], fill="#ffffff")
+    return img.resize((W, H), Image.LANCZOS)
+
+
+def render_segment(labels, sel, theme, scale=3):
+    """A pill segmented control; returns (image, segment_width_px)."""
+    T = THEMES.get(theme, THEMES["light"])
+    S = scale
+    f = _font("sb", 11 * S)
+    scratch = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    segw = int(max(scratch.textlength(l, font=f) for l in labels)) + 22 * S
+    H = 26
+    Ws, Hs = segw * len(labels), H * S
+    img = Image.new("RGBA", (Ws, Hs), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([0, 0, Ws - 1, Hs - 1], radius=Hs / 2, fill=T["track"])
+    for i, label in enumerate(labels):
+        x1 = i * segw
+        if i == sel:
+            m = 2 * S
+            d.rounded_rectangle([x1 + m, m, x1 + segw - m, Hs - m],
+                                radius=(Hs - 2 * m) / 2, fill=T["accent"])
+        d.text((x1 + segw / 2, Hs / 2), label, font=f,
+               fill="#ffffff" if i == sel else T["dim"], anchor="mm")
+    out = img.resize((Ws // S, H), Image.LANCZOS)
+    return out, out.width // len(labels)
+
+
+def render_slider(frac, theme, width, scale=3):
+    T = THEMES.get(theme, THEMES["light"])
+    S = scale
+    W, H = width, 24
+    Ws, Hs = W * S, H * S
+    img = Image.new("RGBA", (Ws, Hs), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    th, m = 6 * S, 10 * S
+    y1, y2 = (Hs - th) / 2, (Hs + th) / 2
+    x1, x2 = m, Ws - m
+    frac = min(max(frac, 0.0), 1.0)
+    kx = x1 + (x2 - x1) * frac
+    d.rounded_rectangle([x1, y1, x2, y2], radius=th / 2, fill=T.get("toggle_off", T["track"]))
+    if kx > x1:
+        d.rounded_rectangle([x1, y1, kx, y2], radius=th / 2, fill=T["accent"])
+    kr = 9 * S
+    img.alpha_composite(_soft_disc((Ws, Hs), kx, Hs / 2, kr, S, alpha=55))
+    d = ImageDraw.Draw(img)
+    d.ellipse([kx - kr, Hs / 2 - kr, kx + kr, Hs / 2 + kr], fill="#ffffff")
+    d.ellipse([kx - kr, Hs / 2 - kr, kx + kr, Hs / 2 + kr], outline=T["accent"], width=2 * S)
+    return img.resize((W, H), Image.LANCZOS)
+
+
+def render_stepper(value, theme, scale=3, width=94):
+    T = THEMES.get(theme, THEMES["light"])
+    S = scale
+    W, H = width, 26
+    Ws, Hs = W * S, H * S
+    img = Image.new("RGBA", (Ws, Hs), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([0, 0, Ws - 1, Hs - 1], radius=7 * S, fill=T["track"])
+    third = Ws / 3
+    for gx in (third, 2 * third):
+        d.line([gx, 6 * S, gx, Hs - 6 * S], fill=T["hair"], width=max(1, S))
+    fsym, fval = _font("sb", 15 * S), _font("sb", 12 * S)
+    d.text((third / 2, Hs / 2 - S), "−", font=fsym, fill=T["dim"], anchor="mm")
+    d.text((Ws / 2, Hs / 2), str(value), font=fval, fill=T["neutral"], anchor="mm")
+    d.text((2.5 * third, Hs / 2 - S), "+", font=fsym, fill=T["accent"], anchor="mm")
+    return img.resize((W, H), Image.LANCZOS)
+
+
+def render_settings_header(theme, width, scale=3):
+    T = THEMES.get(theme, THEMES["light"])
+    S = scale
+    W, H = width, 62
+    Ws, Hs = W * S, H * S
+    base = _vgrad(Ws, Hs, T["panel_top"], T["panel_bot"]).convert("RGBA")
+    base.alpha_composite(_radial(Ws, Hs, int(22 * S), int(24 * S), int(150 * S),
+                                 ImageColor.getrgb(T["accent"]), 46))
+    d = ImageDraw.Draw(base)
+    P = 22 * S
+    _spark(d, P + 6 * S, 26 * S, 7 * S, T["accent"])
+    d.text((P + 22 * S, 26 * S), "Settings", font=_font("sb", 16 * S),
+           fill=T["neutral"], anchor="lm")
+    d.text((P, 46 * S), "Applies immediately · saved to ~/.claudometer.toml",
+           font=_font("reg", 9 * S), fill=T["dim"], anchor="lm")
+    d.line([0, Hs - 1, Ws, Hs - 1], fill=T["hair"], width=max(1, S))
+    return base.resize((W, H), Image.LANCZOS)
+
+
+def _radial(w, h, cx, cy, radius, color, max_alpha):
+    g = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(g).ellipse([cx - radius, cy - radius, cx + radius, cy + radius], fill=max_alpha)
+    g = g.filter(ImageFilter.GaussianBlur(radius * 0.5))
+    col = Image.new("RGBA", (w, h), color + (0,))
+    col.putalpha(g)
+    return col
