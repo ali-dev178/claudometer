@@ -131,10 +131,10 @@ def hero_mac(disp):
     # native-style dropdown under the item
     T = render.THEMES["dark"]
     rows = [("head", "Plan: Max (5x)"), ("sep", ""),
-            ("row", f"Session   {disp['session_pct']}%   ·   1h 22m left"),
-            ("row", f"Weekly   {disp['weekly_pct']}%   ·   resets Thu 10:59 AM"),
+            ("row", f"Session   {disp['session_pct']}%   ·   resets in 1h 22m"),
+            ("row", f"Weekly (all)   {disp['weekly_pct']}%   ·   resets Thu Jul 16, 11:00 AM"),
             ("row", f"     Fable   {disp['model_rows'][0]['pct']}%"),
-            ("sep", ""), ("act", "Refresh now"), ("act", "Quit")]
+            ("sep", ""), ("act", "Settings"), ("act", "Refresh now"), ("act", "Quit")]
     mw = 288
     heights = {"head": 30, "sep": 11, "row": 28, "act": 28}
     mh = sum(heights[k] for k, _ in rows) + 12
@@ -268,6 +268,8 @@ def strip_states():
           "session_resets_at": now + timedelta(hours=1, minutes=22)}, "Getting close"),
         ({"session_pct": 94, "session_color": "red", "weekly_pct": 42, "weekly_color": "amber",
           "session_resets_at": now + timedelta(minutes=48)}, "Near the limit"),
+        ({"session_pct": 100, "session_color": "red", "weekly_pct": 42, "weekly_color": "amber",
+          "session_resets_at": now + timedelta(minutes=6)}, "Limit reached"),
         ({"session": "offline — last known"}, "Offline / no data"),
     ]
     bgc = "#e8edf3"

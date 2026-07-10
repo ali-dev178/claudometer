@@ -35,11 +35,11 @@ Today, checking where you stand means **opening the `/usage` panel or the app an
 
 - **`Session 61%`** — how much of your current 5‑hour window is used, with a **live countdown** to reset (`1h 21m left`).
 - **`Weekly 18%`** — your 7‑day all‑models usage.
-- A **color‑coded status dot** (🟢 &lt;50% · 🟡 50–80% · 🔴 &gt;80%) so severity registers in a glance — and a graceful *offline* state when there's no data:
+- A **color‑coded status dot** (🟢 &lt;50% · 🟡 50–80% · 🔴 &gt;80%) so severity registers in a glance — turning to a clear **"limit reached"** when you're maxed out, plus a graceful *offline* state when there's no data:
 
 <p align="center"><img src="assets/strip-states.png" alt="Color-coded severity and offline states" width="500"></p>
 
-**Click it** for a polished breakdown with per‑meter reset times and per‑model (e.g. Opus) usage:
+**Click it** for a polished breakdown with per‑meter reset times and per‑model (e.g. Fable) usage:
 
 <p align="center"><img src="assets/popover-themes.png" alt="Light and dark popover" width="820"></p>
 
@@ -83,7 +83,7 @@ Today, checking where you stand means **opening the `/usage` panel or the app an
 ## Resume when your limit resets
 
 Hit the 5‑hour session limit mid‑task and everything grinds to a halt? Claudometer
-knows the *exact* reset time, so it can help you pick right back up.
+watches your usage recover, so it can help you pick right back up the moment it does.
 
 <p align="center"><img src="assets/resume.png" alt="Resume notifications" width="820"></p>
 
@@ -237,7 +237,8 @@ GET https://api.anthropic.com/api/oauth/usage
 
 The response maps directly onto the UI: the 5‑hour window → **Session**, the
 7‑day all‑models window → **Weekly**, and any per‑model scoped limits → per‑model
-rows (e.g. **Opus**). Tokens are refreshed automatically when they expire.
+rows (e.g. **Fable**), shown only when your account actually has one. Tokens are
+refreshed automatically when they expire.
 
 > This is *true plan %* from Anthropic's backend — **not** a local token‑cost
 > estimate (unlike tools that add up `*.jsonl` transcript costs).

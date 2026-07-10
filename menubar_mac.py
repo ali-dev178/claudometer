@@ -19,6 +19,7 @@ import rumps
 
 import usage_core as core
 import settings
+import config
 
 DOT = {"green": "🟢", "amber": "🟡", "red": "🔴", "grey": "⚪"}
 
@@ -78,6 +79,7 @@ class MenuApp(rumps.App):
         rows.append(None)
         rows.append(self._settings_menu())
         rows.append(rumps.MenuItem("Refresh now", callback=self._refresh))
+        rows.append(rumps.MenuItem("View on GitHub", callback=self._github))
         rows.append(rumps.MenuItem("Quit", callback=rumps.quit_application))
         self.menu.clear()
         self.menu = rows
@@ -139,6 +141,10 @@ class MenuApp(rumps.App):
             settings.save(self._cfg)
         except Exception:
             pass
+
+    def _github(self, _):
+        import webbrowser
+        webbrowser.open(config.REPO_URL)
 
     def _refresh(self, _):
         self._tick(None)

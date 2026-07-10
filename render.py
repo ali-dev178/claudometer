@@ -83,6 +83,8 @@ def _fmt_left(dt):
     secs = int((dt - datetime.now(timezone.utc)).total_seconds())
     if secs <= 0:
         return "resetting"
+    if secs < 60:
+        return "<1m left"  # not "0m left" — that reads as already reset
     h, m = secs // 3600, (secs % 3600) // 60
     if h >= 24:
         d, h = h // 24, h % 24
@@ -97,7 +99,9 @@ def _fmt_at(dt):
         return ""
     loc = dt.astimezone()
     hf = "%#I" if os.name == "nt" else "%-I"
-    return loc.strftime(f"resets %a {hf}:%M %p")
+    df = "%#d" if os.name == "nt" else "%-d"
+    # Include the date — a bare weekday is ambiguous up to a week out.
+    return loc.strftime(f"resets %a %b {df}, {hf}:%M %p")
 
 
 def _fmt_tokens(n):
@@ -204,11 +208,15 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
 
     groups = []
     if "session" in metrics and disp.get("session_pct") is not None:
+        sp = disp["session_pct"]
         g = [("Session ", f_lbl, T["dim"]),
-             (f"{disp['session_pct']}%", f_num, sev_color(T, disp.get("session_color", "grey")))]
-        left = _fmt_left(disp.get("session_resets_at"))
-        if left:
-            g.append(("   " + left, f_dim, T["faint"]))
+             (f"{sp}%", f_num, sev_color(T, disp.get("session_color", "grey")))]
+        if sp >= 100:  # be explicit when you're actually blocked
+            g.append(("   limit reached", f_dim, sev_color(T, "red")))
+        else:
+            left = _fmt_left(disp.get("session_resets_at"))
+            if left:
+                g.append(("   " + left, f_dim, T["faint"]))
         groups.append(g)
     if "weekly" in metrics and disp.get("weekly_pct") is not None:
         groups.append([("Weekly ", f_lbl, T["dim"]),
@@ -313,8 +321,12 @@ def render_popover(disp, theme, scale=3):
 
     def metric(y_lbl, y_val, label, reset, pct, color_name):
         d.text((P, y_lbl * S), label, font=f_lbl, fill=T["dim"], anchor="lm")
+        at_limit = pct is not None and pct >= 100
+        if at_limit:  # make the blocked state unmistakable
+            reset = "limit reached" + (" · " + reset if reset else "")
         if reset:
-            d.text((Ws - P, y_lbl * S), reset, font=f_reset, fill=T["faint"], anchor="rm")
+            d.text((Ws - P, y_lbl * S), reset, font=f_reset,
+                   fill=T["red"] if at_limit else T["faint"], anchor="rm")
         col = sev(color_name)
         _big_pct(d, P, y_val * S, pct, f_big, f_pct, col, T["dim"])
         h = 9 * S
@@ -480,6 +492,7 @@ def render_segment(labels, sel, theme, scale=3):
     """A pill segmented control; returns (image, segment_width_px)."""
     T = THEMES.get(theme, THEMES["light"])
     S = scale
+    labels = list(labels) or [""]  # never divide by / max() over an empty list
     f = _font("sb", 11 * S)
     scratch = ImageDraw.Draw(Image.new("RGB", (1, 1)))
     segw = int(max(scratch.textlength(l, font=f) for l in labels)) + 22 * S
@@ -509,7 +522,7 @@ def render_slider(frac, theme, width, scale=3):
     d = ImageDraw.Draw(img)
     th, m = 6 * S, 10 * S
     y1, y2 = (Hs - th) / 2, (Hs + th) / 2
-    x1, x2 = m, Ws - m
+    x1, x2 = m, max(m + 1, Ws - m)  # keep the track non-inverted at tiny widths
     frac = min(max(frac, 0.0), 1.0)
     kx = x1 + (x2 - x1) * frac
     d.rounded_rectangle([x1, y1, x2, y2], radius=th / 2, fill=T.get("toggle_off", T["track"]))
@@ -536,7 +549,8 @@ def render_stepper(value, theme, scale=3, width=94):
         d.line([gx, 6 * S, gx, Hs - 6 * S], fill=T["hair"], width=max(1, S))
     fsym, fval = _font("sb", 15 * S), _font("sb", 12 * S)
     d.text((third / 2, Hs / 2 - S), "−", font=fsym, fill=T["dim"], anchor="mm")
-    d.text((Ws / 2, Hs / 2), str(value), font=fval, fill=T["neutral"], anchor="mm")
+    d.text((Ws / 2, Hs / 2), _elide(d, str(value), fval, third - 6 * S),
+           font=fval, fill=T["neutral"], anchor="mm")
     d.text((2.5 * third, Hs / 2 - S), "+", font=fsym, fill=T["accent"], anchor="mm")
     return img.resize((W, H), Image.LANCZOS)
 

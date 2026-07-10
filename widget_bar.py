@@ -27,6 +27,7 @@ import render
 import settings
 import cost
 import resume
+import config
 
 POS_FILE = Path.home() / ".claude_widget_bar.json"
 TASKBAR_H = 48
@@ -125,6 +126,14 @@ def _log_exc(_exc=None):
             fh.write(traceback.format_exc() + "\n")
     except Exception:
         pass
+
+
+def _open_url(url):
+    try:
+        import webbrowser
+        webbrowser.open(url)
+    except Exception:
+        _log_exc()
 
 
 # --------------------------------------------------------------------------- #
@@ -605,13 +614,23 @@ class SettingsWindow:
         _StepperW(rm, self.v_maxturns, 1, 200, theme, bg, width=96).pack(side="right")
 
         self._fbar = tk.Frame(body, bg=bg)
-        self._fbar.pack(fill="x", pady=(18, 18))
+        self._fbar.pack(fill="x", pady=(18, 6))
         tk.Button(self._fbar, text="Save", command=self._save, bg=T["accent"], fg="#ffffff",
                   activebackground=T["accent"], activeforeground="#ffffff", bd=0, relief="flat",
                   font=("Segoe UI Semibold", 10), padx=24, pady=6, cursor="hand2").pack(side="right")
         tk.Button(self._fbar, text="Cancel", command=self.close, bg=field, fg=fg,
                   activebackground=field, activeforeground=fg, bd=0, relief="flat",
                   font=("Segoe UI", 10), padx=18, pady=6, cursor="hand2").pack(side="right", padx=(0, 10))
+
+        # footer: version + a link to the project (releases / news / star)
+        foot = tk.Frame(body, bg=bg)
+        foot.pack(fill="x", pady=(2, 12))
+        tk.Label(foot, text=f"Claudometer v{config.APP_VERSION}", bg=bg, fg=T["faint"],
+                 font=("Segoe UI", 8)).pack(side="left")
+        gh = tk.Label(foot, text="View on GitHub  ↗", bg=bg, fg=T["accent"],
+                      font=("Segoe UI", 8), cursor="hand2")
+        gh.pack(side="right")
+        gh.bind("<Button-1>", lambda e: _open_url(config.REPO_URL))
 
         if cfg.get("resume_auto") or cfg.get("resume_skip_permissions"):
             self._toggle_advanced()
@@ -1061,6 +1080,7 @@ class BarWidget:
         menu.add_command(label="Settings…", command=self._open_settings)
         menu.add_command(label="Refresh now", command=self._refresh_now)
         menu.add_separator()
+        menu.add_command(label="View on GitHub", command=lambda: _open_url(config.REPO_URL))
         menu.add_command(label="Quit", command=self._quit)
         try:
             menu.tk_popup(e.x_root, e.y_root)

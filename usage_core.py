@@ -474,11 +474,17 @@ def poll_once(state: PollState):
 # --------------------------------------------------------------------------- #
 # Formatting for display
 # --------------------------------------------------------------------------- #
+# Only these kinds get a visible row in the UI; the headline (critical) limit is
+# chosen from among them so the face number always maps to a shown meter.
+_SHOWN_KINDS = ("session", "weekly_all", "weekly_scoped")
+
+
 def critical_limit(usage: Usage) -> Optional[Limit]:
-    """The limit the user is closest to hitting (highest percent)."""
-    if not usage.limits:
+    """The limit the user is closest to hitting (highest percent among shown)."""
+    shown = [limit for limit in usage.limits if limit.kind in _SHOWN_KINDS]
+    if not shown:
         return None
-    return max(usage.limits, key=lambda limit: limit.percent)
+    return max(shown, key=lambda limit: limit.percent)
 
 
 def color_for(pct: float) -> str:
@@ -494,7 +500,9 @@ def _reset_in(resets_at: Optional[datetime]) -> str:
         return ""
     secs = int((resets_at - datetime.now(timezone.utc)).total_seconds())
     if secs <= 0:
-        return "resetting now"
+        return "resetting"
+    if secs < 60:
+        return "resets in <1m"  # avoid a misleading "resets in 0m" for a full minute
     hours, mins = secs // 3600, (secs % 3600) // 60
     if hours >= 24:
         days, hours = hours // 24, hours % 24
@@ -508,8 +516,10 @@ def _reset_at(resets_at: Optional[datetime]) -> str:
     if not resets_at:
         return ""
     local = resets_at.astimezone()  # convert UTC -> system local
-    hour_fmt = "%#I" if os.name == "nt" else "%-I"  # no leading zero
-    return "resets " + local.strftime(f"%a {hour_fmt}:%M %p")
+    hf = "%#I" if os.name == "nt" else "%-I"  # no leading zero (hour)
+    df = "%#d" if os.name == "nt" else "%-d"  # no leading zero (day)
+    # Include the date: a bare weekday is ambiguous for a reset up to a week out.
+    return local.strftime(f"resets %a %b {df}, {hf}:%M %p")
 
 
 def _find(usage: Usage, kind: str) -> Optional[Limit]:
@@ -545,11 +555,16 @@ def format_breakdown(usage: Usage) -> dict:
 
     session = _find(usage, "session")
     weekly = _find(usage, "weekly_all")
-    scoped = [l for l in usage.limits if l.kind == "weekly_scoped"]
+    # Drop a scoped meter that's both empty and inactive (e.g. a perpetual
+    # "Fable 0%") — it's noise; keep any scoped limit that's used or active.
+    scoped = [l for l in usage.limits
+              if l.kind == "weekly_scoped" and not (l.percent <= 0 and not l.is_active)]
 
     session_line = None
     if session:
         session_line = f"Session   {_pct(session.percent)}"
+        if session.percent >= 100:
+            session_line += "   ·   limit reached"
         reset = _reset_in(session.resets_at)
         if reset:
             session_line += f"   ·   {reset}"
@@ -557,6 +572,8 @@ def format_breakdown(usage: Usage) -> dict:
     weekly_line = None
     if weekly:
         weekly_line = f"Weekly (all)   {_pct(weekly.percent)}"
+        if weekly.percent >= 100:
+            weekly_line += "   ·   limit reached"
         reset = _reset_at(weekly.resets_at)
         if reset:
             weekly_line += f"   ·   {reset}"
@@ -600,8 +617,8 @@ def status_display(status: Status) -> dict:
     # Faces are drawn into the icon bitmap, so keep them to glyphs the tray
     # font reliably has (no ellipsis / em dash).
     table = {
-        Status.RATE_LIMITED: ("...", "amber", "rate limited, backing off"),
-        Status.OFFLINE: ("-", "grey", "offline - showing last known"),
+        Status.RATE_LIMITED: ("!", "red", "usage limit reached"),
+        Status.OFFLINE: ("-", "grey", "offline"),
         Status.NO_DATA: ("-", "grey", "no usage data yet"),
         Status.NO_CREDS: ("!", "grey", "not logged in to Claude Code"),
         Status.ERROR: ("!", "grey", "error fetching usage"),
