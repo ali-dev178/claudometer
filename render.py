@@ -50,22 +50,35 @@ _FONT_FILES = {
 }
 
 
+_MAC_FONTS = {  # macOS system fonts (Helvetica Neue is reliably present)
+    "sb": "/System/Library/Fonts/HelveticaNeue.ttc",
+    "bold": "/System/Library/Fonts/HelveticaNeue.ttc",
+    "light": "/System/Library/Fonts/HelveticaNeue.ttc",
+}
+
+
 def _font(kind, size):
     size = int(size)
     k = (kind, size)
     if k in _FCACHE:
         return _FCACHE[k]
-    for name in (_FONT_FILES.get(kind, "segoeui.ttf"), "segoeui.ttf", "arial.ttf"):
+    win = _FONT_FILES.get(kind, "segoeui.ttf")
+    candidates = (
+        "C:/Windows/Fonts/" + win,                                  # Windows (preferred)
+        "C:/Windows/Fonts/segoeui.ttf",                             # Windows regular fallback
+        _MAC_FONTS.get(kind, "/System/Library/Fonts/HelveticaNeue.ttc"),  # macOS
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",          # Linux
+        "C:/Windows/Fonts/arial.ttf", win, "arial.ttf",            # last resort
+    )
+    f = None
+    for path in candidates:
         try:
-            f = ImageFont.truetype("C:/Windows/Fonts/" + name, size)
+            f = ImageFont.truetype(path, size)
             break
         except OSError:
-            try:
-                f = ImageFont.truetype(name, size)
-                break
-            except OSError:
-                continue
-    else:
+            continue
+    if f is None:
         try:
             f = ImageFont.load_default(size)  # Pillow >=10.1: a sized FreeType font
         except TypeError:                     # older Pillow: legacy bitmap font
