@@ -421,6 +421,7 @@ def poll_once(state: PollState):
     # (invalid_grant) means re-login is required — track it to surface NO_CREDS.
     rejected = False
     refreshed = False
+    refresh_failed = False
     if _expiring_soon(creds) and refresh_tok:
         try:
             token = _refresh_and_persist(refresh_tok, full)
@@ -429,7 +430,7 @@ def poll_once(state: PollState):
         except RefreshRejected:
             rejected = True
         except RefreshFailed:
-            pass  # transient — try the existing token anyway
+            refresh_failed = True  # transient — try the existing token anyway
 
     status, usage = fetch_usage(token, plan, rate_tier)
 
@@ -441,7 +442,7 @@ def poll_once(state: PollState):
         except RefreshRejected:
             rejected = True
         except RefreshFailed:
-            pass
+            refresh_failed = True
 
     if status == "ok":
         state.backoff = 0
@@ -456,6 +457,8 @@ def poll_once(state: PollState):
     if status == "no_data":
         return Status.NO_DATA
     if rejected or status == "unauthorized":
+        if not rejected and refresh_failed:
+            return Status.OFFLINE  # couldn't refresh due to a network blip, not re-login
         return Status.NO_CREDS  # re-login required
     return Status.ERROR
 

@@ -27,7 +27,7 @@ PRICING = {
 
 def _key_for(model: str):
     m = str(model or "").lower()
-    if "fable" in m:
+    if "fable" in m or "mythos" in m:  # Mythos 5 shares Fable 5 pricing
         return "fable"
     if "opus" in m:
         return "opus"
@@ -40,7 +40,7 @@ def _key_for(model: str):
 
 def _n(usage: dict, k: str) -> float:
     v = usage.get(k)
-    return v if isinstance(v, (int, float)) else 0  # tolerate explicit nulls
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
 
 
 def _tok(usage: dict) -> float:

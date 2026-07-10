@@ -522,9 +522,10 @@ class BarWidget:
 
     # -- threshold alerts ------------------------------------------------- #
     def _maybe_alert(self, disp):
-        """Fire a toast when session/weekly crosses a configured threshold
-        upward. Runs on the main thread (called from _refresh_ui)."""
-        if not self._alerts_on:
+        """Fire a toast when session/weekly crosses a configured threshold upward.
+        Runs on the main thread. Skipped while hidden (fullscreen) so a crossing
+        isn't marked-alerted-but-suppressed — it's re-detected on unhide."""
+        if not self._alerts_on or self._hidden:
             return
         for which in ("session", "weekly"):
             pct = disp.get(f"{which}_pct")
@@ -577,6 +578,8 @@ class BarWidget:
         decreases, so the <=90 crossing is reliably observed. Main thread."""
         if not (self._resume_notify or self._resume_auto):
             return
+        if self._resume_toast is not None or self._resume_retry_after is not None:
+            return  # a resume is already in flight — don't re-detect or re-fire
         sp = disp.get("session_pct")
         if sp is None:
             return
@@ -755,6 +758,7 @@ class BarWidget:
                 self._resume_retry_after = self.root.after(15000, self._fire_resume)
         elif not fs and self._hidden:
             self._hidden = False
+            self._processed_seq = -1  # re-process the latest poll (alerts) on unhide
             try:
                 self.root.deiconify()
                 self.root.attributes("-topmost", True)

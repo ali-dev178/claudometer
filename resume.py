@@ -59,7 +59,7 @@ def last_session(config_dir=None):
                         last = line
             if last:
                 o = json.loads(last)
-                if o.get("sessionId") and o.get("project"):
+                if o.get("sessionId") and o.get("project") and Path(o["project"]).exists():
                     return {"session_id": o["sessionId"], "cwd": o["project"]}
         except Exception:
             pass

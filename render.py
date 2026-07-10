@@ -337,8 +337,9 @@ def render_popover(disp, theme, scale=3):
         d.text((P, cost_y * S), "Today", font=f_lbl, fill=T["dim"], anchor="lm")
         tok = _fmt_tokens(disp.get("cost_tokens") or 0)
         usd = _fmt_usd(disp.get("cost_usd") or 0.0)
-        d.text((Ws - P, cost_y * S), f"{tok} tokens   ·   ~{usd}", font=f_rownum,
-               fill=T["neutral"], anchor="rm")
+        cw = (Ws - P) - (P + d.textlength("Today", font=f_lbl)) - 16 * S
+        d.text((Ws - P, cost_y * S), _elide(d, f"{tok} tokens   ·   ~{usd}", f_rownum, cw),
+               font=f_rownum, fill=T["neutral"], anchor="rm")
 
     # footer
     d.line([P, foot_div * S, Ws - P, foot_div * S], fill=T["hair"], width=max(1, S))

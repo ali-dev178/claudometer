@@ -3,6 +3,10 @@
 Zero-dependency: uses the stdlib ``tomllib`` when present (Python 3.11+),
 otherwise a tiny built-in parser for the flat keys we support. Everything has a
 sensible default, so the file is entirely optional. Changes apply on restart.
+
+The built-in fallback parser (Python < 3.11 only) handles single-line values:
+keep arrays on one line and avoid backslash-escaped quotes. On 3.11+ full TOML
+is supported via tomllib.
 """
 
 import os
@@ -134,7 +138,7 @@ def load() -> dict:
         cfg["theme"] = "auto"
     if not isinstance(cfg["metrics"], list) or not cfg["metrics"]:
         cfg["metrics"] = list(DEFAULTS["metrics"])
-    cfg["metrics"] = [m for m in cfg["metrics"] if m in _VALID_METRICS] or ["session", "weekly"]
+    cfg["metrics"] = list(dict.fromkeys(m for m in cfg["metrics"] if m in _VALID_METRICS)) or ["session", "weekly"]
     cfg["alerts"] = bool(cfg["alerts"])
     thr = []
     for t in cfg["alert_thresholds"] if isinstance(cfg["alert_thresholds"], list) else []:
