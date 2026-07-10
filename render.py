@@ -97,6 +97,18 @@ def _fmt_at(dt):
     return loc.strftime(f"resets %a {hf}:%M %p")
 
 
+def _fmt_tokens(n):
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.0f}K"
+    return str(int(n))
+
+
+def _fmt_usd(x):
+    return f"${x:,.2f}"
+
+
 # --------------------------------------------------------------------------- #
 # Drawing primitives
 # --------------------------------------------------------------------------- #
@@ -214,14 +226,22 @@ def render_popover(disp, theme, scale=3):
 
     S1_LBL, S1_VAL = 66, 94
     S2_LBL, S2_VAL = 130, 158
+    has_cost = disp.get("cost_usd") is not None
     if rows:
         div_y = 188
         rows_top = div_y + 22
         content_bottom = rows_top + (len(rows) - 1) * 28
-        foot_div = content_bottom + 20
+        base_gap = 18
     else:
+        div_y = rows_top = None
         content_bottom = S2_VAL + 6
-        foot_div = content_bottom + 14
+        base_gap = 14
+    if has_cost:
+        cost_y = content_bottom + 20
+        foot_div = cost_y + 13
+    else:
+        cost_y = None
+        foot_div = content_bottom + base_gap
     foot_y = foot_div + 20
     H = foot_y + 24
 
@@ -284,6 +304,14 @@ def render_popover(disp, theme, scale=3):
             d.text((Ws - P, y), f"{row['pct']}%", font=f_rownum,
                    fill=sev(row["color"]), anchor="rm")
             y += 28 * S
+
+    # estimated cost (optional)
+    if has_cost:
+        d.text((P, cost_y * S), "Today", font=f_lbl, fill=T["dim"], anchor="lm")
+        tok = _fmt_tokens(disp.get("cost_tokens", 0))
+        usd = _fmt_usd(disp.get("cost_usd", 0.0))
+        d.text((Ws - P, cost_y * S), f"{tok} tokens   ·   ~{usd}", font=f_rownum,
+               fill=T["neutral"], anchor="rm")
 
     # footer
     d.line([P, foot_div * S, Ws - P, foot_div * S], fill=T["hair"], width=max(1, S))

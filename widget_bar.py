@@ -22,6 +22,7 @@ from PIL import ImageTk
 import usage_core as core
 import render
 import settings
+import cost
 
 POS_FILE = Path.home() / ".claude_widget_bar.json"
 TASKBAR_H = 48
@@ -160,6 +161,7 @@ class Popover:
             render._fmt_at(disp.get("weekly_resets_at")),
             tuple((r["label"], r["pct"], r["color"]) for r in disp.get("model_rows") or []),
             disp.get("plan"),
+            round(disp.get("cost_usd") or 0, 2),
         )
 
     def _render(self, force=False):
@@ -494,6 +496,15 @@ class BarWidget:
                 disp = core.status_display(core.Status.NO_CREDS)
             except Exception:
                 disp = core.status_display(core.Status.ERROR)
+            if self._show_cost and isinstance(result, core.Usage):
+                try:
+                    c = cost.compute_today()
+                    if c:
+                        disp = dict(disp)
+                        disp["cost_tokens"] = c["tokens"]
+                        disp["cost_usd"] = c["cost"]
+                except Exception:
+                    pass
             with self._lock:
                 self._disp = disp
             self._maybe_alert(disp)
