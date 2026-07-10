@@ -77,6 +77,8 @@ def _ps(s):  # PowerShell single-quote
 
 def open_terminal(cwd, session_id):
     """Tier 1: open a visible terminal in *cwd* running `claude --resume <id>`."""
+    if not session_id or not cwd:
+        return False
     inner = f"{CLAUDE} --resume {session_id}"
     try:
         if sys.platform == "win32":
@@ -111,7 +113,10 @@ def run_auto(cwd, session_id, prompt, skip_permissions=False, max_turns=30, conf
     --permission-mode acceptEdits (edits allowed, other commands still gated)
     unless the user explicitly opts into --dangerously-skip-permissions.
     """
-    log = _config_dir(config_dir) / f"claudometer-resume-{session_id[:8]}.log"
+    if not session_id:
+        return None
+    safe = "".join(c for c in str(session_id) if c.isalnum() or c in "-_")[:40] or "session"
+    log = _config_dir(config_dir) / f"claudometer-resume-{safe}.log"
     flags = ["--resume", session_id, "-p", prompt]
     if max_turns:
         flags += ["--max-turns", str(int(max_turns))]
@@ -121,9 +126,10 @@ def run_auto(cwd, session_id, prompt, skip_permissions=False, max_turns=30, conf
         flags += ["--permission-mode", "acceptEdits"]
     try:
         if sys.platform == "win32":
-            # 'claude' must be bare so PowerShell runs it as a command (resolved
-            # on PATH); quote only values that contain spaces (the prompt).
-            rendered = " ".join(_ps(f) if " " in f else f for f in flags)
+            # 'claude' stays bare so PowerShell runs it as a command; quote EVERY
+            # arg (PowerShell passes single-quoted tokens to the native command
+            # literally), so metacharacters in the prompt can't break out.
+            rendered = " ".join(_ps(f) for f in flags)
             cmd = (f"Set-Location -LiteralPath {_ps(cwd)}; "
                    f"claude {rendered} *> {_ps(str(log))}")
             subprocess.Popen(["powershell", "-NoProfile", "-Command", cmd],

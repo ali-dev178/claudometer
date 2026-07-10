@@ -91,14 +91,7 @@ def _mini_val(v):
         return v
 
 
-def _parse(text: str) -> dict:
-    try:
-        import tomllib
-        return tomllib.loads(text)
-    except ModuleNotFoundError:
-        pass
-    except Exception:
-        return {}
+def _mini_parse(text: str) -> dict:
     out = {}
     for raw in text.splitlines():
         line = raw.strip()
@@ -107,6 +100,17 @@ def _parse(text: str) -> dict:
         k, v = line.split("=", 1)
         out[k.strip()] = _mini_val(_strip_comment(v.strip()))
     return out
+
+
+def _parse(text: str) -> dict:
+    try:
+        import tomllib
+        return tomllib.loads(text)
+    except ModuleNotFoundError:
+        pass  # Python < 3.11
+    except Exception:
+        pass  # malformed TOML — recover what we can with the tolerant parser
+    return _mini_parse(text)
 
 
 def load() -> dict:
@@ -132,10 +136,15 @@ def load() -> dict:
         cfg["metrics"] = list(DEFAULTS["metrics"])
     cfg["metrics"] = [m for m in cfg["metrics"] if m in _VALID_METRICS] or ["session", "weekly"]
     cfg["alerts"] = bool(cfg["alerts"])
-    try:
-        cfg["alert_thresholds"] = sorted({int(t) for t in cfg["alert_thresholds"] if 1 <= int(t) <= 100})
-    except (TypeError, ValueError):
-        cfg["alert_thresholds"] = list(DEFAULTS["alert_thresholds"])
+    thr = []
+    for t in cfg["alert_thresholds"] if isinstance(cfg["alert_thresholds"], list) else []:
+        try:
+            v = int(t)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= v <= 100:
+            thr.append(v)
+    cfg["alert_thresholds"] = sorted(set(thr)) or list(DEFAULTS["alert_thresholds"])
     cfg["show_cost"] = bool(cfg["show_cost"])
     if not (isinstance(cfg["accent"], str) and cfg["accent"].startswith("#")):
         cfg["accent"] = None

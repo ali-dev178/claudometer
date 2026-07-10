@@ -93,9 +93,12 @@ def _parse_dt(value) -> Optional[datetime]:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
         return None
+    if dt.tzinfo is None:  # always return tz-aware UTC (avoids naive/aware crashes)
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _scope_label(scope) -> Optional[str]:

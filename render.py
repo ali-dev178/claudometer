@@ -101,11 +101,24 @@ def _fmt_at(dt):
 
 
 def _fmt_tokens(n):
+    n = int(n or 0)
+    if n < 0:
+        n = 0
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}M"
     if n >= 1_000:
         return f"{n / 1_000:.0f}K"
-    return str(int(n))
+    return str(n)
+
+
+def _elide(draw, text, font, max_w):
+    """Truncate text with an ellipsis so it fits within max_w pixels."""
+    text = str(text)
+    if max_w <= 0 or draw.textlength(text, font=font) <= max_w:
+        return text
+    while text and draw.textlength(text + "…", font=font) > max_w:
+        text = text[:-1]
+    return (text + "…") if text else "…"
 
 
 def _fmt_usd(x):
@@ -177,22 +190,22 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
     groups = []
     if "session" in metrics and disp.get("session_pct") is not None:
         g = [("Session ", f_lbl, T["dim"]),
-             (f"{disp['session_pct']}%", f_num, sev_color(T, disp["session_color"]))]
+             (f"{disp['session_pct']}%", f_num, sev_color(T, disp.get("session_color", "grey")))]
         left = _fmt_left(disp.get("session_resets_at"))
         if left:
             g.append(("   " + left, f_dim, T["faint"]))
         groups.append(g)
     if "weekly" in metrics and disp.get("weekly_pct") is not None:
         groups.append([("Weekly ", f_lbl, T["dim"]),
-                       (f"{disp['weekly_pct']}%", f_num, sev_color(T, disp["weekly_color"]))])
+                       (f"{disp['weekly_pct']}%", f_num, sev_color(T, disp.get("weekly_color", "grey")))])
     if not groups:
         groups.append([("Claude  " + (disp.get("session") or "—"), f_dim, T["dim"])])
 
     cand = []
     if disp.get("session_pct") is not None:
-        cand.append((disp["session_pct"], disp["session_color"]))
+        cand.append((disp["session_pct"], disp.get("session_color", "grey")))
     if disp.get("weekly_pct") is not None:
-        cand.append((disp["weekly_pct"], disp["weekly_color"]))
+        cand.append((disp["weekly_pct"], disp.get("weekly_color", "grey")))
     dot_color = sev_color(T, max(cand, key=lambda c: c[0])[1]) if cand else T["dim"]
 
     tmp = ImageDraw.Draw(Image.new("RGB", (4, 4)))
@@ -276,8 +289,9 @@ def render_popover(disp, theme, scale=3):
     _spark(d, P + 8 * S, 28 * S, 8 * S, T["accent"])
     d.text((P + 24 * S, 28 * S), "Claudometer", font=f_title, fill=T["neutral"], anchor="lm")
     plan = (disp.get("plan") or "").replace("Plan: ", "") or "—"
-    if len(plan) > 22:  # keep the badge from overrunning the title
-        plan = plan[:21] + "…"
+    title_right = P + 24 * S + d.textlength("Claudometer", font=f_title)
+    max_plan_w = (Ws - P) - title_right - 14 * S - 18 * S  # gap + badge padding
+    plan = _elide(d, plan, f_badge, max(max_plan_w, 24 * S))
     _badge_right(d, Ws - P, 28 * S, plan, f_badge, T, S)
 
     bar_x1, bar_x2 = P + 60 * S, Ws - P
@@ -303,7 +317,8 @@ def render_popover(disp, theme, scale=3):
         d.line([P, div_y * S, Ws - P, div_y * S], fill=T["hair"], width=max(1, S))
         y = rows_top * S
         for row in rows:
-            d.text((P, y), row["label"], font=f_row, fill=T["neutral"], anchor="lm")
+            d.text((P, y), _elide(d, row["label"], f_row, 58 * S), font=f_row,
+                   fill=T["neutral"], anchor="lm")
             hh = 7 * S
             _rrbar(d, P + 66 * S, y - hh / 2, Ws - P - 46 * S, y + hh / 2,
                    row["pct"], sev(row["color"]), T["track"])
@@ -314,8 +329,8 @@ def render_popover(disp, theme, scale=3):
     # estimated cost (optional)
     if has_cost:
         d.text((P, cost_y * S), "Today", font=f_lbl, fill=T["dim"], anchor="lm")
-        tok = _fmt_tokens(disp.get("cost_tokens", 0))
-        usd = _fmt_usd(disp.get("cost_usd", 0.0))
+        tok = _fmt_tokens(disp.get("cost_tokens") or 0)
+        usd = _fmt_usd(disp.get("cost_usd") or 0.0)
         d.text((Ws - P, cost_y * S), f"{tok} tokens   ·   ~{usd}", font=f_rownum,
                fill=T["neutral"], anchor="rm")
 
@@ -363,8 +378,10 @@ def render_toast(pct, title, subtitle, color_name, theme, scale=3):
            fill="#ffffff", anchor="mm")
 
     tx = cx1 + chip + 16 * S
-    d.text((tx, 26 * S), title, font=_font("sb", 13 * S), fill=T["neutral"], anchor="lm")
-    d.text((tx, 45 * S), subtitle, font=_font("reg", 11 * S), fill=T["dim"], anchor="lm")
+    avail = W * S - tx - 14 * S
+    ft, fs = _font("sb", 13 * S), _font("reg", 11 * S)
+    d.text((tx, 26 * S), _elide(d, title, ft, avail), font=ft, fill=T["neutral"], anchor="lm")
+    d.text((tx, 45 * S), _elide(d, subtitle, fs, avail), font=fs, fill=T["dim"], anchor="lm")
     return base.resize((W, H), Image.LANCZOS)
 
 
@@ -397,6 +414,8 @@ def render_action_toast(title, subtitle, action_label, theme, scale=3):
     d.text(((bx1 + bx2) / 2, (by1 + by2) / 2), action_label, font=f_btn, fill="#ffffff", anchor="mm")
 
     tx = ix + isz + 15 * S
-    d.text((tx, 27 * S), title, font=_font("sb", 13 * S), fill=T["neutral"], anchor="lm")
-    d.text((tx, 46 * S), subtitle, font=_font("reg", 11 * S), fill=T["dim"], anchor="lm")
+    avail = bx1 - tx - 10 * S
+    ft, fs = _font("sb", 13 * S), _font("reg", 11 * S)
+    d.text((tx, 27 * S), _elide(d, title, ft, avail), font=ft, fill=T["neutral"], anchor="lm")
+    d.text((tx, 46 * S), _elide(d, subtitle, fs, avail), font=fs, fill=T["dim"], anchor="lm")
     return base.resize((W, H), Image.LANCZOS)

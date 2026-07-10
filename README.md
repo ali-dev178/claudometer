@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-informational" alt="platform">
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-informational" alt="platform">
   <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="python">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/badge/setup-zero%20config-success" alt="zero config">
@@ -96,9 +96,10 @@ Configure both in the [config file](#configuration).
 You need a **Claude Pro / Max / Team** subscription and to have **signed into Claude Code** at least once (that's where the credentials live).
 
 ### Option A — Standalone binary (no Python)
-Grab `Claudometer.exe` (Windows) or `Claudometer.app` (macOS) from
-[**Releases**](https://github.com/<your-username>/claudometer/releases), run it,
-and drag the readout where you like. Add it to startup to launch on login.
+Grab `Claudometer.exe` (Windows) or `Claudometer-macos.zip` (macOS) from
+[**Releases**](https://github.com/<your-username>/claudometer/releases) — unzip the
+macOS build to get `Claudometer.app` — then run it and drag the readout where you
+like. Add it to startup to launch on login.
 
 ### Option B — From source (Python 3.9+)
 ```bash
@@ -173,6 +174,7 @@ resume_notify = true             # one-click resume when the session limit reset
 resume_auto = false              # Tier 2: unattended auto-resume (opt-in, risky)
 resume_prompt = "Continue where you left off."
 resume_max_turns = 30            # Tier 2: cap agentic turns
+# resume_skip_permissions = false  # Tier 2: --dangerously-skip-permissions (else acceptEdits)
 ```
 
 Environment overrides:

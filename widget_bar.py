@@ -523,7 +523,9 @@ class BarWidget:
                 continue
             reached = {t for t in self._thresholds if pct >= t}
             new = reached - self._alerted[which]
-            self._alerted[which] = reached  # drops when the window resets too
+            # Sticky: keep a threshold "alerted" until pct falls well below it, so
+            # boundary jitter can't re-fire; a real reset (big drop) clears it.
+            self._alerted[which] = {t for t in (self._alerted[which] | reached) if pct >= t - 5}
             if new and not first:
                 self._queue_toast(which, pct, disp)
 
@@ -565,18 +567,13 @@ class BarWidget:
                     self._resume_snapshot = snap
                     self._resume_state = "capped"
         elif self._resume_state == "capped":
-            # Authoritative reset signal is the reset time passing; fall back to
-            # a large utilization drop only when no reset time is known.
-            ra = (self._resume_snapshot or {}).get("resets_at")
-            reset = False
-            if ra is not None:
-                try:
-                    reset = datetime.now(timezone.utc) >= ra
-                except Exception:
-                    reset = False
-            elif sp <= 50:
-                reset = True
-            if reset:
+            # Keep the displayed reset time fresh, and fire when utilization
+            # actually drops below the cap (you have real headroom again). Using
+            # the drop as the trigger is robust to the rolling 5h window's
+            # resets_at drifting while you stay capped.
+            if self._resume_snapshot is not None:
+                self._resume_snapshot["resets_at"] = disp.get("session_resets_at")
+            if sp <= 90:
                 snap = self._resume_snapshot
                 self._resume_snapshot = None
                 self._resume_state = "idle"
@@ -593,6 +590,9 @@ class BarWidget:
             self._resume_retry_after = None
         if self._hidden:  # over fullscreen — retry shortly, don't lose it
             self._resume_retry_after = self.root.after(15000, lambda: self._fire_resume(snap))
+            return
+        snap = self._validate_resume(snap)  # captured hours ago — re-check
+        if not snap:
             return
         try:
             if self._resume_toast is not None:
@@ -611,17 +611,35 @@ class BarWidget:
         except Exception:
             pass
 
-    def _do_auto_resume(self, snap):
+    def _validate_resume(self, snap):
+        """The snapshot was captured when the session capped (hours ago). Keep it
+        if its directory still exists; otherwise fall back to the most recent
+        session so we don't resume a defunct path."""
         try:
-            resume.run_auto(snap["cwd"], snap["session_id"], self._resume_prompt,
-                            skip_permissions=self._resume_skip_perms,
-                            max_turns=self._resume_max_turns)
-            self._resume_toast = ResumeToast(
-                self.root, self._theme, "Auto-resumed session",
-                "running headless · check the log", "OK", on_click=None,
-                timeout_ms=9000)
+            if snap and snap.get("cwd") and Path(snap["cwd"]).exists():
+                return snap
         except Exception:
             pass
+        return resume.last_session()
+
+    def _do_auto_resume(self, snap):
+        try:
+            log = resume.run_auto(snap["cwd"], snap["session_id"], self._resume_prompt,
+                                  skip_permissions=self._resume_skip_perms,
+                                  max_turns=self._resume_max_turns)
+            if log:
+                self._resume_toast = ResumeToast(
+                    self.root, self._theme, "Auto-resumed session",
+                    "running headless · check the log", "OK", on_click=None,
+                    timeout_ms=9000)
+            else:  # run_auto failed — offer a supervised fallback
+                self._resume_toast = ResumeToast(
+                    self.root, self._theme, "Auto-resume failed",
+                    "click to resume manually", "Resume",
+                    on_click=lambda: resume.open_terminal(snap["cwd"], snap["session_id"]),
+                    timeout_ms=30000)
+        except Exception:
+            _log_exc()
 
     def _popup_menu(self, e):
         menu = tk.Menu(self.root, tearoff=0)
@@ -702,23 +720,21 @@ class BarWidget:
     def _refresh_ui(self):
         # Hide over fullscreen apps (movies, games, presentations) like the
         # taskbar does; show again when they exit.
-        if _fullscreen_active():
-            if not self._hidden:
-                self._hidden = True
-                for t in (self._popover, self._toast, self._resume_toast):
-                    if t is not None:
-                        try:
-                            t.close()
-                        except Exception:
-                            pass
-                self._popover = self._toast = self._resume_toast = None
-                try:
-                    self.root.withdraw()
-                except Exception:
-                    pass
-            self.root.after(1000, self._refresh_ui)
-            return
-        if self._hidden:
+        fs = _fullscreen_active()
+        if fs and not self._hidden:
+            self._hidden = True
+            for t in (self._popover, self._toast, self._resume_toast):
+                if t is not None:
+                    try:
+                        t.close()
+                    except Exception:
+                        pass
+            self._popover = self._toast = self._resume_toast = None
+            try:
+                self.root.withdraw()
+            except Exception:
+                pass
+        elif not fs and self._hidden:
             self._hidden = False
             try:
                 self.root.deiconify()
@@ -726,24 +742,32 @@ class BarWidget:
             except Exception:
                 pass
 
+        # Process each new poll for alerts/resume state on the main thread — even
+        # while hidden, so crossings/caps during fullscreen aren't lost. The toast
+        # creation itself is deferred/suppressed via self._hidden.
+        with self._lock:
+            disp = self._disp
+            seq = self._poll_seq
+        if disp is not None and seq != self._processed_seq:
+            self._processed_seq = seq
+            try:
+                self._maybe_alert(disp)
+                self._track_resume(disp)
+            except Exception:
+                _log_exc()
+
+        if self._hidden:
+            self.root.after(1000, self._refresh_ui)
+            return
+
+        # visible-only work
         self._bg_ticks += 1
         if self._bg_ticks >= 3:
             self._bg_ticks = 0
             rgb = self._sample_bg()
             if rgb:
                 self._apply_bg(rgb)
-
-        with self._lock:
-            disp = self._disp
-            seq = self._poll_seq
         if disp is not None:
-            if seq != self._processed_seq:  # new poll — alerts/resume on main thread
-                self._processed_seq = seq
-                try:
-                    self._maybe_alert(disp)
-                    self._track_resume(disp)
-                except Exception:
-                    _log_exc()
             sig = self._strip_sig(disp)
             if sig != self._sig:
                 self._draw(disp)

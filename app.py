@@ -38,8 +38,11 @@ def main() -> None:
     elif mode == "both":
         # Run the tray in a separate process (its own message loop) and the
         # floating bar here on the main thread.
-        here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py")
-        subprocess.Popen([sys.executable, here, "tray"])
+        if getattr(sys, "frozen", False):  # packaged .exe re-reads argv
+            subprocess.Popen([sys.executable, "tray"])
+        else:
+            here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py")
+            subprocess.Popen([sys.executable, here, "tray"])
         _run_bar()
     else:  # "", "tray", win32 / linux default
         _run_tray()

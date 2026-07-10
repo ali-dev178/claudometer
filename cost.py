@@ -26,7 +26,7 @@ PRICING = {
 
 
 def _key_for(model: str):
-    m = (model or "").lower()
+    m = str(model or "").lower()
     if "fable" in m:
         return "fable"
     if "opus" in m:
@@ -70,35 +70,35 @@ def compute_today(config_dir=None):
                 for line in fh:
                     if '"usage"' not in line:
                         continue
-                    try:
+                    try:  # one malformed line must not abort the whole scan
                         obj = json.loads(line)
-                    except ValueError:
-                        continue
-                    if obj.get("type") != "assistant":
-                        continue
-                    ts = obj.get("timestamp")
-                    if ts:
-                        try:
-                            if datetime.fromisoformat(ts.replace("Z", "+00:00")) < start:
-                                continue
-                        except ValueError:
-                            continue  # can't date it -> exclude from "today"
-                    msg = obj.get("message", {})
-                    # Claude Code writes one line per content block, each carrying
-                    # the SAME cumulative usage — count each message id only once.
-                    mid = msg.get("id")
-                    if mid is not None:
-                        if mid in seen:
+                        if obj.get("type") != "assistant":
                             continue
-                        seen.add(mid)
-                    key = _key_for(msg.get("model", ""))
-                    if not key:
+                        ts = obj.get("timestamp")
+                        if isinstance(ts, str):
+                            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=timezone.utc)
+                            if dt < start:
+                                continue
+                        msg = obj.get("message", {})
+                        # Claude Code writes one line per content block, each
+                        # carrying the SAME cumulative usage — count each id once.
+                        mid = msg.get("id")
+                        if mid is not None:
+                            if mid in seen:
+                                continue
+                            seen.add(mid)
+                        key = _key_for(msg.get("model", ""))
+                        if not key:
+                            continue
+                        u = msg.get("usage", {})
+                        total_tokens += (u.get("input_tokens", 0) + u.get("output_tokens", 0)
+                                         + u.get("cache_creation_input_tokens", 0)
+                                         + u.get("cache_read_input_tokens", 0))
+                        total_cost += _line_cost(u, key)
+                    except Exception:
                         continue
-                    u = msg.get("usage", {})
-                    total_tokens += (u.get("input_tokens", 0) + u.get("output_tokens", 0)
-                                     + u.get("cache_creation_input_tokens", 0)
-                                     + u.get("cache_read_input_tokens", 0))
-                    total_cost += _line_cost(u, key)
         except OSError:
             continue
 

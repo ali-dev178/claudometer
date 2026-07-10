@@ -21,7 +21,7 @@ alert_thresholds = [80, 90]
 show_cost = false
 
 # Override the accent color (brand mark, badge, links). Hex string, e.g.:
-# accent = "#5b61ea"
+# accent = "#d97757"
 
 # --- Resume when your 5-hour session limit resets -------------------------
 # Tier 1 (safe, default): when the window resets, show a one-click "Resume"
