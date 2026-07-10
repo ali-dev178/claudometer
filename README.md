@@ -183,7 +183,7 @@ Environment overrides:
 |---|---|
 | `CLAUDOMETER_CONFIG` | Path to the config file (default `~/.claudometer.toml`). |
 | `CLAUDE_CONFIG_DIR` | Where to read Claude credentials/transcripts (default `~/.claude`). |
-| `CLAUDE_WIDGET_POLL` | Poll interval in seconds (60–300). The interval source for the macOS menu bar / tray (which don't read the config file). |
+| `CLAUDE_WIDGET_POLL` | Poll interval in seconds (60–300). The interval source for the Windows/Linux **tray** (the macOS menu bar polls at a fixed 90s). |
 | `CLAUDE_WIDGET_FAKE` | Testing: `"95,40,0"` = session,weekly,scoped % (skips the network). |
 
 Preview the red/alert state with no real load:

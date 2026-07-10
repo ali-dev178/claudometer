@@ -114,7 +114,9 @@ def _fmt_tokens(n):
 def _elide(draw, text, font, max_w):
     """Truncate text with an ellipsis so it fits within max_w pixels."""
     text = str(text)
-    if max_w <= 0 or draw.textlength(text, font=font) <= max_w:
+    if max_w <= 0:
+        return "…"  # fail closed: no room -> ellipsis, never overflow
+    if draw.textlength(text, font=font) <= max_w:
         return text
     while text and draw.textlength(text + "…", font=font) > max_w:
         text = text[:-1]
@@ -317,13 +319,15 @@ def render_popover(disp, theme, scale=3):
         d.line([P, div_y * S, Ws - P, div_y * S], fill=T["hair"], width=max(1, S))
         y = rows_top * S
         for row in rows:
-            d.text((P, y), _elide(d, row["label"], f_row, 58 * S), font=f_row,
+            r_lbl = row.get("label", "")
+            r_pct = int(row.get("pct") or 0)
+            r_col = row.get("color", "grey")
+            d.text((P, y), _elide(d, r_lbl, f_row, 58 * S), font=f_row,
                    fill=T["neutral"], anchor="lm")
             hh = 7 * S
             _rrbar(d, P + 66 * S, y - hh / 2, Ws - P - 46 * S, y + hh / 2,
-                   row["pct"], sev(row["color"]), T["track"])
-            d.text((Ws - P, y), f"{row['pct']}%", font=f_rownum,
-                   fill=sev(row["color"]), anchor="rm")
+                   r_pct, sev(r_col), T["track"])
+            d.text((Ws - P, y), f"{r_pct}%", font=f_rownum, fill=sev(r_col), anchor="rm")
             y += 28 * S
 
     # estimated cost (optional)
@@ -378,7 +382,7 @@ def render_toast(pct, title, subtitle, color_name, theme, scale=3):
            fill="#ffffff", anchor="mm")
 
     tx = cx1 + chip + 16 * S
-    avail = W * S - tx - 14 * S
+    avail = max(0, W * S - tx - 14 * S)
     ft, fs = _font("sb", 13 * S), _font("reg", 11 * S)
     d.text((tx, 26 * S), _elide(d, title, ft, avail), font=ft, fill=T["neutral"], anchor="lm")
     d.text((tx, 45 * S), _elide(d, subtitle, fs, avail), font=fs, fill=T["dim"], anchor="lm")
@@ -414,7 +418,7 @@ def render_action_toast(title, subtitle, action_label, theme, scale=3):
     d.text(((bx1 + bx2) / 2, (by1 + by2) / 2), action_label, font=f_btn, fill="#ffffff", anchor="mm")
 
     tx = ix + isz + 15 * S
-    avail = bx1 - tx - 10 * S
+    avail = max(0, bx1 - tx - 10 * S)
     ft, fs = _font("sb", 13 * S), _font("reg", 11 * S)
     d.text((tx, 27 * S), _elide(d, title, ft, avail), font=ft, fill=T["neutral"], anchor="lm")
     d.text((tx, 46 * S), _elide(d, subtitle, fs, avail), font=fs, fill=T["dim"], anchor="lm")

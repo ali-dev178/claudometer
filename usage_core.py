@@ -423,6 +423,7 @@ def poll_once(state: PollState):
     if _expiring_soon(creds) and refresh_tok:
         try:
             token = _refresh_and_persist(refresh_tok, full)
+            refresh_tok = full.get("claudeAiOauth", {}).get("refreshToken", refresh_tok)  # rotated
         except RefreshRejected:
             rejected = True
         except RefreshFailed:

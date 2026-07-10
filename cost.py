@@ -14,7 +14,7 @@ model sharing a family name but priced differently would use these rates.
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 PRICING = {
@@ -38,12 +38,17 @@ def _key_for(model: str):
     return None
 
 
+def _n(usage: dict, k: str) -> float:
+    v = usage.get(k)
+    return v if isinstance(v, (int, float)) else 0  # tolerate explicit nulls
+
+
 def _line_cost(usage: dict, key: str) -> float:
     p = PRICING[key]
-    return (usage.get("input_tokens", 0) * p["input"]
-            + usage.get("output_tokens", 0) * p["output"]
-            + usage.get("cache_creation_input_tokens", 0) * p["cache_write"]
-            + usage.get("cache_read_input_tokens", 0) * p["cache_read"]) / 1_000_000.0
+    return (_n(usage, "input_tokens") * p["input"]
+            + _n(usage, "output_tokens") * p["output"]
+            + _n(usage, "cache_creation_input_tokens") * p["cache_write"]
+            + _n(usage, "cache_read_input_tokens") * p["cache_read"]) / 1_000_000.0
 
 
 def compute_today(config_dir=None):
@@ -81,6 +86,8 @@ def compute_today(config_dir=None):
                                 dt = dt.replace(tzinfo=timezone.utc)
                             if dt < start:
                                 continue
+                        else:
+                            continue  # no valid timestamp -> not counted as "today"
                         msg = obj.get("message", {})
                         # Claude Code writes one line per content block, each
                         # carrying the SAME cumulative usage — count each id once.
@@ -93,9 +100,9 @@ def compute_today(config_dir=None):
                         if not key:
                             continue
                         u = msg.get("usage", {})
-                        total_tokens += (u.get("input_tokens", 0) + u.get("output_tokens", 0)
-                                         + u.get("cache_creation_input_tokens", 0)
-                                         + u.get("cache_read_input_tokens", 0))
+                        total_tokens += (_n(u, "input_tokens") + _n(u, "output_tokens")
+                                         + _n(u, "cache_creation_input_tokens")
+                                         + _n(u, "cache_read_input_tokens"))
                         total_cost += _line_cost(u, key)
                     except Exception:
                         continue

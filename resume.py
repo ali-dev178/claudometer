@@ -79,11 +79,12 @@ def open_terminal(cwd, session_id):
     """Tier 1: open a visible terminal in *cwd* running `claude --resume <id>`."""
     if not session_id or not cwd:
         return False
-    inner = f"{CLAUDE} --resume {session_id}"
     try:
         if sys.platform == "win32":
-            if shutil.which("wt"):
-                subprocess.Popen(["wt", "-d", cwd, "powershell", "-NoExit", "-Command", inner])
+            inner = f"{CLAUDE} --resume {_ps(session_id)}"  # quote the id defensively
+            wt = shutil.which("wt")
+            if wt:
+                subprocess.Popen([wt, "-d", cwd, "powershell", "-NoExit", "-Command", inner])
             else:
                 subprocess.Popen(
                     ["powershell", "-NoExit", "-Command",
@@ -91,10 +92,12 @@ def open_terminal(cwd, session_id):
                     creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
                 )
         elif sys.platform == "darwin":
+            inner = f"{CLAUDE} --resume {_sh(session_id)}"
             script = (f'tell application "Terminal" to do script "cd {_sh(cwd)} && {inner}"\n'
                       'tell application "Terminal" to activate')
             subprocess.Popen(["osascript", "-e", script])
         else:
+            inner = f"{CLAUDE} --resume {_sh(session_id)}"
             for term in (["x-terminal-emulator", "-e"], ["gnome-terminal", "--"],
                          ["konsole", "-e"], ["xterm", "-e"]):
                 if shutil.which(term[0]):

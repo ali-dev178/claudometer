@@ -32,6 +32,8 @@ def main() -> None:
 
     if not mode:  # packaged/no-arg default: the flagship on Windows, tray on Linux
         mode = "bar" if sys.platform == "win32" else "tray"
+    if mode in ("bar", "both") and sys.platform != "win32":
+        mode = "tray"  # bar/both are Windows-only (widget_bar needs ctypes.windll)
 
     if mode == "bar":
         _run_bar()
