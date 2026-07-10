@@ -42,8 +42,23 @@ if _IS_WIN:
     _user32 = ctypes.windll.user32
     _gdi32 = ctypes.windll.gdi32
     _gdi32.GetPixel.restype = ctypes.c_uint
+    # Multi-monitor: resolve the monitor (and its work area) under a screen point
+    # so the popover and toasts land on whichever display the widget lives on.
+    _user32.MonitorFromPoint.restype = ctypes.c_void_p
+    _user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+    _user32.GetMonitorInfoW.restype = wintypes.BOOL
+    _user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 else:
     _user32 = _gdi32 = None
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", wintypes.RECT),
+        ("rcWork", wintypes.RECT),
+        ("dwFlags", wintypes.DWORD),
+    ]
 
 
 def _set_dpi_aware():
@@ -72,6 +87,44 @@ def _screen_size():
     if r is not None:
         return r.winfo_screenwidth(), r.winfo_screenheight()
     return 1920, 1080
+
+
+def _monitor_workarea(x, y):
+    """(left, top, right, bottom) work area of the monitor under screen point
+    (x, y) — used to place the popover/toasts on the widget's own display.
+    rcWork already excludes the taskbar. Falls back to the primary screen
+    off-Windows or if the query fails."""
+    if _IS_WIN:
+        try:
+            hmon = _user32.MonitorFromPoint(wintypes.POINT(int(x), int(y)), 2)  # NEAREST
+            if hmon:
+                mi = _MONITORINFO()
+                mi.cbSize = ctypes.sizeof(_MONITORINFO)
+                if _user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+                    r = mi.rcWork
+                    return r.left, r.top, r.right, r.bottom
+        except Exception:
+            pass
+    sw, sh = _screen_size()
+    return 0, 0, sw, sh
+
+
+def _popover_xy(anchor_x, anchor_top, anchor_bottom, w, h, work):
+    """Top-left for a w×h popover anchored to a strip (top-left at
+    (anchor_x, anchor_top), bottom at anchor_bottom), kept inside monitor work
+    area ``work`` = (left, top, right, bottom). Opens above the strip when there
+    is room, else drops below; clamps inside the work area on every edge. Pure
+    arithmetic (no Tk/ctypes) so it's unit-testable headlessly."""
+    wl, wt, wr, wb = work
+    px = min(max(wl + 8, anchor_x), wr - w - 8)
+    above = anchor_top - h - 8
+    if above >= wt + 8:                 # enough room above -> preferred
+        py = above
+    else:                               # top is tight -> drop below the strip
+        py = anchor_bottom + 8
+        if py + h > wb - 8:             # would overflow the bottom -> clamp up
+            py = max(wt + 8, wb - h - 8)
+    return px, py
 
 
 def _get_pixel(x, y):
@@ -192,7 +245,7 @@ def _round_alpha(img, radius):
 # Details popover (image-based)
 # --------------------------------------------------------------------------- #
 class Popover:
-    def __init__(self, root, theme, get_disp, anchor_x, anchor_top,
+    def __init__(self, root, theme, get_disp, anchor_x, anchor_top, anchor_bottom,
                  on_refresh, on_quit, on_settings, on_close):
         self.theme = theme
         self.get_disp = get_disp
@@ -206,6 +259,7 @@ class Popover:
         self._hits = {}
         self.anchor_x = anchor_x
         self.anchor_top = anchor_top
+        self.anchor_bottom = anchor_bottom
 
         self.top = tk.Toplevel(root)
         self.top.overrideredirect(True)
@@ -252,9 +306,11 @@ class Popover:
         self._photo = ImageTk.PhotoImage(img)
         w, h = img.size
         self._hits = hits
-        sw = _screen_w()
-        px = min(max(8, self.anchor_x), sw - w - 8)
-        py = self.anchor_top - h - 8
+        # Place on the SAME monitor as the strip (not the primary screen), and
+        # open up or down depending on which side has room. See _popover_xy.
+        px, py = _popover_xy(
+            self.anchor_x, self.anchor_top, self.anchor_bottom, w, h,
+            _monitor_workarea(self.anchor_x, self.anchor_top))
         self.canvas.configure(width=w, height=h)
         self.top.geometry(f"{w}x{h}+{int(px)}+{int(py)}")
         self.canvas.delete("all")
@@ -319,8 +375,8 @@ class Toast:
         c.pack()
         c.create_image(0, 0, anchor="nw", image=self._photo)
         c.bind("<Button-1>", lambda e: self.close())
-        sw, sh = _screen_size()
-        self.top.geometry(f"{w}x{h}+{sw - w - 20}+{sh - TASKBAR_H - h - 16}")
+        wl, wt, wr, wb = _monitor_workarea(root.winfo_x(), root.winfo_y())
+        self.top.geometry(f"{w}x{h}+{wr - w - 20}+{wb - h - 16}")
         self._closed = False
         self._after = self.top.after(duration, self.close)
 
@@ -363,6 +419,7 @@ class ResumeToast:
         self._action = action_label
         self._closed = False
         self._after = None
+        self._root = root
 
         self.top = tk.Toplevel(root)
         self.top.overrideredirect(True)
@@ -391,8 +448,8 @@ class ResumeToast:
         self.canvas.configure(width=w, height=h)
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
-        sw, sh = _screen_size()
-        self.top.geometry(f"{w}x{h}+{sw - w - 20}+{sh - TASKBAR_H - h - 16}")
+        wl, wt, wr, wb = _monitor_workarea(self._root.winfo_x(), self._root.winfo_y())
+        self.top.geometry(f"{w}x{h}+{wr - w - 20}+{wb - h - 16}")
 
     def _tick(self):
         if self._closed:
@@ -1009,6 +1066,7 @@ class BarWidget:
         self._popover = Popover(
             self.root, self._theme, self._get_disp,
             self.root.winfo_x(), self.root.winfo_y(),
+            self.root.winfo_y() + self.root.winfo_height(),
             self._refresh_now, self._quit, self._open_settings, self._on_popover_closed,
         )
 

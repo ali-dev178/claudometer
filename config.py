@@ -1,7 +1,7 @@
 """Static configuration for the Claude usage widget."""
 
 # This app.
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 REPO_URL = "https://github.com/ali-dev178/claudometer"
 
 # Server-reported plan-usage endpoint (same one Claude Code's /usage panel calls).
