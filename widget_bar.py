@@ -258,9 +258,12 @@ class Popover:
         self._sig = None
         self._hits = {}
         # Manual-refresh feedback: "Refreshing…" from the click until a newer
-        # poll lands; otherwise the footer shows a live "Updated … ago".
+        # poll lands; otherwise the footer shows a live "Updated … ago · src"
+        # where src is whether the last poll was a manual click or an auto tick.
         self._refresh_since = None
         self._refresh_base_seq = None
+        self._last_seq = None
+        self._last_source = None
         self.anchor_x = anchor_x
         self.anchor_top = anchor_top
         self.anchor_bottom = anchor_bottom
@@ -311,23 +314,29 @@ class Popover:
 
     def _foot_state(self, disp):
         """Footer status shown while the popover is open: 'Refreshing…' during a
-        manual refresh, otherwise a live 'Updated … ago' so the data's freshness
-        is always visible. Returns a foot dict."""
+        manual refresh, otherwise a live 'Updated … ago · manual|auto' so the
+        data's freshness and its source are always visible. Returns a foot dict."""
         now = time.monotonic()
+        cur = disp.get("_seq")
         if self._refresh_since is not None:
-            cur = disp.get("_seq")
             done = cur is not None and (self._refresh_base_seq is None
                                         or cur > self._refresh_base_seq)
-            if done:
+            if done:  # the manual click's poll landed
                 self._refresh_since = None
+                self._last_seq = cur
+                self._last_source = "manual"
             elif now - self._refresh_since > 12:  # fetch stuck/offline — give up
                 self._refresh_since = None
             else:
                 return {"text": "Refreshing…", "dot": "amber"}
+        if cur is not None and cur != self._last_seq:  # a background tick landed
+            self._last_seq = cur
+            self._last_source = "auto"
         mono = disp.get("_poll_mono")
         if mono is None:
             return {"text": "Auto-updating", "dot": "green"}
-        return {"text": "Updated " + self._fmt_age(now - mono), "dot": "green"}
+        src = self._last_source or "auto"
+        return {"text": f"Updated {self._fmt_age(now - mono)} · {src}", "dot": "green"}
 
     def _render(self, force=False):
         disp = self.get_disp() or {}

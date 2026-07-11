@@ -33,6 +33,7 @@ def sample_disp():
         "weekly_resets_at": now + timedelta(days=3, hours=2),
         "model_rows": [{"label": "Fable", "pct": 4, "color": "green"}],
         "session": None, "weekly": None, "face_pct": "61%",
+        "foot": {"text": "Updated just now · auto", "dot": "green"},
     }
 
 
@@ -134,9 +135,10 @@ def hero_mac(disp):
             ("row", f"Session   {disp['session_pct']}%   ·   resets in 1h 22m"),
             ("row", f"Weekly (all)   {disp['weekly_pct']}%   ·   resets Thu Jul 16, 11:00 AM"),
             ("row", f"     Fable   {disp['model_rows'][0]['pct']}%"),
-            ("sep", ""), ("act", "Settings"), ("act", "Refresh now"), ("act", "Quit")]
+            ("sep", ""), ("info", "Updated 10:24 AM · auto"),
+            ("act", "Settings"), ("act", "Refresh now"), ("act", "Quit")]
     mw = 288
-    heights = {"head": 30, "sep": 11, "row": 28, "act": 28}
+    heights = {"head": 30, "sep": 11, "row": 28, "act": 28, "info": 24}
     mh = sum(heights[k] for k, _ in rows) + 12
     mx, my = min(item_left, W - mw - 14), mb_h + 6
     menu = Image.new("RGBA", (mw, mh), (0, 0, 0, 0))
@@ -151,6 +153,9 @@ def hero_mac(disp):
             md.line([12, yy + hgt // 2, mw - 12, yy + hgt // 2], fill=(255, 255, 255, 26))
         elif kind == "head":
             md.text((16, yy + hgt / 2), text, font=fh, fill=T["faint"], anchor="lm")
+        elif kind == "info":
+            md.ellipse([16, yy + hgt / 2 - 3, 22, yy + hgt / 2 + 3], fill=T["green"])
+            md.text((29, yy + hgt / 2), text, font=fr2, fill=T["faint"], anchor="lm")
         else:
             col = T["neutral"] if kind == "row" else T["accent"]
             md.text((16, yy + hgt / 2), text, font=fr2, fill=col, anchor="lm")

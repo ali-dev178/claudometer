@@ -14,6 +14,7 @@ else. All of it reads/writes the same ~/.claudometer.toml via settings.load/save
 
 import os
 import subprocess
+from datetime import datetime
 
 import rumps
 
@@ -31,6 +32,11 @@ class MenuApp(rumps.App):
         self._metrics = list(self._cfg["metrics"])
         self._state = core.PollState()
         self._last_sig = None
+        # Freshness footer: the last poll's local time + whether it came from a
+        # manual "Refresh now" click or an automatic timer tick (mirrors the
+        # Windows/floating-widget popover footer).
+        self._pending_source = "auto"
+        self._updated_item = None
         self.menu = ["Loading…"]
         self._timer = rumps.Timer(self._tick, self._cfg["poll"])
         self._timer.start()
@@ -55,6 +61,14 @@ class MenuApp(rumps.App):
         if sig != self._last_sig:
             self._last_sig = sig
             self._rebuild(disp)
+        # Always refresh the freshness line (kept out of `sig` so it doesn't
+        # force a full menu rebuild every tick — that leaks rumps callbacks).
+        source, self._pending_source = self._pending_source, "auto"
+        if self._updated_item is not None:
+            self._updated_item.title = self._updated_label(source)
+
+    def _updated_label(self, source: str) -> str:
+        return f"Updated {datetime.now().strftime('%-I:%M %p')} · {source}"
 
     def _rebuild(self, disp) -> None:
         rows = []
@@ -77,6 +91,9 @@ class MenuApp(rumps.App):
                 seen[row] = 0
             rows.append(row)
         rows.append(None)
+        # A disabled (callback-less) info line showing data freshness + source.
+        self._updated_item = rumps.MenuItem(self._updated_label(self._pending_source))
+        rows.append(self._updated_item)
         rows.append(self._settings_menu())
         rows.append(rumps.MenuItem("Refresh now", callback=self._refresh))
         rows.append(rumps.MenuItem("View on GitHub", callback=self._github))
@@ -147,6 +164,7 @@ class MenuApp(rumps.App):
         webbrowser.open(config.REPO_URL)
 
     def _refresh(self, _):
+        self._pending_source = "manual"  # this tick's data came from a click
         self._tick(None)
 
     def run(self) -> None:
