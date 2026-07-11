@@ -22,3 +22,6 @@ Thumbs.db
 # Local widget state (created at runtime in the user's home dir, not here —
 # listed only as a safety net)
 .claude_widget_bar.json
+
+# hero-gif review contact sheet (generated, not committed)
+assets/_hero_sheet.png

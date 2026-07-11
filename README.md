@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/hero-windows.png" alt="Claudometer on Windows" width="820">
+  <img src="assets/hero.gif" alt="Claudometer in action — usage rising with color shifts, the details popover, live updates and a threshold alert, in light and dark" width="820">
 </p>
 
 > Unofficial — not affiliated with, or endorsed by, Anthropic. [Details ↓](#-disclaimer)
@@ -58,6 +58,9 @@ Claude's Pro / Max / Team plans enforce a rolling **5‑hour session** limit and
 ---
 
 ## More screenshots
+
+**Windows** — the strip on the taskbar with the details popover open:
+<p align="center"><img src="assets/hero-windows.png" alt="Claudometer on the Windows desktop" width="720"></p>
 
 **macOS** — native menu‑bar item with a dropdown breakdown:
 <p align="center"><img src="assets/macos-menubar.png" alt="macOS menu bar" width="720"></p>
@@ -242,7 +245,7 @@ Ideas and PRs welcome — open an issue.
 pip install -r requirements.txt && py app.py bar   # run it
 pip install -r requirements-dev.txt && pytest        # run the tests (also in CI)
 ```
-`usage_core.py` = data/auth (no UI deps) · `render.py` = all the Pillow drawing · `settings.py` / `cost.py` / `resume.py` = config, cost estimation, session‑resume · the platform adapters (`widget_bar.py`, `menubar_mac.py`, `tray_windows.py`) are thin. The `tests/` suite (~385 checks on the core logic) runs on every push via [CI](.github/workflows/ci.yml); regenerate the README images with `py assets/make_assets.py`.
+`usage_core.py` = data/auth (no UI deps) · `render.py` = all the Pillow drawing · `settings.py` / `cost.py` / `resume.py` = config, cost estimation, session‑resume · the platform adapters (`widget_bar.py`, `menubar_mac.py`, `tray_windows.py`) are thin. The `tests/` suite (~385 checks on the core logic) runs on every push via [CI](.github/workflows/ci.yml); regenerate the README images with `py assets/make_assets.py` (stills), `py assets/capture_settings.py` (the Settings window) and `py assets/make_hero_gif.py` (the animated hero).
 
 ## ⚠️ Disclaimer
 
