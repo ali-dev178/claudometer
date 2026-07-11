@@ -181,21 +181,21 @@ def _gear(d, cx, cy, r, color, w):
 
 
 def _refresh_icon(d, cx, cy, r, color, w):
-    """A circular reload arrow (clockwise, with a gap + arrowhead at the top)."""
+    """A two-arrow 'sync/reload' icon: two opposing arcs, each arrow-tipped."""
     box = [cx - r, cy - r, cx + r, cy + r]
-    # Arc drawn clockwise from ~1 o'clock all the way round to ~11 o'clock,
-    # leaving a gap at the top where the arrowhead sits.
-    d.arc(box, start=310, end=210, fill=color, width=w)
-    # Arrowhead at the leading (start) end of the arc, pointing along the
-    # clockwise tangent so it reads as "reload".
-    a = math.radians(310)
-    tip_a = a + math.radians(34)            # a little further clockwise = the tip
-    tx, ty = cx + r * math.cos(tip_a), cy + r * math.sin(tip_a)
-    bx, by = cx + r * math.cos(a), cy + r * math.sin(a)
-    # inner point, toward the circle centre from the base
-    ix, iy = cx + (r - w * 1.6) * math.cos(a), cy + (r - w * 1.6) * math.sin(a)
-    ox, oy = cx + (r + w * 1.6) * math.cos(a), cy + (r + w * 1.6) * math.sin(a)
-    d.polygon([(tx, ty), (ix, iy), (ox, oy)], fill=color)
+
+    def head(ang, sweep=34):
+        a = math.radians(ang)
+        tip = a + math.radians(sweep)
+        tx, ty = cx + r * math.cos(tip), cy + r * math.sin(tip)
+        ix, iy = cx + (r - w * 1.7) * math.cos(a), cy + (r - w * 1.7) * math.sin(a)
+        ox, oy = cx + (r + w * 1.7) * math.cos(a), cy + (r + w * 1.7) * math.sin(a)
+        d.polygon([(tx, ty), (ix, iy), (ox, oy)], fill=color)
+
+    d.arc(box, 20, 150, fill=color, width=w)
+    d.arc(box, 200, 330, fill=color, width=w)
+    head(20)
+    head(200)
 
 
 def _rrbar(d, x1, y1, x2, y2, pct, color, track):
