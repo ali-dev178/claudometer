@@ -135,11 +135,33 @@ def _caption(im, text):
     d.text((cx, cy), text, font=f, fill="#f4f6fa", anchor="mm")
 
 
+def _strip_home(strip_h):
+    return 26, H - TB_H + (TB_H - strip_h) // 2
+
+
 def compose(d_disp, *, pop_alpha=255, pop_dy=0, toast=None, toast_alpha=255,
-            toast_dy=0, caption=None):
+            toast_dy=0, caption=None, strip_xy=None, ghost=False):
     im = BG.copy()
-    strip = render.render_strip(d_disp, TB_HEX, THEME, scale=3).convert("RGBA")
-    im.alpha_composite(strip, (26, H - TB_H + (TB_H - strip.height) // 2))
+    if strip_xy is None:
+        # normal: docked on the taskbar
+        strip = render.render_strip(d_disp, TB_HEX, THEME, scale=3).convert("RGBA")
+        im.alpha_composite(strip, _strip_home(strip.height))
+    else:
+        # dragged onto the desktop: the real widget samples the pixels under it
+        # so it reads as floating text — mimic that by sampling the backdrop, and
+        # leave a faint "home" ghost on the taskbar.
+        if ghost:
+            g = render.render_strip(d_disp, TB_HEX, THEME, scale=3).convert("RGBA")
+            g.putalpha(g.split()[3].point(lambda p: int(p * 0.30)))
+            im.alpha_composite(g, _strip_home(g.height))
+        x, y = int(strip_xy[0]), int(strip_xy[1])
+        sx = max(0, min(W - 1, x + 42))
+        sy = max(0, min(H - 1, y + 14))
+        bg_hex = "#%02x%02x%02x" % BG.getpixel((sx, sy))[:3]
+        strip = render.render_strip(d_disp, bg_hex, THEME, scale=3).convert("RGBA")
+        sh, pad = make_assets.drop_shadow(strip.size, 8, 15, 55)
+        im.alpha_composite(sh, (x - pad, y - pad + 6))
+        im.alpha_composite(strip, (x, y))
     if pop_alpha > 0:
         pop = make_assets.popover_rgba(d_disp, THEME)
         y = POP_BOTTOM - pop.height + pop_dy
@@ -215,11 +237,11 @@ hold(compose(disp(100, 54), caption="Know the moment you're capped"), 1800)
 
 # 5 ── reset & auto-resume ---------------------------------------------------
 capr = "Auto-resume the moment your limit resets"
-for i in range(1, 9):                        # usage drops back as the window resets
-    t = ease(i / 8)
-    s = int(100 - t * 92)                    # 100 -> 8
-    add(compose(disp(s, 54 - int(t * 8)), caption=capr), 55)
-reset_state = disp(6, 46)
+for i in range(1, 11):                       # the 5-hour window resets to 0%
+    t = ease(i / 10)                         # (weekly is independent — it stays)
+    s = int(round(100 - t * 100))            # 100 -> 0
+    add(compose(disp(s, 54), caption=capr), 55)
+reset_state = disp(0, 54)
 for i in range(1, 6):                        # resume toast slides in
     t = ease(i / 5)
     add(compose(reset_state, toast=RESUME, toast_alpha=int(255 * t),
@@ -242,8 +264,31 @@ hold(compose(cost_b, caption=capc), 1700)
 xfade(compose(cost_b, caption=capc), compose(OFFLINE, caption="Graceful when you're offline"), 4, 55)
 hold(compose(OFFLINE, caption="Graceful when you're offline"), 1600)
 
+# 8 ── drag it anywhere ------------------------------------------------------
+capd = "Drag it anywhere — it remembers the spot"
+dd = disp(41, 21)
+_HOME = _strip_home(render.render_strip(dd, TB_HEX, THEME, scale=3).height)
+_B, _C = (536, 250), (770, 150)
 
-# 8 ── end card --------------------------------------------------------------
+
+def _drag(xy):
+    return compose(dd, pop_alpha=0, strip_xy=xy, ghost=True, caption=capd)
+
+
+def _lerp(a, b, t):
+    return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+
+
+xfade(compose(OFFLINE, caption="Graceful when you're offline"), _drag(_HOME), 4, 55)
+for i in range(1, 12):                        # lift off the taskbar, glide up
+    add(_drag(_lerp(_HOME, _B, ease(i / 11))), 55)
+hold(_drag(_B), 1100)
+for i in range(1, 9):                          # nudge to a second spot
+    add(_drag(_lerp(_B, _C, ease(i / 8))), 55)
+hold(_drag(_C), 1500)
+
+
+# 9 ── end card --------------------------------------------------------------
 def end_card():
     im = BG.copy()
     d = ImageDraw.Draw(im)
@@ -266,7 +311,7 @@ def end_card():
 
 
 ec = end_card()
-xfade(compose(OFFLINE, caption="Graceful when you're offline"), ec, 5, 55)
+xfade(_drag(_C), ec, 5, 55)
 hold(ec, 2400)
 xfade(ec, compose(start, pop_alpha=0), 5, 55)   # gentle loop back
 
