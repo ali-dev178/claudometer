@@ -204,6 +204,17 @@ So it shows **true plan %** from Anthropic's backend — *not* a local token‑c
 
 ---
 
+## Troubleshooting
+
+**It shows *offline* right after I start it, then starts working once I open Claude Code in a terminal.**
+Expected. Claudometer has no login of its own — it reads the OAuth token Claude Code stores in `~/.claude/.credentials.json` on every poll. If that token has expired and Claudometer can't refresh it at that moment (or the first poll hits a brief network blip at login), it degrades to a graceful *offline* state instead of nagging you to re‑login. Opening Claude Code refreshes the token and rewrites the credentials file, so Claudometer's **next poll** picks up the fresh token and stats appear. It also self‑heals on its own — it proactively refreshes a soon‑to‑expire token — so you don't strictly need to open a terminal.
+
+**How soon do stats appear?** Within one poll interval — **up to ~90s** by default (`CLAUDE_WIDGET_POLL`, clamped 60–300s) — once a usable token is on disk **and** the account has active limit windows. A grey `-` (no data) means the token is fine but there's no usage to show yet; that's different from *offline*.
+
+**It says *offline* and never recovers.** Confirm Claude Code itself works (`claude` in a terminal), check your internet connection, and make sure `~/.claude/.credentials.json` exists (or `CLAUDE_CONFIG_DIR` points at the right folder). If Claude Code has fully logged out, re‑login there and Claudometer will follow.
+
+---
+
 ## Platform support
 
 | Platform | UI | Status |
