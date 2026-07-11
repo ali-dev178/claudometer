@@ -282,11 +282,7 @@ class Popover:
         self.canvas.pack()
         self.canvas.bind("<Button-1>", self._click)
         self.canvas.bind("<Motion>", self._motion)
-        self.canvas.bind("<Leave>", lambda e: self._hide_tip())
         self.top.bind("<Escape>", lambda e: self.close())
-        self._tip = None
-        self._tip_lbl = None
-        self._tip_name = None
 
         self._render(force=True)
         self.top.after(120, self._arm)
@@ -368,8 +364,6 @@ class Popover:
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
 
-    _TIP_LABELS = {"settings": "Open Settings", "refresh": "Refresh now", "quit": "Quit"}
-
     def _hit_at(self, x, y):
         for name, (x1, y1, x2, y2) in self._hits.items():
             if x1 <= x <= x2 and y1 <= y <= y2:
@@ -377,57 +371,13 @@ class Popover:
         return None
 
     def _motion(self, e):
-        name = self._hit_at(e.x, e.y)
+        # A hand cursor over the footer buttons hints they're clickable.
         try:
-            self.canvas.configure(cursor="hand2" if name else "")
+            self.canvas.configure(cursor="hand2" if self._hit_at(e.x, e.y) else "")
         except Exception:
             pass
-        if name == self._tip_name:
-            if name:
-                self._place_tip(e)
-            return
-        self._tip_name = name
-        if name:
-            self._show_tip(self._TIP_LABELS.get(name, name), e)
-        else:
-            self._hide_tip()
-
-    def _show_tip(self, text, e):
-        T = render.THEMES.get(self.theme, render.THEMES["light"])
-        if self._tip is None:
-            self._tip = tk.Toplevel(self.top)
-            self._tip.overrideredirect(True)
-            try:
-                self._tip.attributes("-topmost", True)
-            except Exception:
-                pass
-            self._tip_lbl = tk.Label(self._tip, font=("Segoe UI", 8),
-                                     padx=7, pady=2, bd=0)
-            self._tip_lbl.pack()
-        self._tip_lbl.configure(text=text, bg=T["neutral"], fg=T["key"])
-        self._place_tip(e)
-
-    def _place_tip(self, e):
-        if self._tip is None:
-            return
-        x = self.top.winfo_rootx() + e.x + 12
-        y = self.top.winfo_rooty() + e.y + 20
-        try:
-            self._tip.geometry("+%d+%d" % (int(x), int(y)))
-            self._tip.deiconify()
-        except Exception:
-            pass
-
-    def _hide_tip(self):
-        self._tip_name = None
-        if self._tip is not None:
-            try:
-                self._tip.withdraw()
-            except Exception:
-                pass
 
     def _click(self, e):
-        self._hide_tip()
         for name, (x1, y1, x2, y2) in self._hits.items():
             if x1 <= e.x <= x2 and y1 <= e.y <= y2:
                 if name == "refresh":
@@ -454,12 +404,6 @@ class Popover:
         if self._closed:
             return
         self._closed = True
-        if self._tip is not None:
-            try:
-                self._tip.destroy()
-            except Exception:
-                pass
-            self._tip = None
         if self._after:
             try:
                 self.top.after_cancel(self._after)
