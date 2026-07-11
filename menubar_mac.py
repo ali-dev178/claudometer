@@ -21,6 +21,7 @@ import rumps
 import usage_core as core
 import settings
 import config
+import updates
 
 DOT = {"green": "🟢", "amber": "🟡", "red": "🔴", "grey": "⚪"}
 
@@ -96,6 +97,7 @@ class MenuApp(rumps.App):
         rows.append(self._updated_item)
         rows.append(self._settings_menu())
         rows.append(rumps.MenuItem("Refresh now", callback=self._refresh))
+        rows.append(rumps.MenuItem("Check for Updates…", callback=self._check_updates))
         rows.append(rumps.MenuItem("View on GitHub", callback=self._github))
         rows.append(rumps.MenuItem("Quit", callback=rumps.quit_application))
         self.menu.clear()
@@ -162,6 +164,23 @@ class MenuApp(rumps.App):
     def _github(self, _):
         import webbrowser
         webbrowser.open(config.REPO_URL)
+
+    def _check_updates(self, _):
+        import webbrowser
+        res = updates.check()  # brief network call on the runloop; acceptable
+        if res["status"] == "update":
+            if rumps.alert(
+                    "Claudometer",
+                    f"A new version is available: {res['latest']}\n"
+                    f"You have {res['current']}.\n\nOpen the download page?",
+                    ok="Open", cancel="Later"):
+                webbrowser.open(res["url"])
+        elif res["status"] == "current":
+            rumps.alert("Claudometer",
+                        f"You're on the latest version ({res['current']}).")
+        else:
+            rumps.alert("Claudometer",
+                        "Couldn't check for updates right now. Please try again later.")
 
     def _refresh(self, _):
         self._pending_source = "manual"  # this tick's data came from a click

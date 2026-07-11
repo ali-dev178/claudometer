@@ -227,7 +227,7 @@ The floating widget is **one cross‑platform codebase** — the same strip, dra
 
 ## Roadmap
 
-**Shipped:** desktop alerts · config file + in‑app settings panel · estimated‑cost view · standalone binaries + release CI · pipx / Scoop / Homebrew installs · cross‑platform floating widget (macOS/Linux).
+**Shipped:** desktop alerts · config file + in‑app settings panel · estimated‑cost view · standalone binaries + release CI · pipx / Scoop / Homebrew installs · cross‑platform floating widget (macOS/Linux) · one‑click **Check for Updates**.
 
 **Next:** usage sparkline over the session · per‑model cost breakdown · published winget listing.
 

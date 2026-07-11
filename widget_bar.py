@@ -6,7 +6,7 @@ the taskbar so it looks like floating text yet stays fully clickable; clicking
 it opens a polished popover with circular usage gauges.
 
 Interactions: left-click = open/close popover · left-drag = move (remembered)
-· right-click = Details / Refresh / Quit.
+· right-click = Details / Open Settings / Refresh / Check for Updates / Quit.
 """
 
 import ctypes
@@ -29,6 +29,7 @@ import settings
 import cost
 import resume
 import config
+import updates
 
 POS_FILE = Path.home() / ".claude_widget_bar.json"
 TASKBAR_H = 48
@@ -1400,11 +1401,12 @@ class BarWidget:
     def _popup_menu(self, e):
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="Details…", command=self._toggle_popover)
-        menu.add_command(label="Settings…", command=self._open_settings)
+        menu.add_command(label="Open Settings…", command=self._open_settings)
         menu.add_command(label="Refresh now", command=self._refresh_now)
         menu.add_command(label=("◼  Exit demo" if self._demo else "▶  Try a demo"),
                          command=self._toggle_demo)
         menu.add_separator()
+        menu.add_command(label="Check for Updates…", command=self._check_updates)
         menu.add_command(label="View on GitHub", command=lambda: _open_url(config.REPO_URL))
         menu.add_command(label="Quit", command=self._quit)
         try:
@@ -1414,6 +1416,31 @@ class BarWidget:
 
     def _refresh_now(self):
         self._wake.set()
+
+    def _check_updates(self):
+        # Network call off the UI thread; present the result back on main.
+        def worker():
+            res = updates.check()
+            try:
+                self.root.after(0, lambda: self._show_update_result(res))
+            except Exception:
+                pass  # window closed mid-check
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_update_result(self, res):
+        if res["status"] == "update":
+            if messagebox.askyesno(
+                "Claudometer",
+                f"A new version is available: {res['latest']}\n"
+                f"You have {res['current']}.\n\nOpen the download page?"):
+                _open_url(res["url"])
+        elif res["status"] == "current":
+            messagebox.showinfo(
+                "Claudometer", f"You're on the latest version ({res['current']}).")
+        else:
+            messagebox.showwarning(
+                "Claudometer",
+                "Couldn't check for updates right now.\nPlease try again later.")
 
     def _quit(self):
         self._save_pos()
