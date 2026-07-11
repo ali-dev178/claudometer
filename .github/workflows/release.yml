@@ -19,6 +19,10 @@ jobs:
   binaries:
     strategy:
       fail-fast: false
+      # Serialize the two OS builds: both call action-gh-release to attach their
+      # assets, and running concurrently they can race on first-time release
+      # creation ("tag_name already_exists"). One at a time is race-free.
+      max-parallel: 1
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
