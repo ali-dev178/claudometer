@@ -22,6 +22,7 @@ import usage_core as core
 import settings
 import config
 import updates
+import autostart
 
 DOT = {"green": "🟢", "amber": "🟡", "red": "🔴", "grey": "⚪"}
 
@@ -110,10 +111,15 @@ class MenuApp(rumps.App):
         sess.state = "session" in self._metrics
         week = rumps.MenuItem("Show Weekly meter", callback=self._toggle_weekly)
         week.state = "weekly" in self._metrics
-        m.update([sess, week, None,
+        login = rumps.MenuItem("Start at login", callback=self._toggle_login)
+        login.state = autostart.is_enabled()
+        m.update([sess, week, login, None,
                   rumps.MenuItem("Poll interval…", callback=self._set_poll), None,
                   rumps.MenuItem("Open config file…", callback=self._open_config)])
         return m
+
+    def _toggle_login(self, sender):
+        sender.state = autostart.set_enabled(not sender.state)
 
     def _toggle_session(self, sender):
         self._toggle_metric("session", sender)

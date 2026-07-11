@@ -169,9 +169,12 @@ Optional environment overrides:
 >
 > Pick **◼ Exit demo** to snap back to your real usage. No network, no credentials, nothing real touched.
 
-**Auto‑start on login:** the Windows installer can set this up for you. Manual (from source) — **Windows:** add a shortcut to `pythonw.exe "…\app.py" bar` in `shell:startup`. **macOS:** add the standalone `Claudometer.app` to **System Settings → Login Items**, or use a LaunchAgent for a source install:
+**Start on login:** flip the **Start on login** toggle — in **Settings → Display** on the Windows/floating widget, or **Settings → Start at login** in the macOS menu bar. It wires up the native per‑user autostart for you (Windows Run key · macOS LaunchAgent · Linux XDG autostart) and reproduces however you launched the widget, so there's nothing to hand‑edit. To do it manually instead:
 
-<details><summary>macOS LaunchAgent (source install)</summary>
+<details><summary>Manual auto-start (advanced)</summary>
+
+**Windows:** add a shortcut to `pythonw.exe "…\app.py" bar` in `shell:startup`.
+**macOS:** add the standalone `Claudometer.app` to **System Settings → Login Items**, or use a LaunchAgent for a source install —
 
 `~/Library/LaunchAgents/com.claudometer.plist`:
 ```xml
@@ -227,7 +230,7 @@ The floating widget is **one cross‑platform codebase** — the same strip, dra
 
 ## Roadmap
 
-**Shipped:** desktop alerts · config file + in‑app settings panel · estimated‑cost view · standalone binaries + release CI · pipx / Scoop / Homebrew installs · cross‑platform floating widget (macOS/Linux) · one‑click **Check for Updates**.
+**Shipped:** desktop alerts · config file + in‑app settings panel · estimated‑cost view · standalone binaries + release CI · pipx / Scoop / Homebrew installs · cross‑platform floating widget (macOS/Linux) · one‑click **Check for Updates** · **Start on login** toggle.
 
 **Next:** usage sparkline over the session · per‑model cost breakdown · published winget listing.
 

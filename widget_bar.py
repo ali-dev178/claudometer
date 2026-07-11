@@ -30,6 +30,7 @@ import cost
 import resume
 import config
 import updates
+import autostart
 
 POS_FILE = Path.home() / ".claude_widget_bar.json"
 TASKBAR_H = 48
@@ -687,6 +688,7 @@ class SettingsWindow:
         self.v_t2 = tk.IntVar(value=thr[1] if len(thr) > 1 else 90)
         self.v_cost = tk.BooleanVar(value=cfg.get("show_cost", False))
         self.v_fs = tk.BooleanVar(value=cfg.get("hide_on_fullscreen", True))
+        self.v_login = tk.BooleanVar(value=autostart.is_enabled())
         self.v_notify = tk.BooleanVar(value=cfg.get("resume_notify", True))
         self.v_auto = tk.BooleanVar(value=cfg.get("resume_auto", False))
         self.v_skip = tk.BooleanVar(value=cfg.get("resume_skip_permissions", False))
@@ -726,6 +728,7 @@ class SettingsWindow:
                   theme, bg).pack(side="right")
         toggle_row("Session meter", self.v_session)
         toggle_row("Weekly meter", self.v_weekly)
+        toggle_row("Start on login", self.v_login, cmd=self._apply_login)
 
         r = row()
         label(r, "Accent").pack(side="left")
@@ -839,6 +842,18 @@ class SettingsWindow:
             self._adv_btn.configure(text="▸  Advanced — auto-resume ⚠")
         self.top.update_idletasks()
         self.top.geometry("")
+
+    def _apply_login(self):
+        # Start-on-login is an OS action, not a config value — apply it live and
+        # reflect the real resulting state (revert the toggle if it didn't take).
+        want = bool(self.v_login.get())
+        actual = autostart.set_enabled(want)
+        if actual != want:
+            self.v_login.set(actual)
+            messagebox.showwarning(
+                "Start on login",
+                "Couldn't update the login item.\nPlease try again.",
+                parent=self.top)
 
     def _confirm_auto(self):
         if self.v_auto.get():
