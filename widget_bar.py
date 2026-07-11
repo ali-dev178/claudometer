@@ -257,6 +257,10 @@ class Popover:
         self._after = None
         self._sig = None
         self._hits = {}
+        # Manual-refresh feedback: "Refreshing…" from the click until a newer
+        # poll lands; otherwise the footer shows a live "Updated … ago".
+        self._refresh_since = None
+        self._refresh_base_seq = None
         self.anchor_x = anchor_x
         self.anchor_top = anchor_top
         self.anchor_bottom = anchor_bottom
@@ -296,12 +300,44 @@ class Popover:
             round(disp.get("cost_usd") or 0, 2),
         )
 
+    @staticmethod
+    def _fmt_age(secs):
+        secs = int(max(0, secs))
+        if secs < 5:
+            return "just now"
+        if secs < 60:
+            return f"{secs}s ago"
+        return f"{secs // 60}m ago"
+
+    def _foot_state(self, disp):
+        """Footer status shown while the popover is open: 'Refreshing…' during a
+        manual refresh, otherwise a live 'Updated … ago' so the data's freshness
+        is always visible. Returns a foot dict."""
+        now = time.monotonic()
+        if self._refresh_since is not None:
+            cur = disp.get("_seq")
+            done = cur is not None and (self._refresh_base_seq is None
+                                        or cur > self._refresh_base_seq)
+            if done:
+                self._refresh_since = None
+            elif now - self._refresh_since > 12:  # fetch stuck/offline — give up
+                self._refresh_since = None
+            else:
+                return {"text": "Refreshing…", "dot": "amber"}
+        mono = disp.get("_poll_mono")
+        if mono is None:
+            return {"text": "Auto-updating", "dot": "green"}
+        return {"text": "Updated " + self._fmt_age(now - mono), "dot": "green"}
+
     def _render(self, force=False):
         disp = self.get_disp() or {}
-        sig = self._sig_of(disp)
+        foot = self._foot_state(disp)
+        sig = (self._sig_of(disp), foot and (foot["text"], foot["dot"]))
         if not force and sig == self._sig:
             return
         self._sig = sig
+        if foot:
+            disp = dict(disp, foot=foot)
         img, hits = render.render_popover(disp, self.theme)
         img = _round_alpha(img, 16)
         self._photo = ImageTk.PhotoImage(img)
@@ -320,7 +356,11 @@ class Popover:
         for name, (x1, y1, x2, y2) in self._hits.items():
             if x1 <= e.x <= x2 and y1 <= e.y <= y2:
                 if name == "refresh":
+                    self._refresh_base_seq = (self.get_disp() or {}).get("_seq")
+                    self._refresh_since = time.monotonic()
                     self.on_refresh()
+                    self._render(force=True)  # show "Refreshing…" at once
+                    self.top.after(400, self._render)  # catch a quick completion
                 elif name == "quit":
                     self.on_quit()
                 elif name == "settings":
@@ -1527,8 +1567,11 @@ class BarWidget:
             # main thread; here we only publish data + bump the sequence.
             with self._lock:
                 if not self._demo:  # a demo may have started mid-poll — don't clobber it
-                    self._disp = disp
                     self._poll_seq += 1
+                    disp = dict(disp)
+                    disp["_seq"] = self._poll_seq  # lets the popover detect a fresh poll
+                    disp["_poll_mono"] = time.monotonic()  # for the "updated … ago" footer
+                    self._disp = disp
             wait = self._state.backoff or self._poll
             self._wake.wait(timeout=wait)
 

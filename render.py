@@ -386,8 +386,13 @@ def render_popover(disp, theme, scale=3):
     # footer
     d.line([P, foot_div * S, Ws - P, foot_div * S], fill=T["hair"], width=max(1, S))
     fy = foot_y * S
-    d.ellipse([P, fy - 3 * S, P + 6 * S, fy + 3 * S], fill=T["green"])
-    d.text((P + 13 * S, fy), "Auto-updating", font=f_foot, fill=T["faint"], anchor="lm")
+    # Left status: normally "Auto-updating"; a manual Refresh briefly shows
+    # "Refreshing…" then "Updated just now" so the click is never invisible.
+    foot = disp.get("foot") or {}
+    foot_text = foot.get("text", "Auto-updating")
+    dot_col = T.get(foot.get("dot", "green"), T["green"])
+    d.ellipse([P, fy - 3 * S, P + 6 * S, fy + 3 * S], fill=dot_col)
+    d.text((P + 13 * S, fy), foot_text, font=f_foot, fill=T["faint"], anchor="lm")
     quit_w = d.textlength("Quit", font=f_foot)
     qx2, qx1 = Ws - P, Ws - P - quit_w
     d.text((qx2, fy), "Quit", font=f_foot, fill=T["dim"], anchor="rm")

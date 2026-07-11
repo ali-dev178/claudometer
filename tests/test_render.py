@@ -222,6 +222,28 @@ def test_popover_empty_disp_does_not_raise():
     assert set(hits) == {"settings", "refresh", "quit"}
 
 
+@pytest.mark.parametrize("foot", [
+    None,
+    {"text": "Refreshing…", "dot": "amber"},
+    {"text": "Updated just now", "dot": "green"},
+])
+def test_popover_footer_override_renders(foot):
+    disp = {"session_pct": 5, "weekly_pct": 5}
+    if foot is not None:
+        disp["foot"] = foot
+    out, hits = render.render_popover(disp, "light")
+    assert _is_image(out)
+    assert set(hits) == {"settings", "refresh", "quit"}
+
+
+def test_popover_footer_unknown_dot_falls_back():
+    # An unrecognized dot color must not raise (falls back to green).
+    out, _ = render.render_popover(
+        {"session_pct": 5, "weekly_pct": 5, "foot": {"text": "x", "dot": "bogus"}},
+        "light")
+    assert _is_image(out)
+
+
 def test_popover_hits_contains_expected_keys():
     _, hits = render.render_popover({"session_pct": 5, "weekly_pct": 5}, "light")
     for key in ("settings", "refresh", "quit"):

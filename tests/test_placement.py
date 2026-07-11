@@ -62,3 +62,14 @@ def test_below_then_clamped_up_when_bottom_is_tight():
     px, py = _popover_xy(600, 10, 48, W, H, short)
     assert py + H <= short[3] - 8        # fully inside the work area bottom
     assert py == max(short[1] + 8, short[3] - H - 8)
+
+
+def test_fmt_age_buckets():
+    from widget_bar import Popover
+    assert Popover._fmt_age(0) == "just now"
+    assert Popover._fmt_age(4) == "just now"
+    assert Popover._fmt_age(5) == "5s ago"
+    assert Popover._fmt_age(42) == "42s ago"
+    assert Popover._fmt_age(60) == "1m ago"
+    assert Popover._fmt_age(125) == "2m ago"
+    assert Popover._fmt_age(-3) == "just now"  # clamps negatives
