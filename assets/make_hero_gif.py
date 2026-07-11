@@ -140,7 +140,7 @@ def _strip_home(strip_h):
 
 
 def compose(d_disp, *, pop_alpha=255, pop_dy=0, toast=None, toast_alpha=255,
-            toast_dy=0, caption=None, strip_xy=None, ghost=False):
+            toast_dy=0, caption=None, strip_xy=None, ghost=False, pop_at=None):
     im = BG.copy()
     if strip_xy is None:
         # normal: docked on the taskbar
@@ -164,9 +164,12 @@ def compose(d_disp, *, pop_alpha=255, pop_dy=0, toast=None, toast_alpha=255,
         im.alpha_composite(strip, (x, y))
     if pop_alpha > 0:
         pop = make_assets.popover_rgba(d_disp, THEME)
-        y = POP_BOTTOM - pop.height + pop_dy
+        if pop_at is not None:                 # anchored to a dragged strip
+            px, py = int(pop_at[0]), int(pop_at[1]) + pop_dy
+        else:                                  # default: docked above the taskbar
+            px, py = POP_X, POP_BOTTOM - pop.height + pop_dy
         make_assets.place_card(im, _fade(pop, pop_alpha) if pop_alpha < 255 else pop,
-                               POP_X, y)
+                               px, py)
     if toast is not None and toast_alpha > 0:
         t = _fade(toast, toast_alpha) if toast_alpha < 255 else toast
         tw, th = t.size
@@ -285,7 +288,24 @@ for i in range(1, 12):                        # lift off the taskbar, glide up
 hold(_drag(_B), 1100)
 for i in range(1, 9):                          # nudge to a second spot
     add(_drag(_lerp(_B, _C, ease(i / 8))), 55)
-hold(_drag(_C), 1500)
+hold(_drag(_C), 1100)
+
+# 8b ── open the details from the new spot (popover follows the widget) -------
+capo = "Open the details right where it sits"
+_striph = render.render_strip(dd, TB_HEX, THEME, scale=3).height
+_popw = make_assets.popover_rgba(dd, THEME).width
+_anchor = (min(int(_C[0]), W - _popw - 20), int(_C[1]) + _striph + 10)
+
+
+def _drag_open(alpha, dy=0):
+    return compose(dd, strip_xy=_C, ghost=True, pop_alpha=alpha, pop_at=_anchor,
+                   pop_dy=dy, caption=capo)
+
+
+for i in range(1, 8):                          # popover reveals below the strip
+    t = ease(i / 7)
+    add(_drag_open(int(255 * t), dy=int((1 - t) * -14)), 55)
+hold(_drag_open(255), 1900)
 
 
 # 9 ── end card --------------------------------------------------------------
@@ -311,7 +331,7 @@ def end_card():
 
 
 ec = end_card()
-xfade(_drag(_C), ec, 5, 55)
+xfade(_drag_open(255), ec, 5, 55)
 hold(ec, 2400)
 xfade(ec, compose(start, pop_alpha=0), 5, 55)   # gentle loop back
 
