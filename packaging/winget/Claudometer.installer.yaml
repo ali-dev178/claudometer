@@ -2,7 +2,7 @@
 # filled by packaging/update-manifests.py. Submit to microsoft/winget-pkgs
 # (a three-file manifest is recommended for real submissions; this singleton is a start).
 PackageIdentifier: MuhammadAli.Claudometer
-PackageVersion: 1.1.2
+PackageVersion: 1.1.3
 PackageLocale: en-US
 Publisher: Muhammad Ali
 PublisherUrl: https://github.com/ali-dev178
@@ -25,7 +25,7 @@ Installers:
   - Architecture: x64
     InstallerType: inno
     Scope: user
-    InstallerUrl: https://github.com/ali-dev178/claudometer/releases/download/v1.1.2/ClaudometerSetup.exe
-    InstallerSha256: 86D57A481238F448B83C8CEB53210B62E8A05DDE4F460D6C2291F70C2341B110
+    InstallerUrl: https://github.com/ali-dev178/claudometer/releases/download/v1.1.3/ClaudometerSetup.exe
+    InstallerSha256: B85E31E922243BCA388898E0D1D7A899FC51B237E2AD16E747C60AE3312995EE
 ManifestType: singleton
 ManifestVersion: 1.6.0
