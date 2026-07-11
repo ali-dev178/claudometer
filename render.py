@@ -6,6 +6,7 @@ badges, and refined typography. tkinter's canvas can't do this natively, so the
 UI is composed as images and shown through ImageTk.
 """
 
+import math
 import os
 from datetime import datetime, timezone
 
@@ -177,6 +178,24 @@ def _gear(d, cx, cy, r, color, w):
                 cx + dx * r * 1.28, cy + dy * r * 1.28], fill=color, width=w)
     d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=color, width=w)
     d.ellipse([cx - r * 0.34, cy - r * 0.34, cx + r * 0.34, cy + r * 0.34], fill=color)
+
+
+def _refresh_icon(d, cx, cy, r, color, w):
+    """A circular reload arrow (clockwise, with a gap + arrowhead at the top)."""
+    box = [cx - r, cy - r, cx + r, cy + r]
+    # Arc drawn clockwise from ~1 o'clock all the way round to ~11 o'clock,
+    # leaving a gap at the top where the arrowhead sits.
+    d.arc(box, start=310, end=210, fill=color, width=w)
+    # Arrowhead at the leading (start) end of the arc, pointing along the
+    # clockwise tangent so it reads as "reload".
+    a = math.radians(310)
+    tip_a = a + math.radians(34)            # a little further clockwise = the tip
+    tx, ty = cx + r * math.cos(tip_a), cy + r * math.sin(tip_a)
+    bx, by = cx + r * math.cos(a), cy + r * math.sin(a)
+    # inner point, toward the circle centre from the base
+    ix, iy = cx + (r - w * 1.6) * math.cos(a), cy + (r - w * 1.6) * math.sin(a)
+    ox, oy = cx + (r + w * 1.6) * math.cos(a), cy + (r + w * 1.6) * math.sin(a)
+    d.polygon([(tx, ty), (ix, iy), (ox, oy)], fill=color)
 
 
 def _rrbar(d, x1, y1, x2, y2, pct, color, track):
@@ -396,11 +415,13 @@ def render_popover(disp, theme, scale=3):
     quit_w = d.textlength("Quit", font=f_foot)
     qx2, qx1 = Ws - P, Ws - P - quit_w
     d.text((qx2, fy), "Quit", font=f_foot, fill=T["dim"], anchor="rm")
-    ref_w = d.textlength("Refresh", font=f_foot)
-    rx2 = qx1 - 18 * S
-    rx1 = rx2 - ref_w
-    d.text((rx2, fy), "Refresh", font=f_foot, fill=T["accent"], anchor="rm")
-    # Settings (gear + label), left of Refresh
+    # Refresh — a circular reload icon (replaces the old "Refresh" label),
+    # left of Quit, in the accent color so it reads as the primary action.
+    rr = 5 * S
+    rcx = qx1 - 20 * S - rr
+    _refresh_icon(d, rcx, fy, rr, T["accent"], max(1, int(1.4 * S)))
+    rx1, rx2 = rcx - rr, rcx + rr
+    # Settings (gear + label), left of the refresh icon
     set_w = d.textlength("Settings", font=f_foot)
     sx2 = rx1 - 18 * S
     sx1 = sx2 - set_w
@@ -412,7 +433,7 @@ def render_popover(disp, theme, scale=3):
     out = base.resize((W, H), Image.LANCZOS)
     hits = {
         "settings": ((gx - gr * 1.3) / S, (fy - 12 * S) / S, sx2 / S, (fy + 12 * S) / S),
-        "refresh": (rx1 / S, (fy - 12 * S) / S, rx2 / S, (fy + 12 * S) / S),
+        "refresh": ((rx1 - 4 * S) / S, (fy - 12 * S) / S, (rx2 + 4 * S) / S, (fy + 12 * S) / S),
         "quit": (qx1 / S, (fy - 12 * S) / S, qx2 / S, (fy + 12 * S) / S),
     }
     return out, hits
