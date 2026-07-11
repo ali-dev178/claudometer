@@ -122,7 +122,7 @@ def hero_mac(disp):
     cw = d.textlength(clock, font=fr)
     d.text((W - 18, 15), clock, font=fr, fill="#eef0f3", anchor="rm")
     item_x2 = W - 18 - cw - 22
-    pct = f"{disp['session_pct']}%"
+    pct = f"S {disp['session_pct']}% · W {disp['weekly_pct']}%"
     pw = d.textlength(pct, font=fb)
     d.text((item_x2, 15), pct, font=fb, fill="#ffffff", anchor="rm")
     dot_x = item_x2 - pw - 12

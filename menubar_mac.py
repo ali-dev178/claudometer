@@ -44,6 +44,20 @@ class MenuApp(rumps.App):
         self._timer.start()
         self._tick(None)  # immediate first render
 
+    def _title(self, disp):
+        """Menu-bar title: dot (most-critical severity) + the enabled meters,
+        labelled — e.g. '🟡 S 61% · W 18%'. Falls back to the compact face
+        percent for status states (offline / no-data) that have no numbers."""
+        dot = DOT.get(disp.get("face_color"), "⚪")
+        parts = []
+        if "session" in self._metrics and disp.get("session_pct") is not None:
+            parts.append("S %d%%" % disp["session_pct"])
+        if "weekly" in self._metrics and disp.get("weekly_pct") is not None:
+            parts.append("W %d%%" % disp["weekly_pct"])
+        if not parts:
+            return "%s %s" % (dot, disp.get("face_pct", "—"))
+        return "%s %s" % (dot, " · ".join(parts))
+
     def _tick(self, _):
         try:
             result = core.poll_once(self._state)
@@ -55,7 +69,7 @@ class MenuApp(rumps.App):
             disp = core.status_display(core.Status.NO_CREDS)
         except Exception:
             disp = core.status_display(core.Status.ERROR)
-        self.title = f"{DOT.get(disp['face_color'], '⚪')} {disp['face_pct']}"
+        self.title = self._title(disp)
         # Rebuild only when the menu content changes — rebuilding every tick
         # leaks rumps callback registrations (they're never pruned).
         sig = (disp.get("plan"), disp.get("session"), disp.get("weekly"),
