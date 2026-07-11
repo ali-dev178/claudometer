@@ -136,7 +136,8 @@ def hero_mac(disp):
             ("row", f"Weekly (all)   {disp['weekly_pct']}%   ·   resets Thu Jul 16, 11:00 AM"),
             ("row", f"     Fable   {disp['model_rows'][0]['pct']}%"),
             ("sep", ""), ("info", "Updated 10:24 AM · auto"),
-            ("act", "Settings"), ("act", "Refresh now"), ("act", "Quit")]
+            ("act", "Settings"), ("act", "Refresh now"),
+            ("act", "Check for Updates…"), ("act", "Quit")]
     mw = 288
     heights = {"head": 30, "sep": 11, "row": 28, "act": 28, "info": 24}
     mh = sum(heights[k] for k, _ in rows) + 12

@@ -5,12 +5,14 @@ the right-click menu with the full breakdown on every poll.
 """
 
 import threading
+import webbrowser
 
 import pystray
 from pystray import Menu, MenuItem
 from PIL import Image, ImageDraw, ImageFont
 
 import usage_core as core
+import updates
 
 COLORS = {
     "green": (46, 160, 67),
@@ -97,12 +99,33 @@ class TrayApp:
             items.append(MenuItem("    " + model, None, enabled=False))
         items.append(Menu.SEPARATOR)
         items.append(MenuItem("Refresh now", self._refresh_now))
+        items.append(MenuItem("Check for Updates…", self._check_updates))
         items.append(MenuItem("Quit", self._quit))
         return Menu(*items)
 
     # -- actions ---------------------------------------------------------- #
     def _refresh_now(self, icon=None, item=None):
         self._wake.set()
+
+    def _check_updates(self, icon=None, item=None):
+        # Runs on pystray's menu-callback thread; a short network call is fine.
+        def worker():
+            res = updates.check()
+            if res["status"] == "update":
+                self._notify(f"Version {res['latest']} is available — opening "
+                             f"the download page.")
+                webbrowser.open(res["url"])
+            elif res["status"] == "current":
+                self._notify(f"You're on the latest version ({res['current']}).")
+            else:
+                self._notify("Couldn't check for updates. Please try again later.")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _notify(self, message: str) -> None:
+        try:
+            self.icon.notify(message, "Claudometer")
+        except Exception:
+            pass  # some backends lack balloon support
 
     def _quit(self, icon=None, item=None):
         self._stop.set()
