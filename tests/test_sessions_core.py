@@ -284,6 +284,46 @@ def test_pid_alive_false_for_impossible_pids():
     assert sc.pid_alive(-5) is False
 
 
+@pytest.mark.parametrize("pid", [2 ** 32, 2 ** 48, 99999999999999999999])
+def test_pid_alive_false_for_out_of_range_pids(pid):
+    # A stray timestamp-named file (20240101120000.json) yields a pid far past
+    # 32 bits; handing that to ctypes raises ArgumentError and would kill the
+    # whole poll loop.
+    assert sc.pid_alive(pid) is False
+
+
+@pytest.mark.parametrize("pid", [2 ** 32, 99999999999999999999])
+def test_proc_start_ms_none_for_out_of_range_pids(pid):
+    assert sc.proc_start_ms(pid) is None
+
+
+def test_scan_survives_a_timestamp_named_file(tmp_path):
+    sdir = tmp_path / "sessions"
+    sdir.mkdir(parents=True)
+    (sdir / "20240101120000.json").write_text(
+        json.dumps({"pid": 20240101120000, "sessionId": "junk"}),
+        encoding="utf-8")
+    _write_session(tmp_path, 4242, sessionId="real", status="busy")
+    sessions, health = sc.scan(tmp_path, alive=lambda pid: pid == 4242)
+    assert [s.session_id for s in sessions] == ["real"]
+    assert health == "ok"
+
+
+def test_scan_survives_a_file_that_explodes_the_liveness_probe(tmp_path):
+    # Structural guarantee: one bad file can never take down the whole scan.
+    _write_session(tmp_path, 1, sessionId="boom")
+    _write_session(tmp_path, 2, sessionId="fine")
+
+    def explode(pid):
+        if pid == 1:
+            raise RuntimeError("kernel32 went sideways")
+        return True
+
+    sessions, health = sc.scan(tmp_path, alive=explode)
+    assert [s.session_id for s in sessions] == ["fine"]
+    assert health == "ok"
+
+
 @pytest.mark.parametrize("value", [None, "", "abc", 3.5j, [], {}])
 def test_pid_alive_false_for_garbage(value):
     assert sc.pid_alive(value) is False
@@ -818,6 +858,60 @@ def test_read_json_retries_past_a_half_written_read(tmp_path, monkeypatch):
     monkeypatch.setattr(type(f), "read_text", flaky)
     monkeypatch.setattr(sc.time, "sleep", lambda _s: None)
     assert sc._read_json(f) == {"a": 1}
+
+
+def test_read_json_retries_past_a_split_multibyte_character(tmp_path, monkeypatch):
+    # A cwd with non-ASCII in it makes this reachable: a truncated write can
+    # end mid UTF-8 sequence, and read_text then raises UnicodeDecodeError
+    # (a ValueError, NOT an OSError).
+    # ensure_ascii=False, or the payload is pure ASCII and there is nothing to
+    # split \u2014 the whole point is a real multi-byte sequence on disk.
+    payload = json.dumps({"a": "\u00d6stberg"}, ensure_ascii=False).encode("utf-8")
+    torn = payload[:payload.rindex(b"\xc3") + 1]
+    f = tmp_path / "a.json"
+    reads = {"n": 0}
+
+    def flaky(self, *a, **k):
+        reads["n"] += 1
+        if reads["n"] == 1:
+            return torn.decode("utf-8")      # raises UnicodeDecodeError
+        return payload.decode("utf-8")
+
+    monkeypatch.setattr(type(f), "read_text", flaky)
+    monkeypatch.setattr(sc.time, "sleep", lambda _s: None)
+    assert sc._read_json(f) == {"a": "\u00d6stberg"}
+    assert reads["n"] == 2
+
+
+def test_read_json_survives_a_permanently_split_multibyte_file(tmp_path,
+                                                               monkeypatch):
+    monkeypatch.setattr(sc.time, "sleep", lambda _s: None)
+    payload = json.dumps({"a": "\u00d6stberg"}, ensure_ascii=False).encode("utf-8")
+    f = tmp_path / "a.json"
+    f.write_bytes(payload[:payload.rindex(b"\xc3") + 1])
+    assert sc._read_json(f) is None          # must not raise
+
+
+def test_scan_recovers_a_session_split_mid_utf8(tmp_path, monkeypatch):
+    _write_session(tmp_path, 4242, status="busy", cwd="C:/\u00d6stberg")
+    path = tmp_path / "sessions" / "4242.json"
+    # Rewrite without \u escapes so the bytes on disk really are multi-byte.
+    path.write_text(json.dumps(json.loads(path.read_text(encoding="utf-8")),
+                               ensure_ascii=False), encoding="utf-8")
+    payload = path.read_bytes()
+    reads = {"n": 0}
+
+    def flaky(self, *a, **k):
+        reads["n"] += 1
+        if reads["n"] == 1:
+            return payload[:payload.rindex(b"\xc3") + 1].decode("utf-8")
+        return payload.decode("utf-8")
+
+    monkeypatch.setattr(sc.Path, "read_text", flaky)
+    monkeypatch.setattr(sc.time, "sleep", lambda _s: None)
+    sessions, health = sc.scan(tmp_path, alive=_alive_all)
+    assert [s.pid for s in sessions] == [4242]      # recovered, not dropped
+    assert health == "ok"
 
 
 def test_read_json_gives_up_on_real_corruption(tmp_path, monkeypatch):

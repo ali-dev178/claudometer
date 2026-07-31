@@ -272,6 +272,12 @@ def stuck_sessions(sessions, minutes: float, at_ms: Optional[int] = None):
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _STILL_ACTIVE = 259
 
+#: PIDs are 32-bit on every platform we support. A larger value can only come
+#: from a stray ``<digits>.json`` in the registry directory (a timestamp-named
+#: file is 14 digits, which overflows), and handing it to ctypes raises
+#: ArgumentError — which would take down the whole poll loop.
+MAX_PID = 0xFFFFFFFF
+
 
 def pid_alive(pid) -> bool:
     """True if *pid* names a running process.
@@ -285,22 +291,25 @@ def pid_alive(pid) -> bool:
         pid = int(pid)
     except (TypeError, ValueError):
         return False
-    if pid <= 0:
+    if pid <= 0 or pid > MAX_PID:
         return False
 
     if sys.platform == "win32":
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(
-            _PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-        if not handle:
-            return False
         try:
-            code = ctypes.c_ulong()
-            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-                return True          # can't tell — assume alive rather than hide it
-            return code.value == _STILL_ACTIVE
-        finally:
-            kernel32.CloseHandle(handle)
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(
+                _PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                return False
+            try:
+                code = ctypes.c_ulong()
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                    return True      # can't tell — assume alive rather than hide it
+                return code.value == _STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return False             # a liveness probe must never break the loop
 
     try:
         os.kill(pid, 0)
@@ -334,7 +343,7 @@ def proc_start_ms(pid) -> Optional[int]:
         pid = int(pid)
     except (TypeError, ValueError):
         return None
-    if pid <= 0:
+    if pid <= 0 or pid > MAX_PID:
         return None
     try:
         kernel32 = ctypes.windll.kernel32
@@ -465,7 +474,12 @@ def _read_json(path, retries: int = READ_RETRIES,
         try:
             text = path.read_text(encoding="utf-8")
         except OSError:
-            return None
+            return None            # genuinely unreadable; retrying won't help
+        except UnicodeDecodeError:
+            # Torn mid multi-byte character — a session cwd with non-ASCII in
+            # it makes this reachable. Treat exactly like a partial read and
+            # retry, rather than losing the session for this poll.
+            text = ""
         if text.strip():
             try:
                 return json.loads(text)
@@ -519,18 +533,24 @@ def scan(config_dir=None, alive=None):
         if not name.isdigit():        # only <pid>.json belongs to the registry
             continue
         saw_files = True
-        data = _read_json(path)
-        if data is None:
+        try:
+            data = _read_json(path)
+            if data is None:
+                continue
+            session = parse_session(data, pid=int(name))
+            if session is None:
+                continue
+            parsed_any = True
+            if not alive(session.pid):
+                continue
+            if not pid_matches_session(session.pid, session.started_at):
+                continue
+            sessions.append(session)
+        except Exception:
+            # One malformed file must never take down the whole scan: this runs
+            # in a watch loop and has to survive whatever lands in this
+            # directory, including files no version of the CLI ever wrote.
             continue
-        session = parse_session(data, pid=int(name))
-        if session is None:
-            continue
-        parsed_any = True
-        if not alive(session.pid):
-            continue
-        if not pid_matches_session(session.pid, session.started_at):
-            continue
-        sessions.append(session)
 
     if saw_files and not parsed_any:
         return [], "unparsable"
