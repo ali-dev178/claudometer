@@ -116,11 +116,17 @@ class MenuApp(rumps.App):
             live = sessions_core.enrich_all(self._sess_tracker.sessions)
             self._sess_disp = sessions_core.format_sessions(
                 live, max_rows=self._sessions_max_rows)
+            self._sess_disp["sessions_recent"] = sessions_core.format_recent(
+                self._sess_tracker.recent)
         except Exception:
             return
 
         rows = self._sess_disp.get("sessions_rows") or []
-        shape = tuple((r["session_id"], r["status"]) for r in rows)
+        recent = self._sess_disp.get("sessions_recent") or []
+        # Recent rows change the row COUNT, so they belong in the shape too, or
+        # a session ending would never add its line.
+        shape = (tuple((r["session_id"], r["status"]) for r in rows),
+                 tuple(r["session_id"] for r in recent))
         if shape != self._sess_shape:
             # The set of sessions changed, so the row COUNT changed — only a
             # rebuild can add or remove items.
@@ -183,6 +189,9 @@ class MenuApp(rumps.App):
             if self._sess_disp.get("sessions_overflow"):
                 rows.append(rumps.MenuItem(
                     f"    +{self._sess_disp['sessions_overflow']} more"))
+            for row in self._sess_disp.get("sessions_recent") or []:
+                rows.append(rumps.MenuItem(
+                    f"    ⚪ {row['label']}  ·  {row['detail']}"))
 
         rows.append(None)
         # A disabled (callback-less) info line showing data freshness + source.

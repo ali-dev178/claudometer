@@ -454,6 +454,7 @@ def render_popover(disp, theme, scale=3):
         dot_r = 3.5 * S
         label_x = P + dot_r * 2 + 9 * S
         y = sess_top * S
+        sess_hits = []      # one clickable rect per row, in display pixels
         if not sess_rows:
             d.text((P, y), disp.get("sessions_empty") or "No sessions running",
                    font=f_row, fill=T["faint"], anchor="lm")
@@ -479,6 +480,8 @@ def render_popover(disp, theme, scale=3):
                 d.text((label_x + d.textlength(lbl, font=f_row), y), proj_txt,
                        font=f_reset, fill=T["faint"], anchor="lm")
             d.text((Ws - P, y), detail, font=f_reset, fill=col, anchor="rm")
+            half = (SESSION_ROW_H * S) / 2
+            sess_hits.append((P / S, (y - half) / S, (Ws - P) / S, (y + half) / S))
             y += SESSION_ROW_H * S
         if sess_overflow:
             d.text((label_x, y), f"+{sess_overflow} more", font=f_reset,
@@ -518,6 +521,11 @@ def render_popover(disp, theme, scale=3):
         "refresh": ((rx1 - 4 * S) / S, (fy - 12 * S) / S, (rx2 + 4 * S) / S, (fy + 12 * S) / S),
         "quit": (qx1 / S, (fy - 12 * S) / S, qx2 / S, (fy + 12 * S) / S),
     }
+    if show_sessions:
+        # "session:<row index>" — the caller maps the index back to the row it
+        # passed in, so the renderer never has to know what a session is.
+        for index, rect in enumerate(sess_hits):
+            hits["session:%d" % index] = rect
     return out, hits
 
 

@@ -13,6 +13,8 @@ import ctypes
 import dataclasses
 from ctypes import wintypes
 import json
+import os
+import subprocess
 import sys
 import threading
 import time
@@ -252,13 +254,17 @@ def _round_alpha(img, radius):
 # --------------------------------------------------------------------------- #
 class Popover:
     def __init__(self, root, theme, get_disp, anchor_x, anchor_top, anchor_bottom, work,
-                 on_refresh, on_quit, on_settings, on_close):
+                 on_refresh, on_quit, on_settings, on_close, on_session=None,
+                 on_session_menu=None):
         self.theme = theme
         self.get_disp = get_disp
         self.on_refresh = on_refresh
         self.on_quit = on_quit
         self.on_settings = on_settings
         self.on_close = on_close
+        self.on_session = on_session            # left click a session row
+        self.on_session_menu = on_session_menu  # right click a session row
+        self._rows = []                         # rows as last rendered
         self._closed = False
         self._after = None
         self._sig = None
@@ -285,6 +291,7 @@ class Popover:
         self.canvas = tk.Canvas(self.top, bg=key, highlightthickness=0, bd=0)
         self.canvas.pack()
         self.canvas.bind("<Button-1>", self._click)
+        self.canvas.bind("<Button-3>", self._right_click)
         self.canvas.bind("<Motion>", self._motion)
         self.top.bind("<Escape>", lambda e: self.close())
 
@@ -360,6 +367,7 @@ class Popover:
         self._sig = sig
         if foot:
             disp = dict(disp, foot=foot)
+        self._rows = list(disp.get("sessions_rows") or [])
         img, hits = render.render_popover(disp, self.theme)
         img = _round_alpha(img, 16)
         self._photo = ImageTk.PhotoImage(img)
@@ -387,7 +395,27 @@ class Popover:
         except Exception:
             pass
 
+    def _row_at(self, x, y):
+        """The session row under a point, or None."""
+        name = self._hit_at(x, y)
+        if not name or not name.startswith("session:"):
+            return None
+        try:
+            return self._rows[int(name.split(":", 1)[1])]
+        except (ValueError, IndexError):
+            return None      # the list changed between render and click
+
+    def _right_click(self, e):
+        row = self._row_at(e.x, e.y)
+        if row is not None and self.on_session_menu:
+            self.on_session_menu(row, e.x_root, e.y_root)
+
     def _click(self, e):
+        row = self._row_at(e.x, e.y)
+        if row is not None:
+            if self.on_session:
+                self.on_session(row)
+            return
         for name, (x1, y1, x2, y2) in self._hits.items():
             if x1 <= e.x <= x2 and y1 <= e.y <= y2:
                 if name == "refresh":
@@ -1385,11 +1413,98 @@ class BarWidget:
             self.root, self._theme, self._get_disp,
             rx, ry, ry + rh, work,
             self._refresh_now, self._quit, self._open_settings, self._on_popover_closed,
+            on_session=self._focus_session, on_session_menu=self._session_menu,
         )
 
     def _on_popover_closed(self):
         self._popover = None
         self._pop_closed_at = time.monotonic()
+
+    # -- session actions --------------------------------------------------- #
+    def _focus_session(self, row):
+        """Bring a session's terminal to the front.
+
+        This raises the WINDOW, not the tab — several sessions routinely share
+        one terminal and nothing in the process tree tells their tabs apart. So
+        it takes you to the right terminal and stops there rather than pretending
+        to land on the exact session.
+        """
+        try:
+            pid = row.get("pid")
+            parents = focus.parent_map()
+            if focus.window_for_pid(pid, parents) is None:
+                self._notify_session("No terminal window found for that session.")
+                return
+            if focus.raise_window(pid, parents):
+                if self._popover is not None:
+                    self._popover.close()   # get out of the way of what we raised
+                return
+            # raise_window reports what actually happened rather than what it
+            # asked for, so reaching here means Windows refused the switch.
+            self._notify_session("Windows wouldn't bring that terminal forward.")
+        except Exception:
+            _log_exc()
+            self._notify_session("Couldn't open that session's terminal.")
+
+    def _notify_session(self, message):
+        try:
+            self._show_toast(None, "Live sessions", message, "grey")
+        except Exception:
+            _log_exc()
+
+    def _copy(self, text, what):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(str(text))
+            self.root.update_idletasks()     # survive our own exit
+            self._notify_session(f"{what} copied to the clipboard.")
+        except Exception:
+            _log_exc()
+
+    def _open_path(self, path, what):
+        try:
+            if not path or not Path(path).exists():
+                self._notify_session(f"That {what} no longer exists.")
+                return
+            if _IS_WIN:
+                os.startfile(str(path))          # noqa: S606 - user-initiated
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+        except Exception:
+            _log_exc()
+            self._notify_session(f"Couldn't open that {what}.")
+
+    def _open_transcript(self, row):
+        path = sessions_core.transcript_path(row.get("session_id"),
+                                             row.get("cwd"))
+        if path is None:
+            self._notify_session("No transcript found for that session.")
+            return
+        self._open_path(path, "transcript")
+
+    def _session_menu(self, row, x_root, y_root):
+        """Right-click actions for one session row."""
+        menu = tk.Menu(self.root, tearoff=0)
+        label = (row.get("label") or "session")[:44]
+        menu.add_command(label=f"Go to {label}",
+                         command=lambda: self._focus_session(row))
+        menu.add_separator()
+        menu.add_command(label="Open project folder",
+                         command=lambda: self._open_path(row.get("cwd"), "folder"))
+        menu.add_command(label="Open transcript",
+                         command=lambda: self._open_transcript(row))
+        menu.add_separator()
+        menu.add_command(label="Copy session ID",
+                         command=lambda: self._copy(row.get("session_id"),
+                                                    "Session ID"))
+        menu.add_command(label="Copy project path",
+                         command=lambda: self._copy(row.get("cwd"), "Project path"))
+        try:
+            menu.tk_popup(int(x_root), int(y_root))
+        finally:
+            menu.grab_release()
 
     # -- threshold alerts ------------------------------------------------- #
     def _maybe_alert(self, disp):
@@ -1905,6 +2020,8 @@ class BarWidget:
                 merged.append(dataclasses.replace(s, **fields) if fields else s)
             self._sess_disp = sessions_core.format_sessions(
                 merged, max_rows=self._sessions_max_rows)
+            self._sess_disp["sessions_recent"] = sessions_core.format_recent(
+                self._sess_tracker.recent)
             self._session_alerts(events, merged)
         except Exception:
             _log_exc()
@@ -2039,6 +2156,10 @@ class BarWidget:
                         disp = dict(disp)
                         disp["cost_tokens"] = c["tokens"]
                         disp["cost_usd"] = c["cost"]
+                        # Which project is actually burning it. Rendered in the
+                        # menus, which have no height limit, not the popover.
+                        disp["cost_projects"] = cost.compute_today_by_project(
+                            limit=5) or []
                 except Exception:
                     pass
             # Hand off to the main thread. Tkinter isn't thread-safe, so alerts

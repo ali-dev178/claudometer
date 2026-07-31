@@ -23,6 +23,25 @@ MAX_ANCESTOR_HOPS = 8
 
 _IS_WIN = sys.platform == "win32"
 
+_user32_ready = False
+
+
+def _user32():
+    """user32 with the handle-returning functions given a pointer-sized restype.
+
+    ctypes defaults a return value to C ``int``, which is 32 bits — that would
+    silently truncate a window handle on 64-bit Windows and make every
+    comparison against it wrong.
+    """
+    global _user32_ready
+    lib = ctypes.windll.user32
+    if not _user32_ready:
+        lib.GetForegroundWindow.restype = ctypes.c_void_p
+        lib.GetWindowTextLengthW.restype = ctypes.c_int
+        lib.GetWindowThreadProcessId.restype = ctypes.c_uint32
+        _user32_ready = True
+    return lib
+
 # Windows constants
 _TH32CS_SNAPPROCESS = 0x00000002
 _MAX_PATH = 260
@@ -101,17 +120,127 @@ def ancestors(pid, parents: Optional[dict] = None, limit: int = MAX_ANCESTOR_HOP
     return chain
 
 
+def _visible_window_pids() -> dict:
+    """{owning pid: hwnd} for every visible top-level window with a title.
+
+    One EnumWindows pass answers the whole lookup. Windows with no title are
+    skipped — they're tool windows and tray hosts, never something to raise.
+    """
+    if not _IS_WIN:
+        return {}
+    found = {}
+    try:
+        user32 = _user32()
+        proto = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p,
+                                   ctypes.c_void_p)
+
+        def visit(hwnd, _lparam):
+            try:
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                length = user32.GetWindowTextLengthW(hwnd)
+                if not length:
+                    return True
+                pid = ctypes.c_uint32()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                found.setdefault(int(pid.value), hwnd)
+            except Exception:
+                pass
+            return True
+
+        user32.EnumWindows(proto(visit), 0)
+    except Exception:
+        return {}
+    return found
+
+
+def window_for_pid(pid, parents: Optional[dict] = None):
+    """The window handle of the terminal hosting *pid*, or None.
+
+    A `claude` process owns no window of its own, so this walks up the process
+    tree until it reaches an ancestor that does.
+    """
+    chain = ancestors(pid, parents)
+    if not chain:
+        return None
+    windows = _visible_window_pids()
+    for candidate in chain:
+        hwnd = windows.get(candidate)
+        if hwnd:
+            return hwnd
+    return None
+
+
+# ShowWindow commands
+_SW_RESTORE = 9
+
+
+def raise_window(pid, parents: Optional[dict] = None) -> bool:
+    """Bring the terminal hosting *pid* to the front. False if it can't.
+
+    NOTE this raises the WINDOW, not the tab. Several sessions commonly share
+    one terminal, and nothing in the process tree distinguishes their tabs — so
+    the honest promise is "take me to that terminal", and callers should say so
+    rather than implying the exact session will be focused.
+
+    Windows refuses SetForegroundWindow to a process that doesn't own the
+    current foreground window; the AttachThreadInput dance below is the
+    long-standing way around that, and every step is best-effort.
+    """
+    if not _IS_WIN:
+        return False
+    hwnd = window_for_pid(pid, parents)
+    if not hwnd:
+        return False
+    try:
+        user32 = _user32()
+        kernel32 = ctypes.windll.kernel32
+
+        def is_front():
+            return user32.GetForegroundWindow() == hwnd
+
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, _SW_RESTORE)
+        target = user32.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), None)
+        current = kernel32.GetCurrentThreadId()
+        attached = False
+        if target and target != current:
+            attached = bool(user32.AttachThreadInput(current, target, True))
+        try:
+            user32.BringWindowToTop(ctypes.c_void_p(hwnd))
+            user32.SetForegroundWindow(ctypes.c_void_p(hwnd))
+        finally:
+            if attached:
+                user32.AttachThreadInput(current, target, False)
+        if is_front():
+            return True
+        # Windows refuses a foreground change for a short period after the last
+        # one, and AttachThreadInput doesn't always defeat it — measured here,
+        # raising A over B worked but raising B straight back did not.
+        # SwitchToThisWindow is the long-standing way through that lock.
+        try:
+            user32.SwitchToThisWindow(ctypes.c_void_p(hwnd), True)
+        except Exception:
+            pass
+        # Report what actually happened, not what we asked for: the caller
+        # tells the user it failed, and a false success would be worse.
+        return bool(is_front())
+    except Exception:
+        return False
+
+
 def foreground_pid() -> Optional[int]:
     """PID owning the focused window, or None if it can't be determined."""
     if not _IS_WIN:
         return None
     try:
-        user32 = ctypes.windll.user32
+        user32 = _user32()
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
             return None
         pid = ctypes.c_uint32()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        user32.GetWindowThreadProcessId(ctypes.c_void_p(hwnd),
+                                        ctypes.byref(pid))
         return int(pid.value) or None
     except Exception:
         return None

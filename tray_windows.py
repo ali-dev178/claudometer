@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 import usage_core as core
 import sessions_core
 import settings
+import cost
 import updates
 
 COLORS = {
@@ -71,6 +72,18 @@ def render_icon(text: str, color_name: str, size: int = 64) -> Image.Image:
     return img
 
 
+def _fmt_tokens(n) -> str:
+    """1234 -> '1.2k', 7051178 -> '7.1M'."""
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return "0"
+    for limit, suffix in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "k")):
+        if n >= limit:
+            return f"{n / limit:.1f}{suffix}"
+    return str(int(n))
+
+
 class TrayApp:
     def __init__(self):
         self.icon = pystray.Icon("claude_usage")
@@ -125,6 +138,19 @@ class TrayApp:
             if disp.get("sessions_overflow"):
                 items.append(MenuItem(f"    +{disp['sessions_overflow']} more",
                                       None, enabled=False))
+            for row in disp.get("sessions_recent") or []:
+                items.append(MenuItem(f"    ⚪ {row['label']}  ·  {row['detail']}",
+                                      None, enabled=False))
+        # Which project is burning today's usage. Menus have no height limit,
+        # unlike the popover, so the breakdown lives here.
+        projects = disp.get("cost_projects")
+        if projects:
+            items.append(Menu.SEPARATOR)
+            items.append(MenuItem("Today by project", None, enabled=False))
+            for row in projects:
+                items.append(MenuItem(
+                    f"    {row['project']}  ·  {_fmt_tokens(row['tokens'])} tokens"
+                    f"  ·  ~${row['cost']:.2f}", None, enabled=False))
         items.append(Menu.SEPARATOR)
         items.append(MenuItem("Refresh now", self._refresh_now))
         items.append(MenuItem("Check for Updates…", self._check_updates))
@@ -174,6 +200,10 @@ class TrayApp:
             tuple((r["label"], r["detail"], r["emoji"])
                   for r in disp.get("sessions_rows") or ()),
             disp.get("sessions_rows") is not None,
+            tuple((r["label"], r["detail"])
+                  for r in disp.get("sessions_recent") or ()),
+            tuple((r["project"], r["tokens"])
+                  for r in disp.get("cost_projects") or ()),
         )
 
     def _apply(self, disp) -> None:
@@ -202,6 +232,8 @@ class TrayApp:
             live = sessions_core.enrich_all(self._sess_tracker.sessions)
             self._sess_disp = sessions_core.format_sessions(
                 live, max_rows=self._sessions_max_rows)
+            self._sess_disp["sessions_recent"] = sessions_core.format_recent(
+                self._sess_tracker.recent)
         except Exception:
             self._sess_disp = {}
 
@@ -210,7 +242,12 @@ class TrayApp:
         try:
             result = core.poll_once(self._state)
             if isinstance(result, core.Usage):
-                return core.format_breakdown(result)
+                disp = core.format_breakdown(result)
+                try:
+                    disp["cost_projects"] = cost.compute_today_by_project(limit=5) or []
+                except Exception:
+                    pass
+                return disp
             return core.status_display(result)
         except core.CredentialsMissing:
             return core.status_display(core.Status.NO_CREDS)

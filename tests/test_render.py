@@ -244,9 +244,43 @@ def test_popover_overflow_line_adds_a_row():
     assert over - plain == render.SESSION_ROW_H
 
 
-def test_popover_sessions_hit_map_is_unchanged():
+def test_popover_returns_a_hit_rect_per_session_row():
+    _, hits = render.render_popover(_sess([_row(), _row(), _row()]), "light")
+    assert {"session:0", "session:1", "session:2"} <= set(hits)
+    assert {"settings", "refresh", "quit"} <= set(hits)
+
+
+def test_popover_session_hits_do_not_overlap_each_other():
+    _, hits = render.render_popover(_sess([_row(), _row(), _row()]), "light")
+    rects = [hits[f"session:{i}"] for i in range(3)]
+    for a, b in zip(rects, rects[1:]):
+        assert a[3] <= b[1] + 1, "consecutive row hit boxes overlap"
+
+
+def test_popover_session_hits_are_inside_the_card():
+    out, hits = render.render_popover(_sess([_row(), _row()]), "light")
+    w, h = out.size
+    for i in range(2):
+        x1, y1, x2, y2 = hits[f"session:{i}"]
+        assert 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h
+
+
+def test_popover_session_hits_clear_the_footer_controls():
     _, hits = render.render_popover(_sess([_row(), _row()]), "light")
-    assert set(hits) == {"settings", "refresh", "quit"}
+    footer_top = min(hits[k][1] for k in ("settings", "refresh", "quit"))
+    for i in range(2):
+        assert hits[f"session:{i}"][3] <= footer_top, \
+            "a session row overlaps the footer buttons"
+
+
+def test_popover_no_session_hits_when_the_section_is_hidden():
+    _, hits = render.render_popover({"session_pct": 50, "weekly_pct": 33}, "light")
+    assert not [k for k in hits if k.startswith("session:")]
+
+
+def test_popover_no_session_hits_for_an_empty_list():
+    _, hits = render.render_popover(_sess([]), "light")
+    assert not [k for k in hits if k.startswith("session:")]
 
 
 def test_popover_sessions_footer_stays_below_the_rows():
@@ -273,7 +307,9 @@ def test_popover_sessions_with_cost_and_model_rows():
                  model_rows=[{"label": "Fable", "pct": 4, "color": "green"}],
                  cost_usd=1.23, cost_tokens=123456)
     out, hits = render.render_popover(disp, "light")
-    assert _positive_size(out) and set(hits) == {"settings", "refresh", "quit"}
+    assert _positive_size(out)
+    assert {"settings", "refresh", "quit"} <= set(hits)
+    assert {"session:0", "session:1"} <= set(hits)
 
 
 @pytest.mark.parametrize("n,expected_fits", [(1, True), (6, True), (12, True)])

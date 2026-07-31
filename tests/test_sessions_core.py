@@ -1498,6 +1498,92 @@ def test_tracker_reset_forgets_everything():
     assert [e.kind for e in t.update([_session(session_id="a")])] == ["appeared"]
 
 
+def test_tracker_records_ended_sessions():
+    t = sc.SessionTracker(confirm_ticks=1)
+    t.update([_session(session_id="a", name="one")], at_ms=1000)
+    t.update([], at_ms=5000)
+    assert [(when, s.name) for when, s in t.recent] == [(5000, "one")]
+
+
+def test_tracker_recent_is_newest_first():
+    t = sc.SessionTracker(confirm_ticks=1)
+    t.update([_session(session_id="a", name="one"),
+              _session(session_id="b", name="two")], at_ms=1000)
+    t.update([_session(session_id="b", name="two")], at_ms=2000)   # a ended
+    t.update([], at_ms=3000)                                       # b ended
+    assert [s.name for _w, s in t.recent] == ["two", "one"]
+
+
+def test_tracker_recent_is_capped():
+    t = sc.SessionTracker(confirm_ticks=1)
+    for i in range(sc.SessionTracker.RECENT_LIMIT + 5):
+        t.update([_session(session_id=str(i))], at_ms=1000 + i)
+        t.update([], at_ms=2000 + i)
+    assert len(t.recent) == sc.SessionTracker.RECENT_LIMIT
+
+
+def test_tracker_recent_ignores_a_brief_dropout():
+    t = sc.SessionTracker(confirm_ticks=2)
+    t.update([_session(session_id="a")], at_ms=1000)
+    t.update([], at_ms=2000)                        # one missed poll only
+    t.update([_session(session_id="a")], at_ms=3000)
+    assert t.recent == []
+
+
+def test_tracker_recent_is_a_copy():
+    t = sc.SessionTracker(confirm_ticks=1)
+    t.update([_session(session_id="a")], at_ms=1000)
+    t.update([], at_ms=2000)
+    t.recent.clear()
+    assert len(t.recent) == 1
+
+
+def test_tracker_reset_clears_recent():
+    t = sc.SessionTracker(confirm_ticks=1)
+    t.update([_session(session_id="a")], at_ms=1000)
+    t.update([], at_ms=2000)
+    t.reset()
+    assert t.recent == []
+
+
+# --------------------------------------------------------------------------- #
+# format_recent
+# --------------------------------------------------------------------------- #
+def test_format_recent_rows():
+    t = sc.SessionTracker(confirm_ticks=1)
+    t.update([_session(session_id="a", name="widget-b0", cwd="/x/widget")],
+             at_ms=1_000_000)
+    t.update([], at_ms=1_000_000)
+    rows = sc.format_recent(t.recent, at_ms=1_000_000 + 5 * 60_000)
+    assert rows[0]["label"] == "widget-b0"
+    assert rows[0]["project"] == "widget"
+    assert rows[0]["ago"] == "5m"
+    assert rows[0]["detail"] == "ended 5m"
+
+
+def test_format_recent_empty():
+    assert sc.format_recent([]) == []
+
+
+def test_format_recent_respects_the_limit():
+    t = sc.SessionTracker(confirm_ticks=1)
+    for i in range(6):
+        t.update([_session(session_id=str(i))], at_ms=1000)
+        t.update([], at_ms=2000)
+    assert len(sc.format_recent(t.recent, at_ms=3000, limit=3)) == 3
+
+
+def test_format_recent_scrubs_control_characters():
+    rows = sc.format_recent([(1000, _session(title="a\nb", cwd="/x/y"))],
+                            at_ms=2000)
+    assert "\n" not in rows[0]["label"]
+
+
+def test_format_recent_handles_a_future_timestamp():
+    rows = sc.format_recent([(9_000, _session(name="n"))], at_ms=1_000)
+    assert rows[0]["ago"] == "just now"      # never a negative age
+
+
 def test_tracker_sessions_list_is_a_copy():
     t = sc.SessionTracker()
     t.update([_session(session_id="a")])

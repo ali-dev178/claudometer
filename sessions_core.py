@@ -349,6 +349,27 @@ def overall_color(sessions) -> str:
     return "grey"
 
 
+def format_recent(recent, at_ms: Optional[int] = None, limit: int = 5):
+    """Rows for recently ended sessions, newest first.
+
+    *recent* is what :attr:`SessionTracker.recent` returns: (ended_at_ms,
+    Session) pairs.
+    """
+    at_ms = now_ms() if at_ms is None else at_ms
+    rows = []
+    for ended_at, session in list(recent)[:max(0, limit)]:
+        ago = fmt_dwell(max(0, int((at_ms - ended_at) / 1000)))
+        rows.append({
+            "session_id": session.session_id,
+            "label": oneline(session.label),
+            "project": oneline(session.project),
+            "cwd": session.cwd,
+            "ago": ago,
+            "detail": f"ended {ago}" if ago else "ended",
+        })
+    return rows
+
+
 def format_sessions(sessions, at_ms: Optional[int] = None,
                     max_rows: int = DEFAULT_MAX_ROWS) -> dict:
     """Turn Sessions into the flat dict every UI adapter renders verbatim.
@@ -970,11 +991,16 @@ class SessionTracker:
     in the list, so a row never blinks out and back.
     """
 
+    #: How many ended sessions to remember. Enough to answer "what was I just
+    #: doing?" without becoming a second, unbounded history feature.
+    RECENT_LIMIT = 10
+
     def __init__(self, confirm_ticks: int = MISSING_CONFIRM_TICKS):
         self.confirm_ticks = max(1, int(confirm_ticks))
         self._known = {}       # key -> last seen Session
         self._missing = {}     # key -> consecutive polls absent
         self._sorted = []
+        self._recent = []      # (ended_at_ms, Session), newest first
 
     @staticmethod
     def _key(session: Session) -> str:
@@ -1006,19 +1032,29 @@ class SessionTracker:
                 continue
             misses = self._missing.get(key, 0) + 1
             if misses >= self.confirm_ticks:
-                events.append(Transition("gone", self._known.pop(key)))
+                ended = self._known.pop(key)
                 self._missing.pop(key, None)
+                events.append(Transition("gone", ended))
+                self._recent.insert(0, (at_ms if at_ms is not None else now_ms(),
+                                        ended))
+                del self._recent[self.RECENT_LIMIT:]
             else:
                 self._missing[key] = misses
 
         self._sorted = sort_sessions(self._known.values(), at_ms)
         return events
 
+    @property
+    def recent(self):
+        """Recently ended sessions, newest first, as (ended_at_ms, Session)."""
+        return list(self._recent)
+
     def reset(self) -> None:
         """Forget everything — used when the feature is toggled back on, so a
         restart doesn't announce every running session as newly appeared."""
         self._known.clear()
         self._missing.clear()
+        self._recent.clear()
         self._sorted = []
 
 

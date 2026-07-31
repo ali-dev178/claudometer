@@ -6,6 +6,7 @@ real process snapshot can contain. The Windows API calls are exercised only
 for their fail-soft contract; nothing here reads or focuses a real window.
 """
 
+import os
 import sys
 
 import pytest
@@ -144,6 +145,59 @@ def test_exclusive_none_for_an_empty_session_list(monkeypatch):
 def test_exclusive_matches_the_session_process_itself(monkeypatch):
     monkeypatch.setattr(focus, "foreground_pid", lambda: 100)
     assert focus.exclusive_foreground_pid([100, 101], TABS) == 100
+
+
+# --------------------------------------------------------------------------- #
+# window_for_pid / raise_window
+# --------------------------------------------------------------------------- #
+def test_window_for_pid_finds_the_terminal_ancestor(monkeypatch):
+    # claude 100 owns no window; its terminal 300 does.
+    monkeypatch.setattr(focus, "_visible_window_pids", lambda: {300: 4242})
+    assert focus.window_for_pid(100, CHAIN) == 4242
+
+
+def test_window_for_pid_prefers_the_nearest_ancestor(monkeypatch):
+    monkeypatch.setattr(focus, "_visible_window_pids",
+                        lambda: {300: 4242, 400: 9999})
+    assert focus.window_for_pid(100, CHAIN) == 4242
+
+
+def test_window_for_pid_none_when_nothing_owns_a_window(monkeypatch):
+    monkeypatch.setattr(focus, "_visible_window_pids", lambda: {})
+    assert focus.window_for_pid(100, CHAIN) is None
+
+
+def test_window_for_pid_none_for_a_bad_pid(monkeypatch):
+    monkeypatch.setattr(focus, "_visible_window_pids", lambda: {300: 4242})
+    assert focus.window_for_pid(0, CHAIN) is None
+
+
+def test_raise_window_false_without_a_window(monkeypatch):
+    monkeypatch.setattr(focus, "window_for_pid", lambda *a, **k: None)
+    assert focus.raise_window(100) is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="non-Windows fallback")
+def test_raise_window_false_off_windows():
+    assert focus.raise_window(os.getpid()) is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only")
+def test_visible_window_pids_finds_something():
+    # A desktop session always has at least one titled visible window.
+    assert isinstance(focus._visible_window_pids(), dict)
+
+
+def test_visible_window_pids_never_raises(monkeypatch):
+    monkeypatch.setattr(focus, "_IS_WIN", True)
+
+    class Boom:
+        def __getattr__(self, name):
+            raise OSError("no user32")
+
+    monkeypatch.setattr(focus.ctypes, "windll", Boom(), raising=False)
+    assert focus._visible_window_pids() == {}
+    assert focus.raise_window(123) is False
 
 
 # --------------------------------------------------------------------------- #

@@ -24,7 +24,9 @@ alerts = true
 alert_thresholds = [80, 90]
 
 # Show an estimated token/cost line in the popover (reads local Claude Code
-# session logs; estimate only — see the README).
+# session logs; estimate only — see the README). This also adds a "Today by
+# project" breakdown to the tray / menu-bar menus, so you can see which repo
+# is actually burning the usage.
 show_cost = false
 
 # Override the accent color (brand mark, badge, links). Hex string, e.g.:
