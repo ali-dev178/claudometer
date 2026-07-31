@@ -831,6 +831,47 @@ def test_format_keys_never_collide_with_usage_core():
     assert all(k.startswith("sessions_") for k in out)
 
 
+@pytest.mark.parametrize("raw,expected", [
+    ("line one\nline two", "line one line two"),
+    ("a\tb", "a b"),
+    ("a\r\nb", "a b"),
+    ("  padded  ", "padded"),
+    ("bell\x07here", "bell here"),
+    ("nul\x00here", "nul here"),
+    ("multi   spaces", "multi spaces"),
+    ("", ""),
+    (None, ""),
+])
+def test_oneline_scrubs_control_characters(raw, expected):
+    assert sc.oneline(raw) == expected
+
+
+def test_oneline_caps_length():
+    assert len(sc.oneline("z" * 5000)) == 200
+
+
+def test_format_scrubs_newlines_out_of_every_rendered_field():
+    # A newline reaching Pillow raises "can't measure length of multiline
+    # text", which escapes render_popover and takes down the whole widget.
+    # Titles are model-generated and a POSIX dir name may contain a newline.
+    s = _session(title="two\nlines", cwd="/p/we\nird", status=sc.WAITING,
+                 waiting_for="input\nneeded", tool="a\tb", model="m\nz",
+                 git_branch="br\nanch", last_prompt="p\n\nq")
+    row = sc.format_sessions([s])["sessions_rows"][0]
+    for key in ("label", "project", "status_text", "detail", "tool", "model",
+                "branch", "last_prompt"):
+        assert "\n" not in row[key] and "\t" not in row[key], key
+
+
+def test_format_renders_after_scrubbing():
+    # The end-to-end guarantee: hostile content must not crash the renderer.
+    import render
+
+    s = _session(title="two\nlines", cwd="/p/x", status=sc.BUSY)
+    disp = dict(sc.format_sessions([s]))
+    render.render_popover(disp, "light")      # must not raise
+
+
 def test_format_empty_list():
     out = sc.format_sessions([])
     assert out["sessions_rows"] == []

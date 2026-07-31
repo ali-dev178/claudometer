@@ -200,9 +200,13 @@ def load() -> dict:
     cfg["sessions"] = bool(cfg["sessions"])
     cfg["sessions_on_strip"] = bool(cfg["sessions_on_strip"])
     try:
+        # Ceiling is 12, not "as many as you like": at 12 rows the popover is
+        # ~610px tall, which still fits a 1366x768 laptop's work area. Beyond
+        # that it runs off the bottom of the screen, and the placement math can
+        # only move the card, not shrink it. The rest collapse to "+N more".
         cfg["sessions_max_rows"] = (DEFAULTS["sessions_max_rows"]
                                     if isinstance(cfg["sessions_max_rows"], bool)
-                                    else max(1, min(20, int(cfg["sessions_max_rows"]))))
+                                    else max(1, min(12, int(cfg["sessions_max_rows"]))))
     except (TypeError, ValueError):
         cfg["sessions_max_rows"] = DEFAULTS["sessions_max_rows"]
     return cfg

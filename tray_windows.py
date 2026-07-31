@@ -86,6 +86,7 @@ class TrayApp:
         self._sess_tracker = sessions_core.SessionTracker()
         self._sess_disp = {}
         self._usage_disp = None
+        self._last_sig = None
 
     # -- menu ------------------------------------------------------------- #
     def _build_menu(self, disp) -> Menu:
@@ -159,9 +160,29 @@ class TrayApp:
         self._wake.set()
         self.icon.stop()
 
+    @staticmethod
+    def _sig(disp) -> tuple:
+        """What the tray actually displays. The loop now ticks every couple of
+        seconds for sessions, so without this the icon bitmap would be
+        re-rendered and the menu rebuilt constantly — which also fights a menu
+        the user currently has open."""
+        return (
+            disp.get("face_pct"), disp.get("face_color"), disp.get("tooltip"),
+            disp.get("plan"), disp.get("session"), disp.get("weekly"),
+            tuple(disp.get("models") or ()),
+            disp.get("sessions_summary"), disp.get("sessions_overflow"),
+            tuple((r["label"], r["detail"], r["emoji"])
+                  for r in disp.get("sessions_rows") or ()),
+            disp.get("sessions_rows") is not None,
+        )
+
     def _apply(self, disp) -> None:
         merged = dict(disp)
         merged.update(self._sess_disp)
+        sig = self._sig(merged)
+        if sig == self._last_sig:
+            return
+        self._last_sig = sig
         self.icon.icon = render_icon(disp["face_pct"], disp["face_color"])
         self.icon.title = merged["tooltip"]
         self.icon.menu = self._build_menu(merged)

@@ -50,6 +50,7 @@ resume_max_turns = 30                             # Tier 2: cap agentic turns
 sessions = true
 
 # Rows shown in the popover before the rest collapse into a "+N more" line.
+# Clamped to 1–12: past 12 the popover grows taller than a small laptop screen.
 sessions_max_rows = 6
 
 # Also show a "Live N" count on the taskbar strip (the popover always lists

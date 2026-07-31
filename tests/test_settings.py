@@ -29,8 +29,9 @@ def test_sessions_defaults(monkeypatch, tmp_path):
     (0, 1),      # clamped up — a zero-row cap would hide every session
     (-3, 1),
     (1, 1),
-    (20, 20),
-    (21, 20),    # clamped down
+    (12, 12),    # the ceiling: 12 rows still fit a 1366x768 work area
+    (20, 12),    # clamped down — beyond this the popover runs off-screen
+    (21, 12),
     ("4", 4),    # numeric string coerced
     ("x", 6),    # unparsable -> default
     (True, 6),   # a bool is not a row count -> default

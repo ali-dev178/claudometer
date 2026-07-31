@@ -301,6 +301,29 @@ _SUMMARY_ORDER = ((WAITING, "needs you"), (SHELL, "in shell"),
                   (BUSY, "working"), (IDLE, "done"))
 
 
+_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
+_WS_RE = re.compile(r"\s+")
+
+#: Longest string handed to a renderer. Elision handles the visual width; this
+#: only stops a pathological value from costing measurable time to measure.
+_TEXT_CAP = 200
+
+
+def oneline(text, limit: int = _TEXT_CAP) -> str:
+    """Collapse a value to a single line of printable text.
+
+    Everything rendered MUST be single-line: Pillow raises "can't measure
+    length of multiline text" on a newline, and that exception escapes
+    ``render_popover`` and takes down the whole widget. This is reachable —
+    titles are model-generated, ``waitingFor`` comes from the CLI, and a POSIX
+    directory name may legally contain a newline — so it is scrubbed once here,
+    at the seam every adapter shares, rather than in each renderer.
+    """
+    if not text:
+        return ""
+    return _WS_RE.sub(" ", _CTRL_RE.sub(" ", str(text))).strip()[:limit]
+
+
 def summarize(sessions) -> str:
     """One-line rollup, e.g. "1 needs you · 2 working"."""
     counts = {}
@@ -345,25 +368,25 @@ def format_sessions(sessions, at_ms: Optional[int] = None,
     rows = []
     for session in shown:
         dwell = fmt_dwell(dwell_seconds(session, at_ms))
+        status_text = oneline(session.status_text)
         rows.append({
             "session_id": session.session_id,
             "pid": session.pid,
-            "label": session.label,
-            "project": session.project,
+            "label": oneline(session.label),
+            "project": oneline(session.project),
             "cwd": session.cwd,
             "status": session.status,
-            "status_text": session.status_text,
+            "status_text": status_text,
             "color": session.color,
             "emoji": status_emoji(session.status),
             "dwell": dwell,
             # "needs you · 4m" — the right-hand side of a row, prebuilt so the
             # renderer never has to decide how to join them.
-            "detail": f"{session.status_text} · {dwell}" if dwell
-                      else session.status_text,
-            "tool": session.tool,
-            "model": session.model,
-            "branch": session.git_branch,
-            "last_prompt": session.last_prompt,
+            "detail": f"{status_text} · {dwell}" if dwell else status_text,
+            "tool": oneline(session.tool),
+            "model": oneline(session.model),
+            "branch": oneline(session.git_branch),
+            "last_prompt": oneline(session.last_prompt),
             "is_background": session.is_background,
         })
 

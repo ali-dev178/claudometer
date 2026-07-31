@@ -183,6 +183,149 @@ def test_strip_custom_scale():
 
 
 # --------------------------------------------------------------------------- #
+# Live-sessions section (popover) and the "Live N" strip group
+# --------------------------------------------------------------------------- #
+def _row(label="a session", project="repo", color="amber",
+         detail="working · 4m", emoji="🟡", status="busy"):
+    return {"label": label, "project": project, "color": color,
+            "detail": detail, "emoji": emoji, "status": status}
+
+
+def _sess(rows, **extra):
+    out = {"session_pct": 50, "weekly_pct": 33, "sessions_rows": rows,
+           "sessions_count": len(rows), "sessions_overflow": 0,
+           "sessions_summary": "1 working", "sessions_color": "amber",
+           "sessions_empty": "No Claude sessions running", "sessions_blocked": 0}
+    out.update(extra)
+    return out
+
+
+@pytest.mark.parametrize("theme", ALL_THEMES)
+def test_popover_sessions_section_renders(theme):
+    out, _ = render.render_popover(_sess([_row()]), theme)
+    assert _is_image(out) and _positive_size(out)
+    assert out.size[0] == 344
+
+
+def test_popover_sessions_section_adds_height():
+    without = render.render_popover({"session_pct": 50, "weekly_pct": 33},
+                                    "light")[0].size[1]
+    with_ = render.render_popover(_sess([_row()]), "light")[0].size[1]
+    assert with_ > without
+
+
+def test_popover_grows_by_one_row_pitch_per_session():
+    one = render.render_popover(_sess([_row()]), "light")[0].size[1]
+    three = render.render_popover(_sess([_row(), _row(), _row()]),
+                                  "light")[0].size[1]
+    assert three - one == 2 * render.SESSION_ROW_H
+
+
+def test_popover_empty_session_list_still_renders_the_section():
+    # An empty list renders a "none running" line rather than vanishing, so the
+    # section doesn't blink in and out as sessions start and stop.
+    out, _ = render.render_popover(_sess([]), "light")
+    baseline = render.render_popover({"session_pct": 50, "weekly_pct": 33},
+                                     "light")[0].size[1]
+    assert out.size[1] > baseline
+
+
+def test_popover_absent_sessions_key_hides_the_section():
+    a = render.render_popover({"session_pct": 50, "weekly_pct": 33}, "light")[0]
+    b = render.render_popover({"session_pct": 50, "weekly_pct": 33,
+                               "sessions_rows": None}, "light")[0]
+    assert a.size == b.size
+
+
+def test_popover_overflow_line_adds_a_row():
+    plain = render.render_popover(_sess([_row()]), "light")[0].size[1]
+    over = render.render_popover(_sess([_row()], sessions_overflow=7),
+                                 "light")[0].size[1]
+    assert over - plain == render.SESSION_ROW_H
+
+
+def test_popover_sessions_hit_map_is_unchanged():
+    _, hits = render.render_popover(_sess([_row(), _row()]), "light")
+    assert set(hits) == {"settings", "refresh", "quit"}
+
+
+def test_popover_sessions_footer_stays_below_the_rows():
+    rows = [_row() for _ in range(5)]
+    out, hits = render.render_popover(_sess(rows), "light")
+    # Every footer control must sit inside the card, below the last row.
+    for x1, y1, x2, y2 in hits.values():
+        assert 0 <= y1 < y2 <= out.size[1]
+
+
+def test_popover_long_label_and_project_do_not_raise():
+    out, _ = render.render_popover(
+        _sess([_row(label="z" * 300, project="y" * 200)]), "light")
+    assert _positive_size(out)
+
+
+def test_popover_session_row_missing_keys_does_not_raise():
+    out, _ = render.render_popover(_sess([{}]), "light")
+    assert _positive_size(out)
+
+
+def test_popover_sessions_with_cost_and_model_rows():
+    disp = _sess([_row(), _row()],
+                 model_rows=[{"label": "Fable", "pct": 4, "color": "green"}],
+                 cost_usd=1.23, cost_tokens=123456)
+    out, hits = render.render_popover(disp, "light")
+    assert _positive_size(out) and set(hits) == {"settings", "refresh", "quit"}
+
+
+@pytest.mark.parametrize("n,expected_fits", [(1, True), (6, True), (12, True)])
+def test_popover_height_fits_a_1366x768_work_area(n, expected_fits):
+    # settings caps sessions_max_rows at 12 precisely so this holds; the
+    # placement math can move the card but never shrink it.
+    disp = _sess([_row() for _ in range(n)],
+                 model_rows=[{"label": "Fable", "pct": 4, "color": "green"}],
+                 cost_usd=1.23, cost_tokens=123456)
+    h = render.render_popover(disp, "light")[0].size[1]
+    assert (h + 16 <= 768 - 48) is expected_fits
+
+
+def test_strip_live_group_renders():
+    img = render.render_strip(
+        {"session_pct": 50, "session_color": "green", "sessions_count": 3,
+         "sessions_color": "amber", "sessions_blocked": 0},
+        "#ffffff", "light", metrics=("session", "sessions"))
+    assert _is_image(img) and _positive_size(img)
+
+
+def test_strip_live_group_widens_when_blocked():
+    base = {"session_pct": 50, "session_color": "green", "sessions_count": 3,
+            "sessions_color": "amber"}
+    plain = render.render_strip(dict(base, sessions_blocked=0), "#ffffff",
+                                "light", metrics=("session", "sessions"))
+    blocked = render.render_strip(dict(base, sessions_blocked=2), "#ffffff",
+                                  "light", metrics=("session", "sessions"))
+    assert blocked.size[0] > plain.size[0]
+
+
+def test_strip_omits_live_group_without_a_count():
+    with_ = render.render_strip(
+        {"session_pct": 50, "session_color": "green", "sessions_count": 2,
+         "sessions_color": "amber"}, "#ffffff", "light",
+        metrics=("session", "sessions"))
+    without = render.render_strip(
+        {"session_pct": 50, "session_color": "green"}, "#ffffff", "light",
+        metrics=("session", "sessions"))
+    assert with_.size[0] > without.size[0]
+
+
+def test_strip_live_group_not_drawn_unless_requested():
+    disp = {"session_pct": 50, "session_color": "green", "sessions_count": 3,
+            "sessions_color": "amber"}
+    off = render.render_strip(disp, "#ffffff", "light", metrics=("session",))
+    on = render.render_strip(disp, "#ffffff", "light",
+                             metrics=("session", "sessions"))
+    assert on.size[0] > off.size[0]
+
+
+# --------------------------------------------------------------------------- #
 # render_popover
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("theme", ALL_THEMES)
