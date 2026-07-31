@@ -92,6 +92,18 @@ PID_REUSE_TOLERANCE_S = 300
 #: costs a process spawn, so it must never run at watch-loop frequency.
 CLI_MIN_INTERVAL_S = 10.0
 
+#: Claude Code rewrites ``<pid>.json`` with a plain truncate-and-write — there
+#: is no temp-file-plus-rename — so a reader can catch the file empty or half
+#: written. The window is microseconds, so a couple of quick retries close it.
+#: Without this a torn read silently drops a live session for one poll.
+READ_RETRIES = 3
+READ_RETRY_DELAY_S = 0.002
+
+#: How many consecutive polls a session must stay missing before
+#: :class:`SessionTracker` believes it. Guards the alert layer against the same
+#: torn read: one dropped poll must never fire a "session ended" toast.
+MISSING_CONFIRM_TICKS = 2
+
 #: How much of a transcript's tail to read when enriching. Transcripts reach
 #: tens of MB, so they are always read backwards from the end.
 TRANSCRIPT_TAIL_BYTES = 96 * 1024
@@ -441,6 +453,44 @@ def parse_session(data: dict, pid: int = 0) -> Optional[Session]:
     )
 
 
+def _read_json(path, retries: int = READ_RETRIES,
+               delay: float = READ_RETRY_DELAY_S):
+    """Read a JSON file, retrying briefly on a torn read.
+
+    Returns None if the file is unreadable or still not valid JSON after the
+    retries — the caller cannot tell a torn read from real corruption, and
+    both mean "skip this file".
+    """
+    for attempt in range(max(1, retries)):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        if text.strip():
+            try:
+                return json.loads(text)
+            except ValueError:
+                pass
+        if attempt + 1 < retries:
+            time.sleep(delay)
+    return None
+
+
+def _dedupe(sessions):
+    """Collapse records that name the same session, keeping the freshest.
+
+    Resuming a session can briefly leave two registry files pointing at one
+    ``sessionId``. Showing the same work twice is worse than picking one.
+    """
+    best = {}
+    for session in sessions:
+        key = session.session_id or f"pid:{session.pid}"
+        current = best.get(key)
+        if current is None or session.updated_at > current.updated_at:
+            best[key] = session
+    return list(best.values())
+
+
 def scan(config_dir=None, alive=None):
     """Read the registry directory.
 
@@ -469,9 +519,8 @@ def scan(config_dir=None, alive=None):
         if not name.isdigit():        # only <pid>.json belongs to the registry
             continue
         saw_files = True
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        data = _read_json(path)
+        if data is None:
             continue
         session = parse_session(data, pid=int(name))
         if session is None:
@@ -485,7 +534,7 @@ def scan(config_dir=None, alive=None):
 
     if saw_files and not parsed_any:
         return [], "unparsable"
-    return sessions, "ok"
+    return _dedupe(sessions), "ok"
 
 
 # --------------------------------------------------------------------------- #
@@ -592,6 +641,74 @@ def diff(previous, current):
             out.append(Transition("gone", session))
 
     return out
+
+
+class SessionTracker:
+    """Turns a stream of snapshots into *confirmed* transitions.
+
+    ``diff`` is pure and reports a disappearance the instant a session is
+    absent. That is too eager to drive alerts from: a single poll can miss a
+    live session for reasons that have nothing to do with it ending — the CLI
+    rewrites ``<pid>.json`` with a non-atomic truncate-and-write, an antivirus
+    scanner can hold the file briefly, and pruning can race a rewrite. Any of
+    those would otherwise fire a "session ended" toast for a session that is
+    still running.
+
+    So a disappearance must persist for ``confirm_ticks`` consecutive polls
+    before it counts. :attr:`sessions` likewise keeps a briefly-missing session
+    in the list, so a row never blinks out and back.
+    """
+
+    def __init__(self, confirm_ticks: int = MISSING_CONFIRM_TICKS):
+        self.confirm_ticks = max(1, int(confirm_ticks))
+        self._known = {}       # key -> last seen Session
+        self._missing = {}     # key -> consecutive polls absent
+        self._sorted = []
+
+    @staticmethod
+    def _key(session: Session) -> str:
+        return session.session_id or f"pid:{session.pid}"
+
+    @property
+    def sessions(self):
+        """Current sessions, including any still inside the grace window."""
+        return list(self._sorted)
+
+    def update(self, sessions, at_ms: Optional[int] = None):
+        """Feed one snapshot in; get the confirmed transitions back."""
+        current = {self._key(s): s for s in sessions}
+        events = []
+
+        for key, session in current.items():
+            self._missing.pop(key, None)      # it's back (or never left)
+            old = self._known.get(key)
+            if old is None:
+                events.append(Transition("appeared", session))
+            elif (old.status != session.status
+                  and UNKNOWN not in (old.status, session.status)):
+                events.append(Transition("status", session,
+                                         before=old.status, after=session.status))
+            self._known[key] = session
+
+        for key in list(self._known):
+            if key in current:
+                continue
+            misses = self._missing.get(key, 0) + 1
+            if misses >= self.confirm_ticks:
+                events.append(Transition("gone", self._known.pop(key)))
+                self._missing.pop(key, None)
+            else:
+                self._missing[key] = misses
+
+        self._sorted = sort_sessions(self._known.values(), at_ms)
+        return events
+
+    def reset(self) -> None:
+        """Forget everything — used when the feature is toggled back on, so a
+        restart doesn't announce every running session as newly appeared."""
+        self._known.clear()
+        self._missing.clear()
+        self._sorted = []
 
 
 # --------------------------------------------------------------------------- #

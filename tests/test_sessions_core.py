@@ -777,6 +777,225 @@ def test_diff_reports_several_changes_at_once():
 
 
 # --------------------------------------------------------------------------- #
+# Torn reads — the CLI rewrites <pid>.json with a non-atomic truncate+write
+# --------------------------------------------------------------------------- #
+def test_read_json_reads_a_good_file(tmp_path):
+    f = tmp_path / "a.json"
+    f.write_text(json.dumps({"a": 1}), encoding="utf-8")
+    assert sc._read_json(f) == {"a": 1}
+
+
+def test_read_json_retries_past_a_truncated_read(tmp_path, monkeypatch):
+    f = tmp_path / "a.json"
+    f.write_text(json.dumps({"a": 1}), encoding="utf-8")
+    reads = {"n": 0}
+    real = type(f).read_text
+
+    def flaky(self, *a, **k):
+        reads["n"] += 1
+        if reads["n"] == 1:
+            return ""              # caught mid truncate-and-write
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(type(f), "read_text", flaky)
+    monkeypatch.setattr(sc.time, "sleep", lambda _s: None)
+    assert sc._read_json(f) == {"a": 1}
+    assert reads["n"] == 2
+
+
+def test_read_json_retries_past_a_half_written_read(tmp_path, monkeypatch):
+    f = tmp_path / "a.json"
+    f.write_text(json.dumps({"a": 1}), encoding="utf-8")
+    reads = {"n": 0}
+    real = type(f).read_text
+
+    def flaky(self, *a, **k):
+        reads["n"] += 1
+        if reads["n"] == 1:
+            return '{"a":'         # partial write
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(type(f), "read_text", flaky)
+    monkeypatch.setattr(sc.time, "sleep", lambda _s: None)
+    assert sc._read_json(f) == {"a": 1}
+
+
+def test_read_json_gives_up_on_real_corruption(tmp_path, monkeypatch):
+    monkeypatch.setattr(sc.time, "sleep", lambda _s: None)
+    f = tmp_path / "a.json"
+    f.write_text("{ broken", encoding="utf-8")
+    assert sc._read_json(f) is None
+
+
+def test_read_json_does_not_retry_a_missing_file(tmp_path):
+    # An OSError is not a torn read — retrying it would just burn time.
+    assert sc._read_json(tmp_path / "nope.json") is None
+
+
+def test_read_json_single_read_when_healthy(tmp_path, monkeypatch):
+    f = tmp_path / "a.json"
+    f.write_text(json.dumps({"a": 1}), encoding="utf-8")
+    monkeypatch.setattr(sc.time, "sleep",
+                        lambda _s: pytest.fail("healthy read must not sleep"))
+    assert sc._read_json(f) == {"a": 1}
+
+
+def test_scan_recovers_a_session_from_a_torn_read(tmp_path, monkeypatch):
+    _write_session(tmp_path, 4242, status="busy")
+    reads = {"n": 0}
+    real = sc.Path.read_text
+
+    def flaky(self, *a, **k):
+        reads["n"] += 1
+        if reads["n"] == 1:
+            return ""
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(sc.Path, "read_text", flaky)
+    monkeypatch.setattr(sc.time, "sleep", lambda _s: None)
+    sessions, health = sc.scan(tmp_path, alive=_alive_all)
+    assert [s.pid for s in sessions] == [4242]     # not dropped
+    assert health == "ok"
+
+
+# --------------------------------------------------------------------------- #
+# Duplicate session ids
+# --------------------------------------------------------------------------- #
+def test_scan_dedupes_same_session_id_keeping_freshest(tmp_path):
+    _write_session(tmp_path, 100, sessionId="same", updatedAt=10, status="idle")
+    _write_session(tmp_path, 200, sessionId="same", updatedAt=99, status="busy")
+    sessions, _ = sc.scan(tmp_path, alive=_alive_all)
+    assert len(sessions) == 1
+    assert sessions[0].pid == 200 and sessions[0].status == "busy"
+
+
+def test_scan_keeps_distinct_session_ids(tmp_path):
+    _write_session(tmp_path, 100, sessionId="a")
+    _write_session(tmp_path, 200, sessionId="b")
+    sessions, _ = sc.scan(tmp_path, alive=_alive_all)
+    assert sorted(s.session_id for s in sessions) == ["a", "b"]
+
+
+def test_dedupe_falls_back_to_pid_without_session_id():
+    a = _session(session_id="", pid=1)
+    b = _session(session_id="", pid=2)
+    assert len(sc._dedupe([a, b])) == 2
+
+
+# --------------------------------------------------------------------------- #
+# SessionTracker — debounced transitions
+# --------------------------------------------------------------------------- #
+def test_tracker_reports_first_snapshot_as_appeared():
+    t = sc.SessionTracker()
+    events = t.update([_session(session_id="a")])
+    assert [(e.kind, e.session.session_id) for e in events] == [("appeared", "a")]
+
+
+def test_tracker_reports_status_change():
+    t = sc.SessionTracker()
+    t.update([_session(session_id="a", status=sc.BUSY)])
+    events = t.update([_session(session_id="a", status=sc.IDLE)])
+    assert len(events) == 1 and events[0].kind == "status"
+    assert events[0].before == sc.BUSY and events[0].after == sc.IDLE
+
+
+def test_tracker_silent_when_nothing_changes():
+    t = sc.SessionTracker()
+    t.update([_session(session_id="a", status=sc.BUSY)])
+    assert t.update([_session(session_id="a", status=sc.BUSY)]) == []
+
+
+def test_tracker_ignores_a_single_dropped_poll():
+    # THE point of the debounce: one torn read must not fire "session ended".
+    t = sc.SessionTracker(confirm_ticks=2)
+    t.update([_session(session_id="a", status=sc.BUSY)])
+    assert t.update([]) == []                       # vanished for one poll
+    assert t.update([_session(session_id="a", status=sc.BUSY)]) == []
+
+
+def test_tracker_keeps_a_briefly_missing_session_visible():
+    t = sc.SessionTracker(confirm_ticks=2)
+    t.update([_session(session_id="a", status=sc.BUSY)])
+    t.update([])
+    assert [s.session_id for s in t.sessions] == ["a"]   # row must not blink
+
+
+def test_tracker_confirms_a_sustained_disappearance():
+    t = sc.SessionTracker(confirm_ticks=2)
+    t.update([_session(session_id="a")])
+    assert t.update([]) == []
+    events = t.update([])
+    assert [(e.kind, e.session.session_id) for e in events] == [("gone", "a")]
+    assert t.sessions == []
+
+
+def test_tracker_confirm_ticks_one_reports_immediately():
+    t = sc.SessionTracker(confirm_ticks=1)
+    t.update([_session(session_id="a")])
+    assert [e.kind for e in t.update([])] == ["gone"]
+
+
+def test_tracker_confirm_ticks_floor_is_one():
+    assert sc.SessionTracker(confirm_ticks=0).confirm_ticks == 1
+
+
+def test_tracker_gone_session_reappearing_is_a_new_appearance():
+    t = sc.SessionTracker(confirm_ticks=1)
+    t.update([_session(session_id="a")])
+    t.update([])                                     # confirmed gone
+    assert [e.kind for e in t.update([_session(session_id="a")])] == ["appeared"]
+
+
+def test_tracker_status_change_while_briefly_missing_is_reported():
+    t = sc.SessionTracker(confirm_ticks=3)
+    t.update([_session(session_id="a", status=sc.BUSY)])
+    t.update([])
+    events = t.update([_session(session_id="a", status=sc.WAITING)])
+    assert len(events) == 1 and events[0].kind == "status"
+    assert events[0].after == sc.WAITING
+
+
+def test_tracker_suppresses_unknown_status_transitions():
+    t = sc.SessionTracker()
+    t.update([_session(session_id="a", status=sc.BUSY)])
+    assert t.update([_session(session_id="a", status=sc.UNKNOWN)]) == []
+
+
+def test_tracker_sessions_are_sorted_blocked_first():
+    t = sc.SessionTracker()
+    t.update([_session(session_id="i", status=sc.IDLE, status_updated_at=900),
+              _session(session_id="w", status=sc.WAITING, status_updated_at=900)],
+             at_ms=1000)
+    assert [s.session_id for s in t.sessions] == ["w", "i"]
+
+
+def test_tracker_handles_several_sessions_independently():
+    t = sc.SessionTracker(confirm_ticks=2)
+    t.update([_session(session_id="a", status=sc.BUSY),
+              _session(session_id="b", status=sc.BUSY)])
+    events = t.update([_session(session_id="a", status=sc.IDLE)])
+    assert [e.kind for e in events] == ["status"]      # b only missing once
+    events = t.update([_session(session_id="a", status=sc.IDLE)])
+    assert [(e.kind, e.session.session_id) for e in events] == [("gone", "b")]
+
+
+def test_tracker_reset_forgets_everything():
+    t = sc.SessionTracker()
+    t.update([_session(session_id="a")])
+    t.reset()
+    assert t.sessions == []
+    # After a reset the session is announced fresh rather than silently kept.
+    assert [e.kind for e in t.update([_session(session_id="a")])] == ["appeared"]
+
+
+def test_tracker_sessions_list_is_a_copy():
+    t = sc.SessionTracker()
+    t.update([_session(session_id="a")])
+    t.sessions.clear()
+    assert len(t.sessions) == 1
+
+
+# --------------------------------------------------------------------------- #
 # project_slug / transcript_path
 # --------------------------------------------------------------------------- #
 def test_project_slug_windows_path():
