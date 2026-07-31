@@ -51,6 +51,7 @@ Claude's Pro / Max / Team plans enforce a rolling **5‑hour session** limit and
 - 🔒 **Zero setup** — reuses your existing Claude login. Nothing to configure.
 - 🪶 **Featherweight** — ~0.03% CPU idle, ~50 MB RAM. You won't notice it.
 - 🔔 **Alerts** — optional desktop toast when you cross 80% / 90%.
+- 🟢 **Live sessions** — see every running `claude` session at a glance: which is working, which finished, and which is **blocked waiting on you**. Click one to jump to its terminal.
 - ⏭️ **Resume** — one click picks up interrupted work when your limit resets (auto‑resume optional).
 - 🖥️ **Out of the way** — auto‑hides over fullscreen movies/games (or set it to always show).
 - ⚙️ **Tunable** — a built‑in **settings panel** (no file editing) for theme, meters, alerts, accent, cost view, and more.
@@ -67,6 +68,9 @@ Claude's Pro / Max / Team plans enforce a rolling **5‑hour session** limit and
 
 **Threshold alerts** — a desktop toast the moment you cross a limit you set:
 <p align="center"><img src="assets/alerts.png" alt="Alert toasts" width="720"></p>
+
+**Live sessions** — every running `claude` session, blocked ones first:
+<p align="center"><img src="assets/sessions.png" alt="Live sessions" width="720"></p>
 
 **Estimated cost** *(opt‑in)* — today's tokens + a rough dollar figure in the popover (a local estimate, not a bill):
 <p align="center"><img src="assets/popover-cost.png" alt="Cost line in the popover" width="420"></p>
@@ -125,6 +129,38 @@ Hit the session limit mid‑task and everything stalls? Claudometer watches your
 
 ---
 
+## Live Claude sessions
+
+Running Claude in three terminals and losing track of which one is waiting on you? Claudometer lists every live `claude` session and what it's actually doing.
+
+<p align="center"><img src="assets/sessions.png" alt="Live sessions in the popover, with alerts" width="820"></p>
+
+| Dot | State | Meaning |
+|---|---|---|
+| 🔴 | **needs you** | blocked on a permission prompt or a question — with the reason |
+| 🟡 | **working** | the model is generating, or a tool is running |
+| 🟠 | **running a command** | a shell command specifically |
+| 🟢 | **done** | it replied; waiting for your next prompt |
+
+Blocked sessions sort to the top, each row shows how long it's held that state, and the taskbar strip carries a compact **Live N** count so you don't have to open anything.
+
+- **Alerts** — a toast when a session needs you, finishes, or stays blocked too long. Pick which ones in Settings; several at once collapse into one summary rather than burying each other.
+- **Click a row** to bring that session's terminal to the front. **Right‑click** for open project folder, open transcript, copy session ID / path.
+- **Recently finished** sessions and a **today‑by‑project** usage split (with `show_cost`) live in the tray / menu‑bar menus.
+
+It reads `~/.claude/sessions` locally — the same registry Claude Code maintains — about once a second. Nothing is sent anywhere.
+
+<details><summary><b>Instant alerts via hooks</b> (optional — it edits Claude Code's settings)</summary>
+
+By default sessions update within about a second, which needs no setup at all. Turning on **Instant alerts** additionally registers four hooks (`Notification`, `Stop`, `SessionStart`, `SessionEnd`) in `~/.claude/settings.json` so changes land the moment they happen — and carry the real prompt text a session is blocked on, instead of a generic category.
+
+Because that's *another app's* config file, it's handled carefully: you see the exact JSON and confirm before anything is written, the original is backed up, your other settings and anyone else's hooks are preserved, and switching it off removes exactly those entries. `Pre/PostToolUse` are deliberately **not** registered — they fire constantly and each one costs a process spawn inside your session.
+
+The hook runs a small relay copied to `~/.claudometer`, not from the app folder, so updating or uninstalling Claudometer can't leave Claude Code invoking a path that no longer exists. If Claudometer stops running entirely, the relay notices after a week and removes the hooks, the queue and itself — so an uninstall tidies up even if you forget to switch it off first.
+</details>
+
+---
+
 ## Configure
 
 **In‑app (recommended):** click **⚙ Settings** in the popover (or right‑click the strip → *Settings…*). Adjust theme, meters, accent, poll interval, alerts, cost view, fullscreen behavior, and resume — changes apply **instantly** and save to `~/.claudometer.toml` for you.
@@ -147,6 +183,15 @@ resume_auto = false              # Tier 2: unattended auto-resume (opt-in, risky
 resume_prompt = "Continue where you left off."
 resume_max_turns = 30            # Tier 2: cap agentic turns
 # resume_skip_permissions = false  # Tier 2: --dangerously-skip-permissions (else acceptEdits)
+
+sessions = true                  # show live Claude Code sessions
+sessions_on_strip = true         # "Live N" count on the taskbar strip
+sessions_max_rows = 6            # rows before the rest collapse to "+N more" (1-12)
+sessions_alerts = true           # toast on session changes
+sessions_alert_on = ["waiting", "idle", "stuck"]   # + "gone"
+sessions_stuck_minutes = 10      # nudge if still blocked after this (0 = never)
+sessions_quiet_foreground = true # stay quiet for the terminal you're using
+sessions_hooks = false           # instant alerts (edits ~/.claude/settings.json; asks first)
 ```
 
 Optional environment overrides:
@@ -233,7 +278,7 @@ The floating widget is **one cross‑platform codebase** — the same strip, dra
 
 ## Roadmap
 
-**Shipped:** desktop alerts · config file + in‑app settings panel · estimated‑cost view · standalone binaries + release CI · pipx / Scoop / Homebrew installs · cross‑platform floating widget (macOS/Linux) · one‑click **Check for Updates** · **Start on login** toggle.
+**Shipped:** desktop alerts · config file + in‑app settings panel · estimated‑cost view · standalone binaries + release CI · pipx / Scoop / Homebrew installs · cross‑platform floating widget (macOS/Linux) · one‑click **Check for Updates** · **Start on login** toggle · **live Claude session monitor** (statuses, alerts, click‑to‑focus, per‑project usage).
 
 **Next:** usage sparkline over the session · per‑model cost breakdown · published winget listing.
 

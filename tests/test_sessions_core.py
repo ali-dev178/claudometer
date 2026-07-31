@@ -370,9 +370,99 @@ def test_proc_start_ms_is_sane_for_this_process():
     assert 946_684_800_000 < started <= sc.now_ms() + 1000
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="non-Windows returns None")
-def test_proc_start_ms_none_off_windows():
-    assert sc.proc_start_ms(os.getpid()) is None
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX branch")
+def test_proc_start_ms_reads_this_process_on_posix():
+    started = sc.proc_start_ms(os.getpid())
+    # Linux/macOS both support it now; if a platform can't, None is the
+    # documented fail-soft answer and the session is simply kept.
+    if started is not None:
+        assert 946_684_800_000 < started <= sc.now_ms() + 5000
+
+
+# --- /proc and ps parsing: pure, so testable on any platform -------------- #
+def test_parse_proc_stat_start_basic():
+    # Fields: pid (comm) state ppid ... starttime is the 22nd overall.
+    fields = ["4242", "(bash)", "S"] + [str(i) for i in range(4, 22)] + ["500"]
+    text = " ".join(fields)
+    # btime 1000, 100Hz -> 1000 + 500/100 = 1005s
+    assert sc.parse_proc_stat_start(text, btime=1000, hz=100) == 1_005_000
+
+
+def test_parse_proc_stat_start_comm_with_spaces_and_parens():
+    # A process may be named "(my weird) proc)" — splitting on whitespace or
+    # the FIRST ')' would take the wrong field.
+    fields = ["4242", "((my weird) proc))", "S"] + \
+             [str(i) for i in range(4, 22)] + ["500"]
+    assert sc.parse_proc_stat_start(" ".join(fields), btime=0, hz=100) == 5_000
+
+
+def test_parse_proc_stat_start_rejects_garbage():
+    assert sc.parse_proc_stat_start("nonsense", btime=0) is None
+    assert sc.parse_proc_stat_start("(x) too short", btime=0) is None
+    assert sc.parse_proc_stat_start("", btime=0) is None
+
+
+def test_parse_proc_stat_start_rejects_bad_hz():
+    fields = ["1", "(a)", "S"] + [str(i) for i in range(4, 22)] + ["500"]
+    assert sc.parse_proc_stat_start(" ".join(fields), btime=0, hz=0) is None
+
+
+def test_parse_ps_lstart_round_trip():
+    from datetime import datetime
+
+    stamp = datetime(2026, 8, 1, 10, 23, 45).astimezone()
+    text = stamp.strftime("%a %b %d %H:%M:%S %Y")
+    assert sc.parse_ps_lstart(text) == int(stamp.timestamp() * 1000)
+
+
+def test_parse_ps_lstart_handles_padded_single_digit_day():
+    # ps pads the day, giving a double space: "Fri Aug  1 ..."
+    assert sc.parse_ps_lstart("Fri Aug  1 10:23:45 2026") is not None
+
+
+def test_parse_ps_lstart_rejects_garbage():
+    for bad in ("", None, "not a date", "Fri Aug 1 2026"):
+        assert sc.parse_ps_lstart(bad) is None
+
+
+def test_proc_start_cache_avoids_repeat_lookups(monkeypatch):
+    # On macOS this is a subprocess; it must not run once per poll.
+    sc.reset_proc_start_cache()
+    calls = []
+    monkeypatch.setattr(sc.sys, "platform", "darwin")
+
+    def fake_run(*a, **k):
+        calls.append(a)
+        return type("R", (), {"returncode": 0,
+                              "stdout": "Fri Aug  1 10:23:45 2026"})()
+
+    monkeypatch.setattr(sc.subprocess, "run", fake_run)
+    first = sc._proc_start_posix(4242)
+    second = sc._proc_start_posix(4242)
+    assert first == second is not None
+    assert len(calls) == 1
+    sc.reset_proc_start_cache()
+
+
+def test_proc_start_posix_failure_is_not_cached(monkeypatch):
+    sc.reset_proc_start_cache()
+    monkeypatch.setattr(sc.sys, "platform", "darwin")
+    monkeypatch.setattr(sc.subprocess, "run",
+                        lambda *a, **k: type("R", (), {"returncode": 1,
+                                                       "stdout": ""})())
+    assert sc._proc_start_posix(4242) is None
+    assert 4242 not in sc._proc_start_cache
+
+
+def test_proc_start_posix_never_raises(monkeypatch):
+    sc.reset_proc_start_cache()
+    monkeypatch.setattr(sc.sys, "platform", "darwin")
+
+    def boom(*a, **k):
+        raise OSError("no ps here")
+
+    monkeypatch.setattr(sc.subprocess, "run", boom)
+    assert sc._proc_start_posix(4242) is None
 
 
 def test_proc_start_ms_none_for_garbage():

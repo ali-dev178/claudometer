@@ -638,14 +638,92 @@ class _FILETIME(ctypes.Structure):
 _FILETIME_EPOCH_OFFSET_S = 11644473600
 
 
+def parse_proc_stat_start(stat_text: str, btime: int,
+                          hz: int = 100) -> Optional[int]:
+    """Linux: process start time in epoch ms from /proc/<pid>/stat.
+
+    Field 22 is the start time in clock ticks since boot. The comm field (2) is
+    parenthesised and may itself contain spaces and parentheses, so everything
+    up to the LAST ')' is skipped rather than split on whitespace.
+    """
+    try:
+        tail = stat_text[stat_text.rindex(")") + 1:].split()
+        # After comm, field 3 is state; starttime is field 22 overall, i.e.
+        # index 19 of what follows comm.
+        ticks = int(tail[19])
+    except (ValueError, IndexError):
+        return None
+    if hz <= 0:
+        return None
+    return int((btime + ticks / hz) * 1000)
+
+
+def parse_ps_lstart(text: str) -> Optional[int]:
+    """macOS: epoch ms from `ps -o lstart=` output ("Fri Aug  1 10:23:45 2026")."""
+    from datetime import datetime
+
+    cleaned = " ".join(str(text or "").split())
+    if not cleaned:
+        return None
+    try:
+        naive = datetime.strptime(cleaned, "%a %b %d %H:%M:%S %Y")
+    except ValueError:
+        return None
+    return int(naive.astimezone().timestamp() * 1000)
+
+
+_proc_start_cache = {}
+
+
+def _proc_start_posix(pid: int) -> Optional[int]:
+    """Process start time on POSIX, or None when it can't be determined.
+
+    A process's start time never changes, so it is cached for the life of the
+    widget — on macOS this is a subprocess, which must not run per poll.
+    """
+    if pid in _proc_start_cache:
+        return _proc_start_cache[pid]
+    value = None
+    try:
+        if sys.platform.startswith("linux"):
+            with open("/proc/stat", encoding="utf-8") as fh:
+                btime = next((int(line.split()[1]) for line in fh
+                              if line.startswith("btime ")), None)
+            if btime is not None:
+                with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
+                    value = parse_proc_stat_start(
+                        fh.read(), btime, os.sysconf("SC_CLK_TCK"))
+        elif sys.platform == "darwin":
+            out = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="],
+                                 capture_output=True, text=True, timeout=5)
+            if out.returncode == 0:
+                value = parse_ps_lstart(out.stdout)
+    except Exception:
+        value = None
+    if value is not None:
+        _proc_start_cache[pid] = value
+    return value
+
+
+def reset_proc_start_cache() -> None:
+    _proc_start_cache.clear()
+
+
 def proc_start_ms(pid) -> Optional[int]:
     """Process creation time in epoch ms, or None if it can't be read.
 
-    Windows-only today. Used purely to reject a stale registry file whose PID
-    has since been recycled; callers must treat None as "can't tell, keep it".
+    Used purely to reject a stale registry file whose PID has since been
+    recycled; callers must treat None as "can't tell, keep it". Every platform
+    branch fails soft, so an unsupported system simply keeps its sessions.
     """
     if sys.platform != "win32":
-        return None
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            return None
+        if pid <= 0 or pid > MAX_PID:
+            return None
+        return _proc_start_posix(pid)
     try:
         pid = int(pid)
     except (TypeError, ValueError):
