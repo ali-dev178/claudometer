@@ -73,3 +73,11 @@ sessions_stuck_minutes = 10
 # Don't toast about the terminal window you're currently looking at. Note this
 # is per-WINDOW, not per-tab: several sessions often share one terminal.
 sessions_quiet_foreground = true
+
+# Instant alerts via Claude Code hooks, instead of waiting for the next poll.
+# Turning this ON edits ~/.claude/settings.json to register four hooks
+# (Notification, Stop, SessionStart, SessionEnd). The app shows you the exact
+# JSON and asks first, backs the file up, and removes its entries cleanly when
+# you turn it off. Off by default; without it sessions still update every
+# second or so from ~/.claude/sessions.
+sessions_hooks = false

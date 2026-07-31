@@ -29,6 +29,7 @@ import render
 import settings
 import sessions_core
 import focus
+import hooks as claude_hooks
 import cost
 import resume
 import config
@@ -729,6 +730,7 @@ class SettingsWindow:
         self.v_sess_stuck_min = tk.IntVar(value=cfg.get("sessions_stuck_minutes", 10))
         self.v_sess_quiet = tk.BooleanVar(
             value=cfg.get("sessions_quiet_foreground", True))
+        self.v_sess_hooks = tk.BooleanVar(value=cfg.get("sessions_hooks", False))
 
         # rendered header banner (sparkle + title + subtitle)
         self._hdr = ImageTk.PhotoImage(render.render_settings_header(theme, self.WIN_W))
@@ -841,6 +843,8 @@ class SettingsWindow:
                    parent=self._sess_more)
         toggle_row("Show count on the strip", self.v_sess_strip,
                    parent=self._sess_more)
+        toggle_row("Instant alerts (edits Claude's settings)", self.v_sess_hooks,
+                   parent=self._sess_more, cmd=self._confirm_hooks)
         rr = row(self._sess_more)
         label(rr, "Rows in popover").pack(side="left")
         _StepperW(rr, self.v_sess_rows, 1, 12, theme, bg,
@@ -959,6 +963,45 @@ class SettingsWindow:
             self._canvas.yview_scroll(int(-event.delta / 120), "units")
         except Exception:
             pass
+
+    def _confirm_hooks(self):
+        """Show the exact JSON before letting us edit Claude Code's settings.
+
+        This is the one place Claudometer writes to a file that belongs to
+        another application, so the user sees the literal change and can say
+        no — and saying no puts the toggle straight back.
+        """
+        if not self.v_sess_hooks.get():
+            return                       # switching OFF needs no permission
+        if claude_hooks.interpreter() is None:
+            messagebox.showinfo(
+                "Instant alerts unavailable",
+                "No Python interpreter was found to run the hook relay, so "
+                "instant alerts aren't available in this build.\n\n"
+                "Sessions still update about once a second on their own.",
+                parent=self.top)
+            self.v_sess_hooks.set(False)
+            return
+        if not claude_hooks.settings_readable():
+            messagebox.showerror(
+                "Can't read Claude's settings",
+                f"{claude_hooks.settings_path()} exists but isn't valid JSON, "
+                f"so Claudometer won't touch it.\n\nFix or move that file and "
+                f"try again.",
+                parent=self.top)
+            self.v_sess_hooks.set(False)
+            return
+        ok = messagebox.askokcancel(
+            "Edit Claude Code's settings?",
+            "Claudometer will add these four hooks to\n"
+            f"{claude_hooks.settings_path()}\n\n"
+            f"{claude_hooks.preview()}\n\n"
+            "They run a small relay that records when a session needs you or "
+            "finishes. Your existing settings are backed up and left "
+            "untouched, and turning this off removes exactly these entries.",
+            parent=self.top)
+        if not ok:
+            self.v_sess_hooks.set(False)
 
     def _toggle_sessions(self):
         self._sess_open = not self._sess_open
@@ -1083,6 +1126,7 @@ class SettingsWindow:
                                        ("gone", self.v_a_gone)) if var.get()],
             "sessions_stuck_minutes": stuck_min,
             "sessions_quiet_foreground": bool(self.v_sess_quiet.get()),
+            "sessions_hooks": bool(self.v_sess_hooks.get()),
         })
         try:
             self._on_apply(cfg)
@@ -1217,6 +1261,18 @@ class BarWidget:
         # The very first tick sees every running session as newly appeared; that
         # is startup, not news, so alerting stays off until after it.
         self._sess_seeded = False
+        # Hooks: opt-in, and only trusted while the config says they're on —
+        # otherwise a stale settings.json entry could keep feeding us events.
+        self._sess_hooks_on = cfg["sessions_hooks"]
+        self._sess_hook_notes = {}     # session_id -> latest hook message
+        if self._sess_hooks_on:
+            # Reconcile on every start. The config saying "on" IS the prior
+            # consent, and an install can go stale on its own: after the app
+            # updates, the recorded relay path may no longer exist, which would
+            # leave Claude Code spawning a failing command on every event.
+            self._apply_hooks(True)
+        else:
+            claude_hooks.clear_spool()
 
         self._apply_bg((233, 238, 243))  # provisional; refined by sampling
         self._place_initial()
@@ -1707,6 +1763,7 @@ class BarWidget:
                                       self._sess_quiet_fg)
         self._sess_stuck.minutes = cfg.get("sessions_stuck_minutes",
                                            self._sess_stuck.minutes)
+        self._apply_hooks(bool(cfg.get("sessions_hooks", self._sess_hooks_on)))
         if self._sessions_on and not sessions_was_on:
             # Re-enabled: forget the old history so the next tick doesn't
             # announce every already-running session as newly appeared.
@@ -1810,6 +1867,7 @@ class BarWidget:
             self._sess_disp = {}
             return
         try:
+            self._drain_hook_events()
             live = sessions_core.snapshot()
             events = self._sess_tracker.update(live)
             live = self._sess_tracker.sessions
@@ -1831,14 +1889,66 @@ class BarWidget:
                 }
             merged = []
             for s in live:
-                extra = self._sess_extra.get(s.session_id)
-                merged.append(dataclasses.replace(s, **extra) if extra else s)
+                fields = dict(self._sess_extra.get(s.session_id) or {})
+                note = self._sess_hook_notes.get(s.session_id)
+                if note and s.status == sessions_core.WAITING:
+                    # The hook knows the actual prompt; the registry only has a
+                    # category like "input needed".
+                    fields["waiting_for"] = note
+                merged.append(dataclasses.replace(s, **fields) if fields else s)
             self._sess_disp = sessions_core.format_sessions(
                 merged, max_rows=self._sessions_max_rows)
             self._session_alerts(events, merged)
         except Exception:
             _log_exc()
             self._sess_disp = {}
+
+    def _apply_hooks(self, want):
+        """Install or remove the hook entries to match the setting.
+
+        Runs on every save, not just on change: an install can fail (a
+        read-only file, a settings.json that stopped parsing), and re-checking
+        each time lets it recover on the next save instead of staying silently
+        broken.
+        """
+        try:
+            if want:
+                if claude_hooks.status() != claude_hooks.INSTALLED:
+                    if not claude_hooks.install():
+                        want = False     # couldn't write — don't claim it's on
+                if want:
+                    claude_hooks.prune()
+            else:
+                claude_hooks.remove()
+                claude_hooks.clear_spool()
+                self._sess_hook_notes.clear()
+        except Exception:
+            _log_exc()
+            want = False
+        self._sess_hooks_on = want
+
+    def _drain_hook_events(self):
+        """Consume queued hook events into per-session notes.
+
+        Hooks are NOT a second source of alerts — the tracker stays the single
+        place a transition is decided, so an event arriving here can never
+        double-toast something the registry is about to report anyway. What
+        they add is text the registry doesn't have: the actual prompt a session
+        is blocked on, rather than a coarse category.
+        """
+        if not self._sess_hooks_on:
+            return
+        for raw in claude_hooks.read_events():
+            note = claude_hooks.summarize(raw)
+            session_id = note.get("session_id")
+            if not session_id:
+                continue
+            if note["event"] == "Notification":
+                text = note["message"] or note["title"]
+                if text:
+                    self._sess_hook_notes[session_id] = sessions_core.oneline(text)
+            elif note["event"] in ("Stop", "SessionEnd"):
+                self._sess_hook_notes.pop(session_id, None)
 
     def _session_alerts(self, events, live):
         """Toast the transitions worth interrupting for. Main thread."""
@@ -1853,6 +1963,13 @@ class BarWidget:
             # blocked during a fullscreen app is never nudged — not even once
             # you come back to the desktop.
             return
+        # Re-point each transition at the enriched copy of its session, so an
+        # alert names the session the same way the popover row does (its AI
+        # title, not the raw CLI name) and picks up any hook message.
+        by_id = {s.session_id: s for s in live}
+        events = [sessions_core.Transition(
+            e.kind, by_id.get(e.session.session_id, e.session), e.before, e.after)
+            for e in events]
         alerts = sessions_core.alerts_for(events, self._sess_alert_on)
         if "stuck" in self._sess_alert_on:
             alerts += [sessions_core.alert_for_stuck(s)

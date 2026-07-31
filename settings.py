@@ -35,6 +35,7 @@ DEFAULTS = {
     "sessions_alert_on": ["waiting", "idle", "stuck"],  # which transitions alert
     "sessions_stuck_minutes": 10,     # nudge if blocked this long (0 = never)
     "sessions_quiet_foreground": True,  # no toast for the terminal you're using
+    "sessions_hooks": False,          # instant alerts via Claude Code hooks (asks first)
 }
 
 _VALID_THEMES = ("auto", "light", "dark")
@@ -217,6 +218,7 @@ def load() -> dict:
     except (TypeError, ValueError):
         cfg["sessions_max_rows"] = DEFAULTS["sessions_max_rows"]
     cfg["sessions_alerts"] = bool(cfg["sessions_alerts"])
+    cfg["sessions_hooks"] = bool(cfg["sessions_hooks"])
     cfg["sessions_quiet_foreground"] = bool(cfg["sessions_quiet_foreground"])
     # Keep declaration order (waiting, idle, stuck, gone) rather than the order
     # the user happened to type, and drop anything unrecognized.
@@ -309,6 +311,10 @@ def to_toml(cfg: dict) -> str:
         f"sessions_alert_on = {v('sessions_alert_on')}",
         f"sessions_stuck_minutes = {v('sessions_stuck_minutes')}   # 0 = never",
         f"sessions_quiet_foreground = {v('sessions_quiet_foreground')}",
+        "",
+        "# Instant alerts via Claude Code hooks. Turning this on edits",
+        "# ~/.claude/settings.json — the app shows the exact JSON and asks first.",
+        f"sessions_hooks = {v('sessions_hooks')}",
     ]
     extras = [k for k in cfg if k not in DEFAULTS]
     if extras:
