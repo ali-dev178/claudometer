@@ -540,8 +540,15 @@ def render_toast(pct, title, subtitle, color_name, theme, scale=3):
     col = sev_color(T, color_name)
     cx1, cy1, chip = 14 * S, 13 * S, 44 * S
     d.rounded_rectangle([cx1, cy1, cx1 + chip, cy1 + chip], radius=12 * S, fill=col)
-    d.text((cx1 + chip / 2, cy1 + chip / 2), f"{pct}%", font=_font("sb", 15 * S),
-           fill="#ffffff", anchor="mm")
+    ccx, ccy = cx1 + chip / 2, cy1 + chip / 2
+    if pct is None:
+        # Live-session alerts have no percentage; a white status dot reads as a
+        # light and keeps the toast geometry identical to the usage alerts.
+        dr = 7 * S
+        d.ellipse([ccx - dr, ccy - dr, ccx + dr, ccy + dr], fill="#ffffff")
+    else:
+        d.text((ccx, ccy), f"{pct}%", font=_font("sb", 15 * S),
+               fill="#ffffff", anchor="mm")
 
     tx = cx1 + chip + 16 * S
     avail = max(0, W * S - tx - 14 * S)

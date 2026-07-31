@@ -46,7 +46,7 @@ claudometer = "app:main"
 py-modules = [
     "app", "widget_bar", "render", "usage_core", "settings",
     "cost", "resume", "config", "tray_windows", "menubar_mac",
-    "sessions_core",
+    "sessions_core", "focus",
 ]
 
 [tool.setuptools.dynamic]

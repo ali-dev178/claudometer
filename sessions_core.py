@@ -406,6 +406,110 @@ def format_sessions(sessions, at_ms: Optional[int] = None,
 
 
 # --------------------------------------------------------------------------- #
+# Alerts
+# --------------------------------------------------------------------------- #
+#: Transition kinds worth interrupting someone for, in settings order.
+#:   waiting  it just became blocked on you
+#:   idle     it just finished and is waiting for your next prompt
+#:   stuck    it has been blocked on you for a while
+#:   gone     the session ended
+#: Deliberately absent: "appeared", "->busy" and "->shell". Those fire
+#: constantly during normal work and would train you to ignore the toasts.
+ALERT_KINDS = ("waiting", "idle", "stuck", "gone")
+
+#: Sensible defaults: tell me when something needs me or has finished. Ending
+#: is usually something you did yourself, so it's off unless asked for.
+DEFAULT_ALERT_KINDS = ("waiting", "idle", "stuck")
+
+_ALERT_COLORS = {"waiting": "red", "stuck": "red", "idle": "green",
+                 "gone": "grey"}
+
+
+def _alert(kind: str, session: Session, title: str, subtitle: str) -> dict:
+    return {
+        "kind": kind,
+        "title": title,
+        "subtitle": oneline(subtitle),
+        "color": _ALERT_COLORS.get(kind, "grey"),
+        "session_id": session.session_id,
+        "pid": session.pid,
+    }
+
+
+def alert_for(transition: Transition) -> Optional[dict]:
+    """Toast payload for a transition, or None when it isn't worth a toast."""
+    session = transition.session
+    where = oneline(session.label)
+    project = oneline(session.project)
+
+    if transition.kind == "status":
+        if transition.after == WAITING:
+            reason = oneline(session.waiting_for) or project
+            return _alert("waiting", session, "Needs you",
+                          f"{where} · {reason}" if reason else where)
+        if transition.after == IDLE:
+            return _alert("idle", session, "Finished",
+                          f"{where} · {project}" if project else where)
+        return None
+    if transition.kind == "gone":
+        return _alert("gone", session, "Session ended",
+                      f"{where} · {project}" if project else where)
+    return None
+
+
+def alert_for_stuck(session: Session, at_ms: Optional[int] = None) -> dict:
+    dwell = fmt_dwell(dwell_seconds(session, at_ms))
+    reason = oneline(session.waiting_for) or oneline(session.project)
+    where = oneline(session.label)
+    return _alert("stuck", session, f"Still waiting · {dwell}" if dwell
+                  else "Still waiting",
+                  f"{where} · {reason}" if reason else where)
+
+
+def alerts_for(transitions, kinds=DEFAULT_ALERT_KINDS):
+    """Alert payloads for a batch of transitions, filtered to *kinds*."""
+    allowed = set(kinds or ())
+    out = []
+    for transition in transitions:
+        payload = alert_for(transition)
+        if payload is not None and payload["kind"] in allowed:
+            out.append(payload)
+    return out
+
+
+class StuckWatcher:
+    """Nudges once when a session has been blocked on you for too long.
+
+    Re-arms only when that session stops waiting, so a session blocked for an
+    hour produces one nudge rather than one per poll.
+    """
+
+    def __init__(self, minutes: float = 10):
+        self.minutes = minutes
+        self._fired = set()
+
+    def check(self, sessions, at_ms: Optional[int] = None):
+        """Sessions that have *just* crossed the threshold."""
+        if not self.minutes or self.minutes <= 0:
+            self._fired.clear()
+            return []
+        waiting = {s.session_id: s for s in sessions if s.status == WAITING}
+        self._fired &= set(waiting)      # anything that moved on can nudge again
+        out = []
+        for session_id, session in waiting.items():
+            if session_id in self._fired:
+                continue
+            secs = dwell_seconds(session, at_ms)
+            if secs is not None and secs >= self.minutes * 60:
+                self._fired.add(session_id)
+                out.append(session)
+        return out
+
+    def reset(self) -> None:
+        self._fired.clear()
+
+
+# --------------------------------------------------------------------------- #
 # Process liveness
 # --------------------------------------------------------------------------- #
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -611,7 +715,12 @@ def _read_json(path, retries: int = READ_RETRIES,
     """
     for attempt in range(max(1, retries)):
         try:
-            text = path.read_text(encoding="utf-8")
+            # utf-8-sig, not utf-8: a leading BOM would otherwise reach
+            # json.loads and fail the parse, silently dropping a live session.
+            # Node writes these files without one, but anything that rewrites
+            # them on Windows (PowerShell's Set-Content defaults to a BOM) can
+            # add one. Decoding this way is a no-op when there is no BOM.
+            text = path.read_text(encoding="utf-8-sig")
         except OSError:
             return None            # genuinely unreadable; retrying won't help
         except UnicodeDecodeError:
@@ -955,7 +1064,7 @@ def read_transcript_tail(path, max_bytes: int = TRANSCRIPT_TAIL_BYTES) -> dict:
     rootless = 0           # sidechain roots that didn't (older/other shapes)
     lines = text.splitlines()
     for line in reversed(lines):
-        line = line.strip()
+        line = line.strip().lstrip("﻿")   # a BOM is not whitespace
         if not line:
             continue
         try:
@@ -1021,7 +1130,7 @@ def last_prompts(config_dir=None, max_bytes: int = HISTORY_TAIL_BYTES) -> dict:
         return {}
     out = {}
     for line in text.splitlines():
-        line = line.strip()
+        line = line.strip().lstrip("﻿")   # a BOM is not whitespace
         if not line:
             continue
         try:

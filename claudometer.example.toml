@@ -56,3 +56,20 @@ sessions_max_rows = 6
 # Also show a "Live N" count on the taskbar strip (the popover always lists
 # them in full). Turn off if you only want the count when you open the details.
 sessions_on_strip = true
+
+# Toast when a session changes state. Which ones, any of:
+#   "waiting"  it just became blocked on you (permission prompt, question)
+#   "idle"     it just finished and is ready for your next prompt
+#   "stuck"    it has been blocked on you for sessions_stuck_minutes
+#   "gone"     the session ended
+# "busy"/"shell" are deliberately not offered — they fire constantly during
+# normal work and would train you to ignore the toasts.
+sessions_alerts = true
+sessions_alert_on = ["waiting", "idle", "stuck"]
+
+# Nudge again when a session has been blocked this many minutes. 0 = never.
+sessions_stuck_minutes = 10
+
+# Don't toast about the terminal window you're currently looking at. Note this
+# is per-WINDOW, not per-tab: several sessions often share one terminal.
+sessions_quiet_foreground = true

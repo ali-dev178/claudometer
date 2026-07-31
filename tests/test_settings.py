@@ -44,6 +44,60 @@ def test_sessions_max_rows_is_clamped(monkeypatch, tmp_path, raw, expected):
     assert settings.load()["sessions_max_rows"] == expected
 
 
+def test_session_alert_defaults(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(tmp_path / "none.toml"))
+    cfg = settings.load()
+    assert cfg["sessions_alerts"] is True
+    assert cfg["sessions_alert_on"] == ["waiting", "idle", "stuck"]
+    assert cfg["sessions_stuck_minutes"] == 10
+    assert cfg["sessions_quiet_foreground"] is True
+
+
+def test_alert_kinds_mirror_sessions_core():
+    import sessions_core
+    assert settings._VALID_ALERT_KINDS == sessions_core.ALERT_KINDS
+
+
+def test_alert_on_drops_unknown_kinds_and_keeps_order(monkeypatch, tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text('sessions_alert_on = ["gone", "banana", "waiting"]\n',
+                 encoding="utf-8")
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(p))
+    assert settings.load()["sessions_alert_on"] == ["waiting", "gone"]
+
+
+def test_alert_on_empty_list_means_no_alerts(monkeypatch, tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text("sessions_alert_on = []\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(p))
+    assert settings.load()["sessions_alert_on"] == []
+
+
+def test_alert_on_non_list_falls_back_to_default(monkeypatch, tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text('sessions_alert_on = "waiting"\n', encoding="utf-8")
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(p))
+    assert settings.load()["sessions_alert_on"] == ["waiting", "idle", "stuck"]
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (0, 0),        # 0 = never nudge
+    (1, 1),
+    (600, 600),
+    (601, 600),
+    (-5, 0),
+    ("15", 15),
+    ("x", 10),
+    (True, 10),
+])
+def test_stuck_minutes_clamped(monkeypatch, tmp_path, raw, expected):
+    p = tmp_path / "c.toml"
+    p.write_text(f"sessions_stuck_minutes = {settings._toml_val(raw)}\n",
+                 encoding="utf-8")
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(p))
+    assert settings.load()["sessions_stuck_minutes"] == expected
+
+
 def test_sessions_flags_coerce_to_bool(monkeypatch, tmp_path):
     p = tmp_path / "c.toml"
     p.write_text('sessions = 0\nsessions_on_strip = "yes"\n', encoding="utf-8")

@@ -817,6 +817,151 @@ def test_diff_reports_several_changes_at_once():
 
 
 # --------------------------------------------------------------------------- #
+# Alerts
+# --------------------------------------------------------------------------- #
+def _t(kind, session, before="", after=""):
+    return sc.Transition(kind, session, before=before, after=after)
+
+
+def test_alert_on_becoming_waiting():
+    s = _session(name="widget-b0", cwd="/x/widget",
+                 status=sc.WAITING, waiting_for="input needed")
+    a = sc.alert_for(_t("status", s, sc.BUSY, sc.WAITING))
+    assert a["kind"] == "waiting" and a["color"] == "red"
+    assert a["title"] == "Needs you"
+    assert "widget-b0" in a["subtitle"] and "input needed" in a["subtitle"]
+
+
+def test_alert_waiting_without_reason_falls_back_to_project():
+    s = _session(name="n", cwd="/x/widget", status=sc.WAITING)
+    a = sc.alert_for(_t("status", s, sc.BUSY, sc.WAITING))
+    assert "widget" in a["subtitle"]
+
+
+def test_alert_on_finishing():
+    s = _session(name="n", cwd="/x/widget", status=sc.IDLE)
+    a = sc.alert_for(_t("status", s, sc.BUSY, sc.IDLE))
+    assert a["kind"] == "idle" and a["color"] == "green"
+    assert a["title"] == "Finished"
+
+
+def test_alert_on_session_ending():
+    a = sc.alert_for(_t("gone", _session(name="n", cwd="/x/widget")))
+    assert a["kind"] == "gone" and a["title"] == "Session ended"
+
+
+@pytest.mark.parametrize("after", [sc.BUSY, sc.SHELL])
+def test_no_alert_for_routine_work(after):
+    # ->busy / ->shell happen constantly; alerting on them trains you to ignore
+    # the toasts entirely.
+    assert sc.alert_for(_t("status", _session(status=after), sc.IDLE, after)) is None
+
+
+def test_no_alert_for_appearance():
+    assert sc.alert_for(_t("appeared", _session())) is None
+
+
+def test_alert_carries_pid_for_the_foreground_check():
+    a = sc.alert_for(_t("gone", _session(pid=4242)))
+    assert a["pid"] == 4242
+
+
+def test_alert_scrubs_newlines():
+    s = _session(title="two\nlines", cwd="/x/y", status=sc.WAITING,
+                 waiting_for="a\nb")
+    a = sc.alert_for(_t("status", s, sc.BUSY, sc.WAITING))
+    assert "\n" not in a["subtitle"] and "\n" not in a["title"]
+
+
+def test_alerts_for_filters_by_kind():
+    events = [
+        _t("status", _session(session_id="a", status=sc.WAITING), sc.BUSY, sc.WAITING),
+        _t("status", _session(session_id="b", status=sc.IDLE), sc.BUSY, sc.IDLE),
+        _t("gone", _session(session_id="c")),
+    ]
+    assert [a["kind"] for a in sc.alerts_for(events, ("waiting",))] == ["waiting"]
+    assert sorted(a["kind"] for a in sc.alerts_for(events, ("idle", "gone"))) \
+        == ["gone", "idle"]
+    assert sc.alerts_for(events, ()) == []
+
+
+def test_default_alert_kinds_exclude_gone():
+    # Ending a session is usually something you just did yourself.
+    assert "gone" not in sc.DEFAULT_ALERT_KINDS
+    assert set(sc.DEFAULT_ALERT_KINDS) <= set(sc.ALERT_KINDS)
+
+
+def test_alert_for_stuck_reports_the_wait():
+    s = _session(name="n", cwd="/x/widget", status=sc.WAITING,
+                 waiting_for="input needed", status_updated_at=1_000_000)
+    a = sc.alert_for_stuck(s, at_ms=1_000_000 + 12 * 60_000)
+    assert a["kind"] == "stuck" and a["color"] == "red"
+    assert "12m" in a["title"]
+    assert "input needed" in a["subtitle"]
+
+
+# --------------------------------------------------------------------------- #
+# StuckWatcher
+# --------------------------------------------------------------------------- #
+def test_stuck_watcher_fires_once_per_block():
+    base = 1_000_000
+    s = _session(session_id="a", status=sc.WAITING, status_updated_at=base)
+    w = sc.StuckWatcher(minutes=10)
+    assert w.check([s], at_ms=base + 9 * 60_000) == []
+    assert [x.session_id for x in w.check([s], at_ms=base + 10 * 60_000)] == ["a"]
+    # Still blocked on later polls — must not nag again.
+    assert w.check([s], at_ms=base + 11 * 60_000) == []
+    assert w.check([s], at_ms=base + 60 * 60_000) == []
+
+
+def test_stuck_watcher_rearms_after_the_session_moves_on():
+    base = 1_000_000
+    blocked = _session(session_id="a", status=sc.WAITING, status_updated_at=base)
+    w = sc.StuckWatcher(minutes=10)
+    w.check([blocked], at_ms=base + 10 * 60_000)
+    w.check([_session(session_id="a", status=sc.BUSY)], at_ms=base + 11 * 60_000)
+    again = _session(session_id="a", status=sc.WAITING,
+                     status_updated_at=base + 20 * 60_000)
+    assert [x.session_id
+            for x in w.check([again], at_ms=base + 31 * 60_000)] == ["a"]
+
+
+def test_stuck_watcher_ignores_non_waiting_sessions():
+    s = _session(status=sc.BUSY, status_updated_at=0)
+    assert sc.StuckWatcher(minutes=1).check([s], at_ms=10_000_000) == []
+
+
+@pytest.mark.parametrize("minutes", [0, None, -1])
+def test_stuck_watcher_disabled(minutes):
+    s = _session(status=sc.WAITING, status_updated_at=0)
+    assert sc.StuckWatcher(minutes=minutes).check([s], at_ms=10_000_000) == []
+
+
+def test_stuck_watcher_forgets_departed_sessions():
+    base = 1_000_000
+    s = _session(session_id="a", status=sc.WAITING, status_updated_at=base)
+    w = sc.StuckWatcher(minutes=10)
+    w.check([s], at_ms=base + 10 * 60_000)
+    w.check([], at_ms=base + 11 * 60_000)          # session gone entirely
+    assert w._fired == set()
+
+
+def test_stuck_watcher_reset():
+    base = 1_000_000
+    s = _session(session_id="a", status=sc.WAITING, status_updated_at=base)
+    w = sc.StuckWatcher(minutes=10)
+    w.check([s], at_ms=base + 10 * 60_000)
+    w.reset()
+    assert [x.session_id
+            for x in w.check([s], at_ms=base + 11 * 60_000)] == ["a"]
+
+
+def test_stuck_watcher_skips_unknown_dwell():
+    assert sc.StuckWatcher(minutes=1).check([_session(status=sc.WAITING)],
+                                            at_ms=10_000_000) == []
+
+
+# --------------------------------------------------------------------------- #
 # format_sessions — the flat dict every UI adapter renders verbatim
 # --------------------------------------------------------------------------- #
 def test_format_keys_never_collide_with_usage_core():
@@ -1090,6 +1235,36 @@ def test_read_json_gives_up_on_real_corruption(tmp_path, monkeypatch):
     f = tmp_path / "a.json"
     f.write_text("{ broken", encoding="utf-8")
     assert sc._read_json(f) is None
+
+
+def test_read_json_tolerates_a_utf8_bom(tmp_path):
+    # PowerShell's Set-Content defaults to a BOM on Windows; a BOM reaching
+    # json.loads fails the parse and silently drops a live session.
+    f = tmp_path / "a.json"
+    f.write_bytes(b"\xef\xbb\xbf" + json.dumps({"a": 1}).encode("utf-8"))
+    assert sc._read_json(f) == {"a": 1}
+
+
+def test_scan_reads_a_session_file_with_a_bom(tmp_path):
+    _write_session(tmp_path, 4242, status="busy")
+    path = tmp_path / "sessions" / "4242.json"
+    path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+    sessions, health = sc.scan(tmp_path, alive=_alive_all)
+    assert [s.pid for s in sessions] == [4242] and health == "ok"
+
+
+def test_transcript_tail_tolerates_a_bom(tmp_path):
+    f = tmp_path / "t.jsonl"
+    f.write_bytes(b"\xef\xbb\xbf"
+                  + json.dumps({"type": "ai-title", "aiTitle": "B"}).encode())
+    assert sc.read_transcript_tail(f)["title"] == "B"
+
+
+def test_last_prompts_tolerates_a_bom(tmp_path):
+    (tmp_path / "history.jsonl").write_bytes(
+        b"\xef\xbb\xbf"
+        + json.dumps({"display": "hi", "sessionId": "a"}).encode() + b"\n")
+    assert sc.last_prompts(tmp_path) == {"a": "hi"}
 
 
 def test_read_json_does_not_retry_a_missing_file(tmp_path):

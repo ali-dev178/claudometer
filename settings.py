@@ -31,10 +31,17 @@ DEFAULTS = {
     "sessions": True,                 # show live CLI sessions in the popover/menus
     "sessions_max_rows": 6,           # rows before the list collapses to "+N more"
     "sessions_on_strip": True,        # show a session count on the taskbar strip
+    "sessions_alerts": True,          # toast when a session needs you / finishes
+    "sessions_alert_on": ["waiting", "idle", "stuck"],  # which transitions alert
+    "sessions_stuck_minutes": 10,     # nudge if blocked this long (0 = never)
+    "sessions_quiet_foreground": True,  # no toast for the terminal you're using
 }
 
 _VALID_THEMES = ("auto", "light", "dark")
 _VALID_METRICS = ("session", "weekly")
+# Mirrors sessions_core.ALERT_KINDS. Duplicated rather than imported so this
+# module stays dependency-free (it is imported by every adapter).
+_VALID_ALERT_KINDS = ("waiting", "idle", "stuck", "gone")
 
 
 def config_path() -> Path:
@@ -209,6 +216,22 @@ def load() -> dict:
                                     else max(1, min(12, int(cfg["sessions_max_rows"]))))
     except (TypeError, ValueError):
         cfg["sessions_max_rows"] = DEFAULTS["sessions_max_rows"]
+    cfg["sessions_alerts"] = bool(cfg["sessions_alerts"])
+    cfg["sessions_quiet_foreground"] = bool(cfg["sessions_quiet_foreground"])
+    # Keep declaration order (waiting, idle, stuck, gone) rather than the order
+    # the user happened to type, and drop anything unrecognized.
+    raw = cfg["sessions_alert_on"]
+    if not isinstance(raw, list):
+        raw = list(DEFAULTS["sessions_alert_on"])
+    valid = [k for k in _VALID_ALERT_KINDS if k in raw]
+    cfg["sessions_alert_on"] = valid
+    try:
+        cfg["sessions_stuck_minutes"] = (
+            DEFAULTS["sessions_stuck_minutes"]
+            if isinstance(cfg["sessions_stuck_minutes"], bool)
+            else max(0, min(600, int(cfg["sessions_stuck_minutes"]))))
+    except (TypeError, ValueError):
+        cfg["sessions_stuck_minutes"] = DEFAULTS["sessions_stuck_minutes"]
     return cfg
 
 
@@ -279,6 +302,13 @@ def to_toml(cfg: dict) -> str:
         f"sessions = {v('sessions')}",
         f"sessions_max_rows = {v('sessions_max_rows')}",
         f"sessions_on_strip = {v('sessions_on_strip')}",
+        "",
+        "# Toast when a session needs you, finishes, stays blocked, or ends.",
+        '# sessions_alert_on: any of "waiting", "idle", "stuck", "gone".',
+        f"sessions_alerts = {v('sessions_alerts')}",
+        f"sessions_alert_on = {v('sessions_alert_on')}",
+        f"sessions_stuck_minutes = {v('sessions_stuck_minutes')}   # 0 = never",
+        f"sessions_quiet_foreground = {v('sessions_quiet_foreground')}",
     ]
     extras = [k for k in cfg if k not in DEFAULTS]
     if extras:

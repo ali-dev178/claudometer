@@ -28,6 +28,7 @@ import usage_core as core
 import render
 import settings
 import sessions_core
+import focus
 import cost
 import resume
 import config
@@ -719,18 +720,52 @@ class SettingsWindow:
         self.v_sessions = tk.BooleanVar(value=cfg.get("sessions", True))
         self.v_sess_strip = tk.BooleanVar(value=cfg.get("sessions_on_strip", True))
         self.v_sess_rows = tk.IntVar(value=cfg.get("sessions_max_rows", 6))
+        alert_on = cfg.get("sessions_alert_on") or []
+        self.v_sess_alerts = tk.BooleanVar(value=cfg.get("sessions_alerts", True))
+        self.v_a_waiting = tk.BooleanVar(value="waiting" in alert_on)
+        self.v_a_idle = tk.BooleanVar(value="idle" in alert_on)
+        self.v_a_stuck = tk.BooleanVar(value="stuck" in alert_on)
+        self.v_a_gone = tk.BooleanVar(value="gone" in alert_on)
+        self.v_sess_stuck_min = tk.IntVar(value=cfg.get("sessions_stuck_minutes", 10))
+        self.v_sess_quiet = tk.BooleanVar(
+            value=cfg.get("sessions_quiet_foreground", True))
 
         # rendered header banner (sparkle + title + subtitle)
         self._hdr = ImageTk.PhotoImage(render.render_settings_header(theme, self.WIN_W))
         tk.Label(self.top, image=self._hdr, bd=0, bg=bg).pack()
 
-        body = tk.Frame(self.top, bg=bg)
+        # The panel grew past the height of the screen it configures, so the
+        # content scrolls when it doesn't fit. The canvas sizes itself to the
+        # content and only starts scrolling — and only then shows a scrollbar —
+        # once that would run off the display.
+        self._scroll_wrap = tk.Frame(self.top, bg=bg)
+        self._scroll_wrap.pack(fill="both", expand=True)
+        self._canvas = tk.Canvas(self._scroll_wrap, bg=bg, highlightthickness=0,
+                                 bd=0, width=self.WIN_W)
+        self._vsb = tk.Scrollbar(self._scroll_wrap, orient="vertical",
+                                 command=self._canvas.yview)
+        self._canvas.pack(side="left", fill="both", expand=True)
+        self._canvas.configure(yscrollcommand=self._vsb.set)
+
+        # An outer frame carries the canvas window (so it spans the full width);
+        # `body` sits inside it and keeps the original 20px gutter.
+        self._body_outer = tk.Frame(self._canvas, bg=bg)
+        self._canvas.create_window((0, 0), window=self._body_outer, anchor="nw",
+                                   width=self.WIN_W)
+        body = tk.Frame(self._body_outer, bg=bg)
         body.pack(fill="x", padx=20)
+        self._body_outer.bind("<Configure>", lambda _e: self._resize_scroll())
+        self._canvas.bind("<Enter>", lambda _e: self._canvas.bind_all(
+            "<MouseWheel>", self._on_wheel))
+        self._canvas.bind("<Leave>", lambda _e: self._canvas.unbind_all(
+            "<MouseWheel>"))
         LBL = ("Segoe UI", 9)
 
         def section(title, first=False):
-            tk.Label(body, text=title.upper(), bg=bg, fg=T["accent"],
-                     font=("Segoe UI Semibold", 8)).pack(anchor="w", pady=(10 if first else 15, 5))
+            lbl = tk.Label(body, text=title.upper(), bg=bg, fg=T["accent"],
+                           font=("Segoe UI Semibold", 8))
+            lbl.pack(anchor="w", pady=(10 if first else 15, 5))
+            return lbl   # an anchor for pack(before=...) on collapsible groups
 
         def row(parent=None):
             f = tk.Frame(parent or body, bg=bg)
@@ -781,15 +816,40 @@ class SettingsWindow:
         # ----- Live sessions -----
         section("Live sessions")
         toggle_row("Show running Claude sessions", self.v_sessions)
-        toggle_row("Show count on the strip", self.v_sess_strip)
-        r = row()
-        label(r, "Rows in popover").pack(side="left")
-        # Capped at 12: beyond that the popover is taller than a small laptop
-        # screen (see settings.load).
-        _StepperW(r, self.v_sess_rows, 1, 12, theme, bg, width=86).pack(side="right")
+        # Rows are capped at 12 below: beyond that the popover is taller than a
+        # small laptop screen (see settings.load).
+        toggle_row("Alert me about sessions", self.v_sess_alerts)
+        # The rest lives behind a disclosure. Shown inline these rows push the
+        # window past 1080px tall — it has to fit the screen it configures.
+        self._sess_open = False
+        self._sess_btn = tk.Label(body, text="▸  Which alerts, and how many rows",
+                                  bg=bg, fg=T["accent"], font=LBL, cursor="hand2")
+        self._sess_btn.pack(anchor="w", pady=(8, 0))
+        self._sess_btn.bind("<Button-1>", lambda e: self._toggle_sessions())
+        self._sess_more = tk.Frame(body, bg=bg)
+        toggle_row("When one needs me", self.v_a_waiting, parent=self._sess_more)
+        toggle_row("When one finishes", self.v_a_idle, parent=self._sess_more)
+        toggle_row("When one stays blocked", self.v_a_stuck, parent=self._sess_more)
+        toggle_row("When one ends", self.v_a_gone, parent=self._sess_more)
+        rs = row(self._sess_more)
+        label(rs, "Blocked for").pack(side="left")
+        tk.Label(rs, text="min", bg=bg, fg=dim, font=LBL).pack(side="right",
+                                                               padx=(6, 0))
+        _StepperW(rs, self.v_sess_stuck_min, 0, 600, theme, bg,
+                  width=86).pack(side="right")
+        toggle_row("Stay quiet for the terminal I'm using", self.v_sess_quiet,
+                   parent=self._sess_more)
+        toggle_row("Show count on the strip", self.v_sess_strip,
+                   parent=self._sess_more)
+        rr = row(self._sess_more)
+        label(rr, "Rows in popover").pack(side="left")
+        _StepperW(rr, self.v_sess_rows, 1, 12, theme, bg,
+                  width=86).pack(side="right")
 
         # ----- Alerts -----
-        section("Alerts")
+        # Anchor for the collapsible group above, so expanding it inserts the
+        # rows under their own button rather than at the bottom of the window.
+        self._sess_anchor = section("Alerts")
         toggle_row("Desktop alert on threshold", self.v_alerts)
         r = row()
         label(r, "Alert at").pack(side="left")
@@ -866,6 +926,49 @@ class SettingsWindow:
             self._swatch.configure(bg=color)
         except tk.TclError:
             pass
+
+    def _max_body_h(self):
+        """Tallest the scrolling area may be: the screen, less the header, the
+        window chrome and a margin so the Save button is never off-screen."""
+        try:
+            screen_h = self.top.winfo_screenheight()
+        except Exception:
+            screen_h = 900
+        header = self._hdr.height() if self._hdr else 0
+        return max(240, screen_h - header - 140)
+
+    def _resize_scroll(self):
+        """Match the canvas to its content, scrolling only when it overflows."""
+        try:
+            needed = self._body_outer.winfo_reqheight()
+            limit = self._max_body_h()
+            self._canvas.configure(scrollregion=(0, 0, self.WIN_W, needed))
+            self._canvas.configure(height=min(needed, limit))
+            if needed > limit:
+                self._vsb.pack(side="right", fill="y")
+            else:
+                self._vsb.pack_forget()
+                self._canvas.yview_moveto(0)
+        except Exception:
+            pass
+
+    def _on_wheel(self, event):
+        try:
+            if self._body_outer.winfo_reqheight() <= self._max_body_h():
+                return          # nothing to scroll; don't swallow the event
+            self._canvas.yview_scroll(int(-event.delta / 120), "units")
+        except Exception:
+            pass
+
+    def _toggle_sessions(self):
+        self._sess_open = not self._sess_open
+        label = "Which alerts, and how many rows"
+        if self._sess_open:
+            self._sess_more.pack(fill="x", before=self._sess_anchor)
+            self._sess_btn.configure(text=f"▾  {label}")
+        else:
+            self._sess_more.pack_forget()
+            self._sess_btn.configure(text=f"▸  {label}")
 
     def _toggle_advanced(self):
         self._adv_open = not self._adv_open
@@ -949,6 +1052,10 @@ class SettingsWindow:
             sess_rows = max(1, min(12, int(self.v_sess_rows.get())))
         except Exception:
             sess_rows = 6
+        try:
+            stuck_min = max(0, min(600, int(self.v_sess_stuck_min.get())))
+        except Exception:
+            stuck_min = 10
         cfg = dict(self._cfg)
         cfg.update({
             "poll": poll,
@@ -968,6 +1075,14 @@ class SettingsWindow:
             "sessions": bool(self.v_sessions.get()),
             "sessions_on_strip": bool(self.v_sess_strip.get()),
             "sessions_max_rows": sess_rows,
+            "sessions_alerts": bool(self.v_sess_alerts.get()),
+            "sessions_alert_on": [
+                name for name, var in (("waiting", self.v_a_waiting),
+                                       ("idle", self.v_a_idle),
+                                       ("stuck", self.v_a_stuck),
+                                       ("gone", self.v_a_gone)) if var.get()],
+            "sessions_stuck_minutes": stuck_min,
+            "sessions_quiet_foreground": bool(self.v_sess_quiet.get()),
         })
         try:
             self._on_apply(cfg)
@@ -1095,6 +1210,13 @@ class BarWidget:
         self._sess_extra = {}          # session_id -> enrichment fields
         self._sess_enriched_at = 0.0
         self._sess_known_ids = frozenset()
+        self._sess_alerts_on = cfg["sessions_alerts"]
+        self._sess_alert_on = tuple(cfg["sessions_alert_on"])
+        self._sess_quiet_fg = cfg["sessions_quiet_foreground"]
+        self._sess_stuck = sessions_core.StuckWatcher(cfg["sessions_stuck_minutes"])
+        # The very first tick sees every running session as newly appeared; that
+        # is startup, not news, so alerting stays off until after it.
+        self._sess_seeded = False
 
         self._apply_bg((233, 238, 243))  # provisional; refined by sampling
         self._place_initial()
@@ -1578,11 +1700,20 @@ class BarWidget:
         self._sessions_on = cfg.get("sessions", self._sessions_on)
         self._sessions_on_strip = cfg.get("sessions_on_strip", self._sessions_on_strip)
         self._sessions_max_rows = cfg.get("sessions_max_rows", self._sessions_max_rows)
+        self._sess_alerts_on = cfg.get("sessions_alerts", self._sess_alerts_on)
+        self._sess_alert_on = tuple(cfg.get("sessions_alert_on",
+                                            self._sess_alert_on))
+        self._sess_quiet_fg = cfg.get("sessions_quiet_foreground",
+                                      self._sess_quiet_fg)
+        self._sess_stuck.minutes = cfg.get("sessions_stuck_minutes",
+                                           self._sess_stuck.minutes)
         if self._sessions_on and not sessions_was_on:
-            # Re-enabled: forget the old history so Phase 3 doesn't announce
-            # every already-running session as newly appeared.
+            # Re-enabled: forget the old history so the next tick doesn't
+            # announce every already-running session as newly appeared.
             self._sess_tracker.reset()
+            self._sess_stuck.reset()
             self._sess_known_ids = frozenset()
+            self._sess_seeded = False
         # accent: apply, or restore the theme's original when cleared
         self._accent = cfg["accent"]
         for k in render.THEMES:
@@ -1680,7 +1811,7 @@ class BarWidget:
             return
         try:
             live = sessions_core.snapshot()
-            self._sess_tracker.update(live)
+            events = self._sess_tracker.update(live)
             live = self._sess_tracker.sessions
 
             # Re-enrich on a slow cadence, or immediately when the set of
@@ -1704,9 +1835,39 @@ class BarWidget:
                 merged.append(dataclasses.replace(s, **extra) if extra else s)
             self._sess_disp = sessions_core.format_sessions(
                 merged, max_rows=self._sessions_max_rows)
+            self._session_alerts(events, merged)
         except Exception:
             _log_exc()
             self._sess_disp = {}
+
+    def _session_alerts(self, events, live):
+        """Toast the transitions worth interrupting for. Main thread."""
+        stuck = self._sess_stuck.check(live)
+        if not self._sess_seeded:
+            # First tick after start (or after re-enabling): everything already
+            # running looks brand new. Prime the watchers and stay silent.
+            self._sess_seeded = True
+            return
+        if not self._sess_alerts_on or self._hidden:
+            return
+        alerts = sessions_core.alerts_for(events, self._sess_alert_on)
+        if "stuck" in self._sess_alert_on:
+            alerts += [sessions_core.alert_for_stuck(s) for s in stuck]
+        if not alerts:
+            return
+        quiet_pid = None
+        if self._sess_quiet_fg:
+            # Only suppress when exactly one session sits under the focused
+            # window — sessions in tabs of a shared terminal are
+            # indistinguishable from here, and silencing all of them would hide
+            # the one that actually needs you.
+            quiet_pid = focus.exclusive_foreground_pid(
+                [s.pid for s in live], focus.parent_map())
+        for alert in alerts:
+            if quiet_pid is not None and alert["pid"] == quiet_pid:
+                continue   # you're already looking at it
+            self._show_toast(None, alert["title"], alert["subtitle"],
+                             alert["color"])
 
     def _with_sessions(self, disp):
         """Overlay the session fields onto a usage disp dict for rendering."""
