@@ -1294,7 +1294,7 @@ class BarWidget:
         self._sess_seeded = False
         # Hooks: opt-in, and only trusted while the config says they're on —
         # otherwise a stale settings.json entry could keep feeding us events.
-        self._sess_hooks_on = cfg["sessions_hooks"]
+        self._sess_hooks_on = cfg["sessions_hooks"] and self._sessions_on
         self._sess_hook_notes = {}     # session_id -> latest hook message
         self._sess_heartbeat_at = 0.0
         if self._sess_hooks_on:
@@ -1304,7 +1304,10 @@ class BarWidget:
             # leave Claude Code spawning a failing command on every event.
             self._apply_hooks(True)
         else:
-            claude_hooks.clear_spool()
+            # Not merely "don't read them" — take any registration from a
+            # previous run back out, or it keeps firing into a queue nobody
+            # drains for as long as the setting stays off.
+            self._apply_hooks(False)
 
         self._apply_bg((233, 238, 243))  # provisional; refined by sampling
         self._place_initial()
@@ -2034,7 +2037,14 @@ class BarWidget:
         read-only file, a settings.json that stopped parsing), and re-checking
         each time lets it recover on the next save instead of staying silently
         broken.
+
+        Hooks exist only to feed the session monitor, so turning that off takes
+        them with it. Left registered they would run in every Claude session
+        for a reader that never drains them — the queue would grow unbounded
+        and, with no heartbeat, the relay would eventually uninstall itself
+        while the setting still claimed to be on.
         """
+        want = bool(want) and self._sessions_on
         try:
             if want:
                 if claude_hooks.status() != claude_hooks.INSTALLED:
