@@ -88,6 +88,8 @@ class MenuApp(rumps.App):
             disp = core.status_display(core.Status.ERROR)
         self.title = self._title(disp)
         self._last_disp = disp   # so _sess_tick can rebuild without re-polling
+        if self._sessions_on and not self._sess_disp:
+            self._sess_tick()    # first paint shouldn't wait for the fast timer
         # Rebuild only when the menu content changes — rebuilding every tick
         # leaks rumps callback registrations (they're never pruned).
         sig = (disp.get("plan"), disp.get("session"), disp.get("weekly"),
@@ -131,7 +133,10 @@ class MenuApp(rumps.App):
             # The set of sessions changed, so the row COUNT changed — only a
             # rebuild can add or remove items.
             self._sess_shape = shape
-            if self._last_disp is not None:
+            # Not before the first paint: _tick is about to rebuild anyway and
+            # would pick these rows up, and a rumps rebuild leaks callbacks —
+            # doing it twice at startup is pure waste.
+            if self._last_disp is not None and self._last_sig is not None:
                 self._rebuild(self._last_disp)
             return
         # Same rows, newer dwell text: rewrite titles in place (no rebuild, so
@@ -141,6 +146,49 @@ class MenuApp(rumps.App):
                 item.title = self._row_title(row)
             except Exception:
                 pass
+
+    def _session_rows(self):
+        """Menu rows for the live sessions, or [] if anything goes wrong.
+
+        Wrapped because this is the one part of the macOS adapter that cannot
+        be exercised on the development machine. The usage meters are the app's
+        actual job, so a fault in the session rows degrades to hiding them
+        rather than taking the whole menu bar down with it.
+        """
+        self._sess_items = []
+        try:
+            sess_rows = self._sess_disp.get("sessions_rows")
+            if not self._sessions_on or sess_rows is None:
+                return []
+            out = [None]
+            summary = self._sess_disp.get("sessions_summary")
+            out.append(rumps.MenuItem(
+                f"Live sessions — {summary}" if summary else "Live sessions"))
+            if not sess_rows:
+                out.append(rumps.MenuItem(
+                    "    " + (self._sess_disp.get("sessions_empty")
+                              or "No sessions running")))
+            seen = {}
+            for row in sess_rows:
+                title = self._row_title(row)
+                if title in seen:        # rumps dedupes by title — pad so two
+                    seen[title] += 1     # identically-named sessions both show
+                    title += " " * seen[title]
+                else:
+                    seen[title] = 0
+                item = rumps.MenuItem(title)
+                self._sess_items.append(item)
+                out.append(item)
+            if self._sess_disp.get("sessions_overflow"):
+                out.append(rumps.MenuItem(
+                    f"    +{self._sess_disp['sessions_overflow']} more"))
+            for row in self._sess_disp.get("sessions_recent") or []:
+                out.append(rumps.MenuItem(
+                    f"    ⚪ {row['label']}  ·  {row['detail']}"))
+            return out
+        except Exception:
+            self._sess_items = []
+            return []
 
     def _rebuild(self, disp) -> None:
         rows = []
@@ -162,36 +210,7 @@ class MenuApp(rumps.App):
             else:
                 seen[row] = 0
             rows.append(row)
-        # Live Claude Code sessions. The items are kept so _sess_tick can
-        # rewrite their titles without a (leaky) full rebuild.
-        self._sess_items = []
-        sess_rows = self._sess_disp.get("sessions_rows")
-        if self._sessions_on and sess_rows is not None:
-            rows.append(None)
-            summary = self._sess_disp.get("sessions_summary")
-            rows.append(rumps.MenuItem(
-                f"Live sessions — {summary}" if summary else "Live sessions"))
-            if not sess_rows:
-                rows.append(rumps.MenuItem(
-                    "    " + (self._sess_disp.get("sessions_empty")
-                              or "No sessions running")))
-            sess_seen = {}
-            for row in sess_rows:
-                title = self._row_title(row)
-                if title in sess_seen:   # rumps dedupes by title — pad so two
-                    sess_seen[title] += 1   # identically-named sessions both show
-                    title += " " * sess_seen[title]
-                else:
-                    sess_seen[title] = 0
-                item = rumps.MenuItem(title)
-                self._sess_items.append(item)
-                rows.append(item)
-            if self._sess_disp.get("sessions_overflow"):
-                rows.append(rumps.MenuItem(
-                    f"    +{self._sess_disp['sessions_overflow']} more"))
-            for row in self._sess_disp.get("sessions_recent") or []:
-                rows.append(rumps.MenuItem(
-                    f"    ⚪ {row['label']}  ·  {row['detail']}"))
+        rows.extend(self._session_rows())
 
         rows.append(None)
         # A disabled (callback-less) info line showing data freshness + source.
