@@ -80,4 +80,11 @@ sessions_quiet_foreground = true
 # JSON and asks first, backs the file up, and removes its entries cleanly when
 # you turn it off. Off by default; without it sessions still update every
 # second or so from ~/.claude/sessions.
+#
+# The hook runs a small relay copied to ~/.claudometer, NOT from the app
+# folder, so updating or uninstalling Claudometer can never leave Claude Code
+# invoking a path that no longer exists. If Claudometer stops running
+# altogether, the relay notices after a week and removes the hooks, the spool
+# and itself — so an uninstall tidies up even if you forget to switch this off
+# first. Starting Claudometer again simply puts them back.
 sessions_hooks = false

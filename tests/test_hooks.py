@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -23,9 +24,9 @@ import hooks
 def _isolate(monkeypatch, tmp_path):
     cfg = tmp_path / "claude"
     cfg.mkdir()
-    spool = tmp_path / "events"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
-    monkeypatch.setenv("CLAUDOMETER_EVENTS_DIR", str(spool))
+    monkeypatch.setenv("CLAUDOMETER_EVENTS_DIR", str(tmp_path / "events"))
+    monkeypatch.setenv("CLAUDOMETER_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(hooks.Path, "home", staticmethod(lambda: tmp_path))
     return cfg
 
@@ -353,13 +354,20 @@ def test_summarize_fills_missing_fields_with_empty_strings():
 # --------------------------------------------------------------------------- #
 # hook_relay — runs as a real subprocess, the way Claude Code invokes it
 # --------------------------------------------------------------------------- #
-def _run_relay(payload, env_extra=None):
+def _relay_env(extra=None):
     env = dict(os.environ)
     env["CLAUDOMETER_EVENTS_DIR"] = str(hooks.spool_dir())
-    env.update(env_extra or {})
-    return subprocess.run([sys.executable, str(hooks.relay_path())],
+    env["CLAUDOMETER_HOME"] = str(hooks.home_dir())
+    env["CLAUDE_CONFIG_DIR"] = str(hooks.settings_path().parent)
+    env.update(extra or {})
+    return env
+
+
+def _run_relay(payload, env_extra=None, script=None):
+    hooks.touch_heartbeat()          # healthy by default; staleness is opt-in
+    return subprocess.run([sys.executable, str(script or hooks.relay_path())],
                           input=payload, capture_output=True, timeout=30,
-                          env=env)
+                          env=_relay_env(env_extra))
 
 
 def test_relay_writes_the_payload_to_the_spool():
@@ -396,11 +404,11 @@ def test_relay_never_leaves_a_partial_file():
 
 
 def test_relay_concurrent_writes_do_not_collide():
+    hooks.touch_heartbeat()
     payloads = [json.dumps({"hook_event_name": "Stop", "n": i}).encode()
                 for i in range(6)]
     procs = []
-    env = dict(os.environ)
-    env["CLAUDOMETER_EVENTS_DIR"] = str(hooks.spool_dir())
+    env = _relay_env()
     for p in payloads:
         procs.append(subprocess.Popen(
             [sys.executable, str(hooks.relay_path())], stdin=subprocess.PIPE,
@@ -408,3 +416,144 @@ def test_relay_concurrent_writes_do_not_collide():
     for proc, p in zip(procs, payloads):
         proc.communicate(input=p, timeout=30)
     assert len(hooks.read_events()) == 6
+
+
+# --------------------------------------------------------------------------- #
+# Surviving — and cleaning up after — an uninstall
+# --------------------------------------------------------------------------- #
+def test_hook_points_at_the_copy_not_the_app_directory():
+    # Pointing at the app means the hook dies on every update and permanently
+    # on uninstall, leaving Claude Code spawning a failing command forever.
+    command = hooks.hook_command()
+    assert str(hooks.installed_relay_path()) in command
+    assert str(hooks.relay_path().parent) not in command
+
+
+def test_install_copies_the_relay_and_writes_a_heartbeat():
+    hooks.install()
+    assert hooks.installed_relay_path().is_file()
+    assert hooks.heartbeat_path().is_file()
+
+
+def test_installed_relay_is_a_faithful_copy():
+    hooks.install()
+    assert (hooks.installed_relay_path().read_bytes()
+            == hooks.relay_path().read_bytes())
+
+
+def test_remove_deletes_the_copy_and_heartbeat():
+    hooks.install()
+    hooks.remove()
+    assert not hooks.installed_relay_path().exists()
+    assert not hooks.heartbeat_path().exists()
+
+
+def test_updating_the_app_does_not_strand_the_hook(_isolate, monkeypatch):
+    """The command must not change when the application directory moves."""
+    hooks.install()
+    before = _read(_isolate)["hooks"]["Stop"][0]["hooks"][0]["command"]
+    moved = _isolate.parent / "new-app-location"
+    moved.mkdir()
+    monkeypatch.setattr(hooks, "relay_path", lambda: moved / hooks.RELAY_NAME)
+    (moved / hooks.RELAY_NAME).write_text("# moved", encoding="utf-8")
+    hooks.install()
+    after = _read(_isolate)["hooks"]["Stop"][0]["hooks"][0]["command"]
+    assert before == after
+    assert hooks.status() == hooks.INSTALLED
+
+
+def test_relay_still_runs_after_the_app_is_deleted(_isolate, tmp_path):
+    """An uninstall must not make Claude Code spawn a missing file."""
+    hooks.install()
+    hooks.touch_heartbeat()
+    payload = json.dumps({"hook_event_name": "Stop", "session_id": "a"}).encode()
+    # Run the INSTALLED copy — the app directory is irrelevant to it.
+    out = subprocess.run([sys.executable, str(hooks.installed_relay_path())],
+                         input=payload, capture_output=True, timeout=30,
+                         env=_relay_env())
+    assert out.returncode == 0 and out.stderr == b""
+    assert len(hooks.read_events()) == 1
+
+
+def _make_stale():
+    hooks.touch_heartbeat()
+    old = time.time() - (hooks.STALE_DAYS + 1) * 86400
+    os.utime(hooks.heartbeat_path(), (old, old))
+
+
+def test_relay_uninstalls_itself_once_abandoned(_isolate):
+    _write(_isolate, {"effortLevel": "low"})
+    hooks.install()
+    _make_stale()
+    out = subprocess.run([sys.executable, str(hooks.installed_relay_path())],
+                         input=json.dumps({"hook_event_name": "Stop"}).encode(),
+                         capture_output=True, timeout=30, env=_relay_env())
+    assert out.returncode == 0
+    data = _read(_isolate)
+    assert "hooks" not in data                    # entries gone
+    assert data == {"effortLevel": "low"}         # everything else intact
+    assert not hooks.installed_relay_path().exists()   # deleted itself
+    assert not hooks.heartbeat_path().exists()
+
+
+def test_abandoned_relay_keeps_other_peoples_hooks(_isolate):
+    _write(_isolate, {"hooks": {"Stop": [OTHER_HOOK], "PreToolUse": [OTHER_HOOK]}})
+    hooks.install()
+    _make_stale()
+    subprocess.run([sys.executable, str(hooks.installed_relay_path())],
+                   input=b"{}", capture_output=True, timeout=30,
+                   env=_relay_env())
+    data = _read(_isolate)
+    assert data["hooks"]["Stop"] == [OTHER_HOOK]
+    assert data["hooks"]["PreToolUse"] == [OTHER_HOOK]
+
+
+def test_abandoned_relay_writes_nothing_to_the_spool(_isolate):
+    hooks.install()
+    _make_stale()
+    subprocess.run([sys.executable, str(hooks.installed_relay_path())],
+                   input=json.dumps({"hook_event_name": "Stop"}).encode(),
+                   capture_output=True, timeout=30, env=_relay_env())
+    assert hooks.read_events() == []
+
+
+def test_abandoned_relay_leaves_an_unparsable_settings_alone(_isolate):
+    hooks.install()
+    (_isolate / "settings.json").write_text("{ broken", encoding="utf-8")
+    _make_stale()
+    subprocess.run([sys.executable, str(hooks.installed_relay_path())],
+                   input=b"{}", capture_output=True, timeout=30,
+                   env=_relay_env())
+    # Better a stale hook than a destroyed configuration.
+    assert (_isolate / "settings.json").read_text(encoding="utf-8") == "{ broken"
+
+
+def test_a_missing_heartbeat_counts_as_abandoned(_isolate):
+    hooks.install()
+    hooks.heartbeat_path().unlink()
+    subprocess.run([sys.executable, str(hooks.installed_relay_path())],
+                   input=b"{}", capture_output=True, timeout=30,
+                   env=_relay_env())
+    assert "hooks" not in _read(_isolate)
+
+
+def test_a_fresh_heartbeat_keeps_the_relay_working(_isolate):
+    hooks.install()
+    hooks.touch_heartbeat()
+    subprocess.run([sys.executable, str(hooks.installed_relay_path())],
+                   input=json.dumps({"hook_event_name": "Stop"}).encode(),
+                   capture_output=True, timeout=30, env=_relay_env())
+    assert hooks.status() == hooks.INSTALLED
+    assert len(hooks.read_events()) == 1
+
+
+def test_reinstall_after_self_uninstall(_isolate):
+    """Coming back must just work, silently."""
+    hooks.install()
+    _make_stale()
+    subprocess.run([sys.executable, str(hooks.installed_relay_path())],
+                   input=b"{}", capture_output=True, timeout=30,
+                   env=_relay_env())
+    assert hooks.status() == hooks.ABSENT
+    assert hooks.install() is True
+    assert hooks.status() == hooks.INSTALLED

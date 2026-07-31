@@ -26,6 +26,7 @@ import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -35,6 +36,24 @@ EVENTS = ("Notification", "Stop", "SessionStart", "SessionEnd")
 #: Filename of the relay script; also how our entries are recognised for
 #: clean removal, so it must stay distinctive.
 RELAY_NAME = "hook_relay.py"
+
+#: Claudometer's own directory. The relay is COPIED here at install time and
+#: the hook points at the copy, never at the application directory. Pointing at
+#: the app means the hook dies whenever the app moves — which it does on every
+#: update, and permanently on uninstall — leaving Claude Code to spawn a
+#: failing command on every event, forever, in a file the user never edited.
+HOME_DIR = Path.home() / ".claudometer"
+
+#: Refreshed while Claudometer runs. The relay uses it to notice that nobody is
+#: draining the spool any more, which is what an uninstall looks like from
+#: inside a hook.
+HEARTBEAT_NAME = "heartbeat"
+
+#: How long the heartbeat may go unrefreshed before the relay concludes
+#: Claudometer is gone and uninstalls the hooks itself. Long enough that simply
+#: not opening the app for a while is harmless — and if it does fire, the next
+#: launch silently reinstalls.
+STALE_DAYS = 7
 
 #: Seconds Claude Code waits for the relay before giving up. It writes one
 #: small file, so this is generous.
@@ -70,8 +89,41 @@ def spool_dir() -> Path:
                 or (Path.home() / ".claudometer-events"))
 
 
+def home_dir() -> Path:
+    return Path(os.environ.get("CLAUDOMETER_HOME") or HOME_DIR)
+
+
 def relay_path() -> Path:
+    """The relay shipped inside the application."""
     return Path(__file__).resolve().parent / RELAY_NAME
+
+
+def installed_relay_path() -> Path:
+    """The copy the hook actually runs — outside the application directory."""
+    return home_dir() / RELAY_NAME
+
+
+def heartbeat_path() -> Path:
+    return home_dir() / HEARTBEAT_NAME
+
+
+def touch_heartbeat() -> None:
+    """Tell the relay we're alive. Cheap enough to call on a timer."""
+    try:
+        home_dir().mkdir(parents=True, exist_ok=True)
+        heartbeat_path().write_text(str(int(time.time())), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _install_relay() -> bool:
+    """Put a copy of the relay somewhere that outlives this install."""
+    try:
+        home_dir().mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(relay_path(), installed_relay_path())
+        return True
+    except OSError:
+        return False
 
 
 def interpreter() -> Optional[str]:
@@ -100,7 +152,7 @@ def hook_command() -> Optional[str]:
     exe = interpreter()
     if not exe:
         return None
-    return "%s %s" % (_quote(exe), _quote(str(relay_path())))
+    return "%s %s" % (_quote(exe), _quote(str(installed_relay_path())))
 
 
 # --------------------------------------------------------------------------- #
@@ -228,6 +280,10 @@ def install(config_dir=None) -> bool:
     command = hook_command()
     if not command or not settings_readable(config_dir):
         return False
+    if not _install_relay():
+        return False
+    touch_heartbeat()      # before the hooks exist, so the relay never sees a
+                           # fresh install as an abandoned one
     data = read_settings(config_dir)
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
@@ -269,9 +325,15 @@ def remove(config_dir=None) -> bool:
         data.pop("hooks", None)          # nor an empty hooks object
     else:
         data["hooks"] = hooks
-    if not changed:
-        return True
-    return _write_settings(data, config_dir)
+    ok = _write_settings(data, config_dir) if changed else True
+    # Take the relay copy and heartbeat with it, so nothing of ours is left
+    # running or lying around once the hooks are gone.
+    for path in (installed_relay_path(), heartbeat_path()):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    return ok
 
 
 # --------------------------------------------------------------------------- #

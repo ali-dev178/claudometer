@@ -998,7 +998,10 @@ class SettingsWindow:
             f"{claude_hooks.preview()}\n\n"
             "They run a small relay that records when a session needs you or "
             "finishes. Your existing settings are backed up and left "
-            "untouched, and turning this off removes exactly these entries.",
+            "untouched, and turning this off removes exactly these entries.\n\n"
+            "The relay is copied to ~/.claudometer, so updating or uninstalling "
+            "Claudometer can't strand it — and if Claudometer stops running for "
+            "a week it removes these hooks by itself.",
             parent=self.top)
         if not ok:
             self.v_sess_hooks.set(False)
@@ -1265,6 +1268,7 @@ class BarWidget:
         # otherwise a stale settings.json entry could keep feeding us events.
         self._sess_hooks_on = cfg["sessions_hooks"]
         self._sess_hook_notes = {}     # session_id -> latest hook message
+        self._sess_heartbeat_at = 0.0
         if self._sess_hooks_on:
             # Reconcile on every start. The config saying "on" IS the prior
             # consent, and an install can go stale on its own: after the app
@@ -1857,6 +1861,9 @@ class BarWidget:
     #: runs every tick; enrichment is ~5ms per session, so it doesn't.
     SESS_ENRICH_EVERY = 5.0
 
+    #: Seconds between heartbeat writes while hooks are on.
+    HEARTBEAT_EVERY = 300.0
+
     def _sessions_tick(self):
         """Refresh the live-session list. Runs on the main thread every second.
 
@@ -1938,6 +1945,12 @@ class BarWidget:
         """
         if not self._sess_hooks_on:
             return
+        # Tell the relay we're still here. Throttled — the relay only checks
+        # for staleness in days, so a write per tick would be pure churn.
+        now = time.monotonic()
+        if now - self._sess_heartbeat_at >= self.HEARTBEAT_EVERY:
+            self._sess_heartbeat_at = now
+            claude_hooks.touch_heartbeat()
         for raw in claude_hooks.read_events():
             note = claude_hooks.summarize(raw)
             session_id = note.get("session_id")
