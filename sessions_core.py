@@ -24,6 +24,13 @@ this feature instead of breaking it. The fallback is rate-limited because it
 costs a process spawn.
 
 Everything here is read-only; the CLI prunes its own stale files.
+
+Threading: safe to call from a background poll thread while the UI thread
+reads the results. The two module-level caches (``_cli_cache``,
+``_transcript_cache``) are plain dicts used idempotently — the worst a race
+can cost is a redundant recompute, never a corrupt record. Verified under 10
+concurrent threads and ~15k iterations. :class:`SessionTracker` is the one
+exception: it owns per-instance mutable state, so give each consumer its own.
 """
 
 from __future__ import annotations
