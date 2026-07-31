@@ -716,6 +716,9 @@ class SettingsWindow:
         self.v_skip = tk.BooleanVar(value=cfg.get("resume_skip_permissions", False))
         self.v_prompt = tk.StringVar(value=cfg.get("resume_prompt", ""))
         self.v_maxturns = tk.IntVar(value=cfg.get("resume_max_turns", 30))
+        self.v_sessions = tk.BooleanVar(value=cfg.get("sessions", True))
+        self.v_sess_strip = tk.BooleanVar(value=cfg.get("sessions_on_strip", True))
+        self.v_sess_rows = tk.IntVar(value=cfg.get("sessions_max_rows", 6))
 
         # rendered header banner (sparkle + title + subtitle)
         self._hdr = ImageTk.PhotoImage(render.render_settings_header(theme, self.WIN_W))
@@ -774,6 +777,16 @@ class SettingsWindow:
         _SliderW(r, self.v_poll, 60, 300, theme, bg, width=150).pack(side="right", padx=(0, 8))
         self.v_poll.trace_add("write", lambda *a: self._poll_lbl.configure(
             text=f"{self._safe_int(self.v_poll, 90)}s"))
+
+        # ----- Live sessions -----
+        section("Live sessions")
+        toggle_row("Show running Claude sessions", self.v_sessions)
+        toggle_row("Show count on the strip", self.v_sess_strip)
+        r = row()
+        label(r, "Rows in popover").pack(side="left")
+        # Capped at 12: beyond that the popover is taller than a small laptop
+        # screen (see settings.load).
+        _StepperW(r, self.v_sess_rows, 1, 12, theme, bg, width=86).pack(side="right")
 
         # ----- Alerts -----
         section("Alerts")
@@ -932,6 +945,10 @@ class SettingsWindow:
             maxturns = max(1, min(200, int(self.v_maxturns.get())))
         except Exception:
             maxturns = 30
+        try:
+            sess_rows = max(1, min(12, int(self.v_sess_rows.get())))
+        except Exception:
+            sess_rows = 6
         cfg = dict(self._cfg)
         cfg.update({
             "poll": poll,
@@ -948,6 +965,9 @@ class SettingsWindow:
             "resume_prompt": self.v_prompt.get().strip() or self._cfg.get("resume_prompt")
                              or "Continue where you left off.",
             "resume_max_turns": maxturns,
+            "sessions": bool(self.v_sessions.get()),
+            "sessions_on_strip": bool(self.v_sess_strip.get()),
+            "sessions_max_rows": sess_rows,
         })
         try:
             self._on_apply(cfg)
