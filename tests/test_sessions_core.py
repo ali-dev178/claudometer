@@ -51,9 +51,6 @@ def _no_real_subprocess(monkeypatch):
     monkeypatch.setattr(sc.subprocess, "run", boom)
 
 
-ALIVE = staticmethod(lambda pid: True)
-
-
 def _alive_all(_pid):
     return True
 
