@@ -477,6 +477,49 @@ def alerts_for(transitions, kinds=DEFAULT_ALERT_KINDS):
     return out
 
 
+#: Most-urgent-first. ALERT_KINDS is declaration/settings order, which is not
+#: the same thing.
+_URGENCY = (WAITING, "stuck", IDLE, "gone")
+
+_ALERT_NOUNS = {WAITING: "need you", "stuck": "are still waiting",
+                IDLE: "finished", "gone": "ended"}
+
+
+def coalesce_alerts(alerts) -> Optional[dict]:
+    """Collapse a batch of alerts into the single toast that will be shown.
+
+    Only one toast exists at a time, and showing a second destroys the first —
+    so firing one per session means a burst of three finishing together paints
+    only the last, silently swallowing the other two. One summary toast is both
+    honest and less noisy.
+    """
+    if not alerts:
+        return None
+    if len(alerts) == 1:
+        return alerts[0]
+
+    present = [k for k in _URGENCY if any(a["kind"] == k for a in alerts)]
+    counts = {k: sum(1 for a in alerts if a["kind"] == k) for k in present}
+    lead = present[0]
+
+    if len(present) == 1:
+        title = f"{counts[lead]} sessions {_ALERT_NOUNS[lead]}"
+        # Each subtitle is "<label> · <detail>"; the labels alone identify them.
+        subtitle = " · ".join(a["subtitle"].split(" · ")[0] for a in alerts)
+    else:
+        title = f"{len(alerts)} session updates"
+        subtitle = " · ".join(f"{counts[k]} {_ALERT_NOUNS[k]}" for k in present)
+
+    return {
+        "kind": lead,
+        "title": title,
+        "subtitle": oneline(subtitle),
+        "color": _ALERT_COLORS.get(lead, "grey"),
+        "session_id": "",     # a rollup belongs to no single session
+        "pid": 0,
+    }
+
+
 class StuckWatcher:
     """Nudges once when a session has been blocked on you for too long.
 

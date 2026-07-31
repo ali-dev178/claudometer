@@ -901,6 +901,76 @@ def test_alert_for_stuck_reports_the_wait():
 
 
 # --------------------------------------------------------------------------- #
+# coalesce_alerts — only one toast exists at a time
+# --------------------------------------------------------------------------- #
+def _mk_alerts(*kinds):
+    out = []
+    for i, kind in enumerate(kinds):
+        s = _session(session_id=str(i), pid=i, cwd=f"/p/repo{i}",
+                     name=f"sess-{i}", status=sc.WAITING,
+                     waiting_for="input needed")
+        if kind == "stuck":
+            out.append(sc.alert_for_stuck(s))
+        elif kind == sc.WAITING:
+            out.append(sc.alert_for(_t("status", s, sc.BUSY, sc.WAITING)))
+        elif kind == sc.IDLE:
+            s = _session(session_id=str(i), pid=i, cwd=f"/p/repo{i}",
+                         name=f"sess-{i}", status=sc.IDLE)
+            out.append(sc.alert_for(_t("status", s, sc.BUSY, sc.IDLE)))
+        else:
+            s = _session(session_id=str(i), pid=i, cwd=f"/p/repo{i}",
+                         name=f"sess-{i}")
+            out.append(sc.alert_for(_t("gone", s)))
+    return out
+
+
+def test_coalesce_none_for_empty():
+    assert sc.coalesce_alerts([]) is None
+
+
+def test_coalesce_passes_a_single_alert_through_untouched():
+    one = _mk_alerts(sc.IDLE)
+    assert sc.coalesce_alerts(one) is one[0]
+
+
+def test_coalesce_same_kind_counts_and_lists():
+    merged = sc.coalesce_alerts(_mk_alerts(sc.IDLE, sc.IDLE, sc.IDLE))
+    assert merged["title"] == "3 sessions finished"
+    assert merged["color"] == "green"
+    for name in ("sess-0", "sess-1", "sess-2"):
+        assert name in merged["subtitle"]
+
+
+def test_coalesce_mixed_kinds_summarises_counts():
+    merged = sc.coalesce_alerts(_mk_alerts(sc.IDLE, sc.WAITING, sc.WAITING))
+    assert merged["title"] == "3 session updates"
+    assert "2 need you" in merged["subtitle"]
+    assert "1 finished" in merged["subtitle"]
+
+
+def test_coalesce_takes_the_colour_of_the_most_urgent():
+    # Two finishes and one block: the block is what matters.
+    merged = sc.coalesce_alerts(_mk_alerts(sc.IDLE, sc.IDLE, sc.WAITING))
+    assert merged["color"] == "red" and merged["kind"] == sc.WAITING
+
+
+def test_coalesce_urgency_order_is_not_declaration_order():
+    merged = sc.coalesce_alerts(_mk_alerts("gone", "stuck"))
+    assert merged["kind"] == "stuck"        # stuck outranks gone
+
+
+def test_coalesce_rollup_belongs_to_no_session():
+    # pid 0 so the foreground filter can never match and drop the rollup.
+    merged = sc.coalesce_alerts(_mk_alerts(sc.IDLE, sc.IDLE))
+    assert merged["pid"] == 0 and merged["session_id"] == ""
+
+
+def test_coalesce_subtitle_is_single_line():
+    merged = sc.coalesce_alerts(_mk_alerts(sc.IDLE, sc.IDLE, sc.IDLE))
+    assert "\n" not in merged["subtitle"]
+
+
+# --------------------------------------------------------------------------- #
 # StuckWatcher
 # --------------------------------------------------------------------------- #
 def test_stuck_watcher_fires_once_per_block():

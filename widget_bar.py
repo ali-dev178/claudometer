@@ -1842,20 +1842,23 @@ class BarWidget:
 
     def _session_alerts(self, events, live):
         """Toast the transitions worth interrupting for. Main thread."""
-        stuck = self._sess_stuck.check(live)
         if not self._sess_seeded:
             # First tick after start (or after re-enabling): everything already
-            # running looks brand new. Prime the watchers and stay silent.
+            # running looks brand new. That's startup, not news.
             self._sess_seeded = True
             return
         if not self._sess_alerts_on or self._hidden:
+            # The stuck watcher is deliberately NOT run here. Consuming a
+            # crossing while we're suppressed would mean a session that got
+            # blocked during a fullscreen app is never nudged — not even once
+            # you come back to the desktop.
             return
         alerts = sessions_core.alerts_for(events, self._sess_alert_on)
         if "stuck" in self._sess_alert_on:
-            alerts += [sessions_core.alert_for_stuck(s) for s in stuck]
+            alerts += [sessions_core.alert_for_stuck(s)
+                       for s in self._sess_stuck.check(live)]
         if not alerts:
             return
-        quiet_pid = None
         if self._sess_quiet_fg:
             # Only suppress when exactly one session sits under the focused
             # window — sessions in tabs of a shared terminal are
@@ -1863,11 +1866,14 @@ class BarWidget:
             # the one that actually needs you.
             quiet_pid = focus.exclusive_foreground_pid(
                 [s.pid for s in live], focus.parent_map())
-        for alert in alerts:
-            if quiet_pid is not None and alert["pid"] == quiet_pid:
-                continue   # you're already looking at it
-            self._show_toast(None, alert["title"], alert["subtitle"],
-                             alert["color"])
+            if quiet_pid is not None:
+                alerts = [a for a in alerts if a["pid"] != quiet_pid]
+        # One toast at a time: a second destroys the first before it paints, so
+        # a batch has to be summarised rather than fired one by one.
+        merged = sessions_core.coalesce_alerts(alerts)
+        if merged is not None:
+            self._show_toast(None, merged["title"], merged["subtitle"],
+                             merged["color"])
 
     def _with_sessions(self, disp):
         """Overlay the session fields onto a usage disp dict for rendering."""

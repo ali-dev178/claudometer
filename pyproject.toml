@@ -43,10 +43,12 @@ claudometer = "app:main"
 [tool.setuptools]
 # Flat layout: the app is a set of top-level modules. pipx installs each app in
 # its own isolated venv, so the generic module names never collide with anything.
+# Every top-level module belongs here or it silently vanishes from the wheel —
+# tests/test_packaging.py fails the build if this list drifts.
 py-modules = [
     "app", "widget_bar", "render", "usage_core", "settings",
     "cost", "resume", "config", "tray_windows", "menubar_mac",
-    "sessions_core", "focus",
+    "sessions_core", "focus", "autostart", "updates",
 ]
 
 [tool.setuptools.dynamic]
