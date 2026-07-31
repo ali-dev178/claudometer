@@ -12,6 +12,7 @@ poll = 90
 theme = "auto"
 
 # Which meters to show on the taskbar strip: any of "session", "weekly".
+# (The live-session count is controlled separately, by sessions_on_strip below.)
 metrics = ["session", "weekly"]
 
 # Hide the widget while a fullscreen app (movie, game, presentation) is active,
@@ -41,3 +42,16 @@ resume_prompt = "Continue where you left off."   # what Tier 2 tells Claude
 resume_max_turns = 30                             # Tier 2: cap agentic turns
 # resume_skip_permissions = false   # true = --dangerously-skip-permissions
 #                                   # (default false uses the safer acceptEdits mode)
+
+# --- Live Claude Code sessions --------------------------------------------
+# Shows every running `claude` CLI session and what it's doing: working, done
+# (waiting for your next prompt), or blocked on you. Read locally from
+# ~/.claude/sessions — nothing is sent anywhere.
+sessions = true
+
+# Rows shown in the popover before the rest collapse into a "+N more" line.
+sessions_max_rows = 6
+
+# Also show a "Live N" count on the taskbar strip (the popover always lists
+# them in full). Turn off if you only want the count when you open the details.
+sessions_on_strip = true

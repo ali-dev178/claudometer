@@ -5,6 +5,7 @@ the right-click menu with the full breakdown on every poll.
 """
 
 import threading
+import time
 import webbrowser
 
 import pystray
@@ -12,6 +13,8 @@ from pystray import Menu, MenuItem
 from PIL import Image, ImageDraw, ImageFont
 
 import usage_core as core
+import sessions_core
+import settings
 import updates
 
 COLORS = {
@@ -77,6 +80,12 @@ class TrayApp:
         self._state = core.PollState()
         self._stop = threading.Event()
         self._wake = threading.Event()
+        cfg = settings.load()
+        self._sessions_on = cfg["sessions"]
+        self._sessions_max_rows = cfg["sessions_max_rows"]
+        self._sess_tracker = sessions_core.SessionTracker()
+        self._sess_disp = {}
+        self._usage_disp = None
 
     # -- menu ------------------------------------------------------------- #
     def _build_menu(self, disp) -> Menu:
@@ -97,6 +106,24 @@ class TrayApp:
             items.append(MenuItem(disp["weekly"], None, enabled=False))
         for model in disp.get("models", []):
             items.append(MenuItem("    " + model, None, enabled=False))
+        rows = disp.get("sessions_rows")
+        if rows is not None:
+            items.append(Menu.SEPARATOR)
+            summary = disp.get("sessions_summary")
+            items.append(MenuItem(
+                f"Live sessions — {summary}" if summary else "Live sessions",
+                None, enabled=False))
+            if not rows:
+                items.append(MenuItem("    " + (disp.get("sessions_empty")
+                                                or "No sessions running"),
+                                      None, enabled=False))
+            for row in rows:
+                items.append(MenuItem(
+                    f"    {row['emoji']} {row['label']}  ·  {row['detail']}",
+                    None, enabled=False))
+            if disp.get("sessions_overflow"):
+                items.append(MenuItem(f"    +{disp['sessions_overflow']} more",
+                                      None, enabled=False))
         items.append(Menu.SEPARATOR)
         items.append(MenuItem("Refresh now", self._refresh_now))
         items.append(MenuItem("Check for Updates…", self._check_updates))
@@ -133,31 +160,58 @@ class TrayApp:
         self.icon.stop()
 
     def _apply(self, disp) -> None:
+        merged = dict(disp)
+        merged.update(self._sess_disp)
         self.icon.icon = render_icon(disp["face_pct"], disp["face_color"])
-        self.icon.title = disp["tooltip"]
-        self.icon.menu = self._build_menu(disp)
+        self.icon.title = merged["tooltip"]
+        self.icon.menu = self._build_menu(merged)
         self.icon.update_menu()
 
+    # -- live sessions ---------------------------------------------------- #
+    #: Sessions change far faster than the usage numbers, so the loop ticks at
+    #: this interval and only re-polls usage on its own (much slower) schedule.
+    SESS_TICK = 2.0
+
+    def _refresh_sessions(self) -> None:
+        if not self._sessions_on:
+            self._sess_disp = {}
+            return
+        try:
+            self._sess_tracker.update(sessions_core.snapshot())
+            live = sessions_core.enrich_all(self._sess_tracker.sessions)
+            self._sess_disp = sessions_core.format_sessions(
+                live, max_rows=self._sessions_max_rows)
+        except Exception:
+            self._sess_disp = {}
+
     # -- poll loop (daemon thread) --------------------------------------- #
+    def _poll_usage(self):
+        try:
+            result = core.poll_once(self._state)
+            if isinstance(result, core.Usage):
+                return core.format_breakdown(result)
+            return core.status_display(result)
+        except core.CredentialsMissing:
+            return core.status_display(core.Status.NO_CREDS)
+        except Exception as exc:  # never let the loop die
+            disp = core.status_display(core.Status.ERROR)
+            disp["tooltip"] = f"Claude usage: error ({exc})"
+            return disp
+
     def _loop(self) -> None:
+        next_poll = 0.0
         while not self._stop.is_set():
-            try:
-                result = core.poll_once(self._state)
-                if isinstance(result, core.Usage):
-                    disp = core.format_breakdown(result)
-                else:
-                    disp = core.status_display(result)
-            except core.CredentialsMissing:
-                disp = core.status_display(core.Status.NO_CREDS)
-            except Exception as exc:  # never let the loop die
-                disp = core.status_display(core.Status.ERROR)
-                disp["tooltip"] = f"Claude usage: error ({exc})"
-            try:
-                self._apply(disp)
-            except Exception:
-                pass
-            wait = self._state.backoff or core.poll_seconds()
-            self._wake.wait(timeout=wait)
+            if time.monotonic() >= next_poll or self._wake.is_set():
+                self._usage_disp = self._poll_usage()
+                next_poll = time.monotonic() + (self._state.backoff
+                                                or core.poll_seconds())
+            self._refresh_sessions()
+            if self._usage_disp is not None:
+                try:
+                    self._apply(self._usage_disp)
+                except Exception:
+                    pass
+            self._wake.wait(timeout=self.SESS_TICK)
             self._wake.clear()
 
     def run(self) -> None:

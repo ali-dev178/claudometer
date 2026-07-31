@@ -81,6 +81,17 @@ _LABELS = {
     UNKNOWN: "unknown",
 }
 
+# Native menus render plain text with no colour control, so the tray and macOS
+# menu bar carry the status as an emoji dot instead — matching the colours the
+# popover draws.
+_EMOJI = {
+    WAITING: "\U0001F534",   # red
+    BUSY: "\U0001F7E1",      # yellow
+    SHELL: "\U0001F7E0",     # orange
+    IDLE: "\U0001F7E2",      # green
+    UNKNOWN: "⚪",       # white
+}
+
 # Sort rank: blocked first, then anything actively running, then finished.
 _RANK = {WAITING: 0, SHELL: 1, BUSY: 1, IDLE: 2, UNKNOWN: 3}
 
@@ -211,6 +222,10 @@ def status_label(status: str) -> str:
     return _LABELS.get(status, "unknown")
 
 
+def status_emoji(status: str) -> str:
+    return _EMOJI.get(status, _EMOJI[UNKNOWN])
+
+
 def dwell_seconds(session: Session, at_ms: Optional[int] = None) -> Optional[int]:
     """Seconds the session has held its current status, or None if unknown.
 
@@ -271,6 +286,100 @@ def stuck_sessions(sessions, minutes: float, at_ms: Optional[int] = None):
         if secs is not None and secs >= cutoff:
             out.append(s)
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Formatting for display
+# --------------------------------------------------------------------------- #
+#: Rows shown before the list collapses into a "+N more" line. The popover is a
+#: fixed-width card, so an unbounded list would run off the screen.
+DEFAULT_MAX_ROWS = 6
+
+# Plural-safe wording for the one-line summary, in the order it reads best:
+# what needs you first, then what is running, then what is finished.
+_SUMMARY_ORDER = ((WAITING, "needs you"), (SHELL, "in shell"),
+                  (BUSY, "working"), (IDLE, "done"))
+
+
+def summarize(sessions) -> str:
+    """One-line rollup, e.g. "1 needs you · 2 working"."""
+    counts = {}
+    for session in sessions:
+        counts[session.status] = counts.get(session.status, 0) + 1
+    parts = [f"{counts[status]} {word}"
+             for status, word in _SUMMARY_ORDER if counts.get(status)]
+    unknown = counts.get(UNKNOWN)
+    if unknown:
+        parts.append(f"{unknown} unknown")
+    return "   ·   ".join(parts)
+
+
+def overall_color(sessions) -> str:
+    """The colour of the most urgent session, for a badge or tray dot."""
+    statuses = {s.status for s in sessions}
+    if WAITING in statuses:
+        return "red"
+    if BUSY in statuses or SHELL in statuses:
+        return "amber"
+    if IDLE in statuses:
+        return "green"
+    return "grey"
+
+
+def format_sessions(sessions, at_ms: Optional[int] = None,
+                    max_rows: int = DEFAULT_MAX_ROWS) -> dict:
+    """Turn Sessions into the flat dict every UI adapter renders verbatim.
+
+    Mirrors ``usage_core.format_breakdown`` so the tray, menu bar and popover
+    all consume one shape and none of them re-derive wording or colour.
+
+    Keys are deliberately ``sessions_*`` (plural). ``usage_core`` already owns
+    ``session_pct`` / ``session_color`` / ``session_resets_at`` for the 5-hour
+    usage meter, and the two dicts get merged into one before rendering — a
+    singular name here would silently repaint that meter.
+    """
+    ordered = sort_sessions(sessions, at_ms)
+    limit = max(1, int(max_rows)) if max_rows else len(ordered)
+    shown = ordered[:limit]
+
+    rows = []
+    for session in shown:
+        dwell = fmt_dwell(dwell_seconds(session, at_ms))
+        rows.append({
+            "session_id": session.session_id,
+            "pid": session.pid,
+            "label": session.label,
+            "project": session.project,
+            "cwd": session.cwd,
+            "status": session.status,
+            "status_text": session.status_text,
+            "color": session.color,
+            "emoji": status_emoji(session.status),
+            "dwell": dwell,
+            # "needs you · 4m" — the right-hand side of a row, prebuilt so the
+            # renderer never has to decide how to join them.
+            "detail": f"{session.status_text} · {dwell}" if dwell
+                      else session.status_text,
+            "tool": session.tool,
+            "model": session.model,
+            "branch": session.git_branch,
+            "last_prompt": session.last_prompt,
+            "is_background": session.is_background,
+        })
+
+    count = len(ordered)
+    summary = summarize(ordered)
+    return {
+        "sessions_rows": rows,
+        "sessions_count": count,
+        "sessions_blocked": sum(1 for s in ordered if s.status == WAITING),
+        "sessions_overflow": max(0, count - len(shown)),
+        "sessions_summary": summary,
+        "sessions_color": overall_color(ordered),
+        "sessions_empty": "No Claude sessions running",
+        "sessions_tooltip": (f"Claude · {summary}" if count
+                             else "Claude · no sessions running"),
+    }
 
 
 # --------------------------------------------------------------------------- #

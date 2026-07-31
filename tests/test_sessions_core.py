@@ -817,6 +817,136 @@ def test_diff_reports_several_changes_at_once():
 
 
 # --------------------------------------------------------------------------- #
+# format_sessions — the flat dict every UI adapter renders verbatim
+# --------------------------------------------------------------------------- #
+def test_format_keys_never_collide_with_usage_core():
+    # usage_core owns session_pct / session_color / session_resets_at for the
+    # 5-hour meter, and both dicts get merged before rendering. A singular key
+    # here would silently repaint that meter.
+    import usage_core
+
+    usage_keys = set(usage_core.status_display(usage_core.Status.OFFLINE))
+    out = sc.format_sessions([_session()])
+    assert not (set(out) & usage_keys), set(out) & usage_keys
+    assert all(k.startswith("sessions_") for k in out)
+
+
+def test_format_empty_list():
+    out = sc.format_sessions([])
+    assert out["sessions_rows"] == []
+    assert out["sessions_count"] == 0
+    assert out["sessions_blocked"] == 0
+    assert out["sessions_overflow"] == 0
+    assert out["sessions_color"] == "grey"
+    assert out["sessions_summary"] == ""
+    assert "no sessions" in out["sessions_tooltip"].lower()
+
+
+def test_format_row_fields():
+    s = _session(session_id="a", pid=7, cwd="/x/widget", name="widget-b0",
+                 status=sc.WAITING, waiting_for="input needed",
+                 status_updated_at=1_000_000)
+    row = sc.format_sessions([s], at_ms=1_240_000)["sessions_rows"][0]
+    assert row["session_id"] == "a" and row["pid"] == 7
+    assert row["label"] == "widget-b0" and row["project"] == "widget"
+    assert row["status"] == sc.WAITING
+    assert row["color"] == "red" and row["emoji"] == "🔴"
+    assert row["dwell"] == "4m"
+    assert row["detail"] == "needs you: input needed · 4m"
+
+
+def test_format_detail_omits_dwell_when_unknown():
+    row = sc.format_sessions([_session(status=sc.IDLE)])["sessions_rows"][0]
+    assert row["detail"] == "done"
+
+
+def test_format_orders_blocked_first():
+    out = sc.format_sessions([
+        _session(session_id="i", status=sc.IDLE, status_updated_at=900),
+        _session(session_id="w", status=sc.WAITING, status_updated_at=900),
+    ], at_ms=1000)
+    assert [r["session_id"] for r in out["sessions_rows"]] == ["w", "i"]
+
+
+def test_format_caps_rows_and_reports_overflow():
+    many = [_session(session_id=str(i), status=sc.IDLE) for i in range(10)]
+    out = sc.format_sessions(many, max_rows=4)
+    assert len(out["sessions_rows"]) == 4
+    assert out["sessions_count"] == 10
+    assert out["sessions_overflow"] == 6
+
+
+def test_format_no_overflow_when_it_fits():
+    out = sc.format_sessions([_session()], max_rows=6)
+    assert out["sessions_overflow"] == 0
+
+
+def test_format_max_rows_floor_is_one():
+    many = [_session(session_id=str(i)) for i in range(3)]
+    assert len(sc.format_sessions(many, max_rows=0)["sessions_rows"]) == 3
+
+
+def test_format_counts_blocked():
+    out = sc.format_sessions([
+        _session(session_id="a", status=sc.WAITING),
+        _session(session_id="b", status=sc.WAITING),
+        _session(session_id="c", status=sc.BUSY),
+    ])
+    assert out["sessions_blocked"] == 2
+
+
+def test_format_carries_enrichment_through():
+    s = _session(title="Ship it", tool="Bash", model="claude-opus-5",
+                 git_branch="main", last_prompt="go")
+    row = sc.format_sessions([s])["sessions_rows"][0]
+    assert row["label"] == "Ship it" and row["tool"] == "Bash"
+    assert row["model"] == "claude-opus-5" and row["branch"] == "main"
+    assert row["last_prompt"] == "go"
+
+
+@pytest.mark.parametrize("statuses,expected", [
+    ([sc.WAITING, sc.BUSY, sc.IDLE], "red"),
+    ([sc.BUSY, sc.IDLE], "amber"),
+    ([sc.SHELL, sc.IDLE], "amber"),
+    ([sc.IDLE], "green"),
+    ([sc.UNKNOWN], "grey"),
+    ([], "grey"),
+])
+def test_overall_color(statuses, expected):
+    sessions = [_session(session_id=str(i), status=s)
+                for i, s in enumerate(statuses)]
+    assert sc.overall_color(sessions) == expected
+
+
+def test_summarize_orders_by_urgency():
+    out = sc.summarize([
+        _session(session_id="a", status=sc.IDLE),
+        _session(session_id="b", status=sc.BUSY),
+        _session(session_id="c", status=sc.WAITING),
+    ])
+    assert out == "1 needs you   ·   1 working   ·   1 done"
+
+
+def test_summarize_empty():
+    assert sc.summarize([]) == ""
+
+
+def test_summarize_counts_unknown_last():
+    out = sc.summarize([_session(session_id="a", status=sc.UNKNOWN),
+                        _session(session_id="b", status=sc.BUSY)])
+    assert out == "1 working   ·   1 unknown"
+
+
+@pytest.mark.parametrize("status", list(sc.KNOWN_STATUSES) + [sc.UNKNOWN])
+def test_status_emoji_defined_for_every_status(status):
+    assert sc.status_emoji(status)
+
+
+def test_status_emoji_unknown_fallback():
+    assert sc.status_emoji("banana") == sc.status_emoji(sc.UNKNOWN)
+
+
+# --------------------------------------------------------------------------- #
 # Torn reads — the CLI rewrites <pid>.json with a non-atomic truncate+write
 # --------------------------------------------------------------------------- #
 def test_read_json_reads_a_good_file(tmp_path):

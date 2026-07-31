@@ -253,6 +253,20 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
     if "weekly" in metrics and disp.get("weekly_pct") is not None:
         groups.append([("Weekly ", f_lbl, T["dim"]),
                        (f"{disp['weekly_pct']}%", f_num, sev_color(T, disp.get("weekly_color", "grey")))])
+    # NOTE: sessions_* (plural) are the LIVE CLI sessions; session_* (singular)
+    # is the 5-hour usage meter. The two dicts are merged before rendering.
+    if "sessions" in metrics and disp.get("sessions_count") is not None:
+        n = disp["sessions_count"]
+        # "Live", not "Sessions": the strip already says "Session 61%" for the
+        # 5-hour usage window, and the two side by side read as the same thing.
+        g = [("Live ", f_lbl, T["dim"]),
+             (str(n), f_num, sev_color(T, disp.get("sessions_color", "grey")))]
+        # Only the blocked count earns extra pixels on the strip — it's the one
+        # that means "go do something".
+        blocked = disp.get("sessions_blocked") or 0
+        if blocked:
+            g.append((f"   {blocked} needs you", f_dim, sev_color(T, "red")))
+        groups.append(g)
     if not groups:
         groups.append([("Claude  " + (disp.get("session") or "—"), f_dim, T["dim"])])
     if disp.get("_demo"):  # unmistakable marker so simulated data isn't mistaken for real
@@ -296,6 +310,10 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
 # --------------------------------------------------------------------------- #
 # Details popover — horizontal usage meters
 # --------------------------------------------------------------------------- #
+#: Vertical pitch of one live-session row in the popover.
+SESSION_ROW_H = 24
+
+
 def render_popover(disp, theme, scale=3):
     T = THEMES.get(theme, THEMES["light"])
     S = scale
@@ -316,10 +334,28 @@ def render_popover(disp, theme, scale=3):
         base_gap = 14
     if has_cost:
         cost_y = content_bottom + 20
-        foot_div = cost_y + 13
+        content_bottom = cost_y
+        base_gap = 14
     else:
         cost_y = None
-        foot_div = content_bottom + base_gap
+
+    # Live Claude Code sessions. Present only when the feature is on; an empty
+    # list still renders (as a single "none running" line) so the section
+    # doesn't blink in and out as sessions start and stop.
+    sess_rows = disp.get("sessions_rows")
+    show_sessions = sess_rows is not None
+    sess_overflow = int(disp.get("sessions_overflow") or 0)
+    if show_sessions:
+        sess_div = content_bottom + base_gap
+        sess_hdr = sess_div + 20
+        sess_top = sess_hdr + 22
+        n_lines = max(1, len(sess_rows)) + (1 if sess_overflow else 0)
+        content_bottom = sess_top + (n_lines - 1) * SESSION_ROW_H
+        base_gap = 16
+    else:
+        sess_div = sess_hdr = sess_top = None
+
+    foot_div = content_bottom + (13 if has_cost and not show_sessions else base_gap)
     foot_y = foot_div + 20
     H = foot_y + 24
 
@@ -401,6 +437,52 @@ def render_popover(disp, theme, scale=3):
         cw = (Ws - P) - (P + d.textlength("Today", font=f_lbl)) - 16 * S
         d.text((Ws - P, cost_y * S), _elide(d, f"{tok} tokens   ·   ~{usd}", f_rownum, cw),
                font=f_rownum, fill=T["neutral"], anchor="rm")
+
+    # live Claude Code sessions
+    if show_sessions:
+        d.line([P, sess_div * S, Ws - P, sess_div * S], fill=T["hair"],
+               width=max(1, S))
+        d.text((P, sess_hdr * S), "Live sessions", font=f_lbl, fill=T["dim"],
+               anchor="lm")
+        summary = disp.get("sessions_summary") or ""
+        if summary:
+            sum_max = ((Ws - P) - (P + d.textlength("Live sessions", font=f_lbl))
+                       - 16 * S)
+            d.text((Ws - P, sess_hdr * S), _elide(d, summary, f_reset, sum_max),
+                   font=f_reset, fill=T["faint"], anchor="rm")
+
+        dot_r = 3.5 * S
+        label_x = P + dot_r * 2 + 9 * S
+        y = sess_top * S
+        if not sess_rows:
+            d.text((P, y), disp.get("sessions_empty") or "No sessions running",
+                   font=f_row, fill=T["faint"], anchor="lm")
+        for row in sess_rows:
+            col = sev(row.get("color", "grey"))
+            d.ellipse([P, y - dot_r, P + dot_r * 2, y + dot_r], fill=col)
+            detail = row.get("detail", "")
+            detail_w = d.textlength(detail, font=f_reset)
+            avail = (Ws - P) - label_x - detail_w - 14 * S
+            proj = row.get("project") or ""
+            proj_txt = f"  {proj}" if proj else ""
+            # The project is context, not the headline. Show it only when it
+            # fits WHOLE — a stub like "medborgarpr…" costs the title width and
+            # tells you nothing, so in that case drop it and let the title,
+            # which is what you actually scan for, use the space.
+            proj_w = d.textlength(proj_txt, font=f_reset) if proj_txt else 0
+            if proj_w > avail * 0.40:
+                proj_txt, proj_w = "", 0
+            lbl = _elide(d, row.get("label", ""), f_row,
+                         max(avail - proj_w, 30 * S))
+            d.text((label_x, y), lbl, font=f_row, fill=T["neutral"], anchor="lm")
+            if proj_txt:
+                d.text((label_x + d.textlength(lbl, font=f_row), y), proj_txt,
+                       font=f_reset, fill=T["faint"], anchor="lm")
+            d.text((Ws - P, y), detail, font=f_reset, fill=col, anchor="rm")
+            y += SESSION_ROW_H * S
+        if sess_overflow:
+            d.text((label_x, y), f"+{sess_overflow} more", font=f_reset,
+                   fill=T["faint"], anchor="lm")
 
     # footer
     d.line([P, foot_div * S, Ws - P, foot_div * S], fill=T["hair"], width=max(1, S))

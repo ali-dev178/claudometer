@@ -15,6 +15,69 @@ import settings
 
 
 # --------------------------------------------------------------------------- #
+# Live-sessions keys (added with the session monitor)
+# --------------------------------------------------------------------------- #
+def test_sessions_defaults(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(tmp_path / "none.toml"))
+    cfg = settings.load()
+    assert cfg["sessions"] is True
+    assert cfg["sessions_on_strip"] is True
+    assert cfg["sessions_max_rows"] == 6
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (0, 1),      # clamped up — a zero-row cap would hide every session
+    (-3, 1),
+    (1, 1),
+    (20, 20),
+    (21, 20),    # clamped down
+    ("4", 4),    # numeric string coerced
+    ("x", 6),    # unparsable -> default
+    (True, 6),   # a bool is not a row count -> default
+])
+def test_sessions_max_rows_is_clamped(monkeypatch, tmp_path, raw, expected):
+    p = tmp_path / "c.toml"
+    p.write_text(f"sessions_max_rows = {settings._toml_val(raw)}\n",
+                 encoding="utf-8")
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(p))
+    assert settings.load()["sessions_max_rows"] == expected
+
+
+def test_sessions_flags_coerce_to_bool(monkeypatch, tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text('sessions = 0\nsessions_on_strip = "yes"\n', encoding="utf-8")
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(p))
+    cfg = settings.load()
+    assert cfg["sessions"] is False
+    assert cfg["sessions_on_strip"] is True
+
+
+def test_to_toml_survives_a_cfg_missing_keys():
+    # The in-app panel builds this dict by hand. A key added to DEFAULTS but
+    # forgotten there must not make saving impossible (it used to KeyError).
+    out = settings.to_toml({"poll": 120})
+    assert "poll = 120" in out
+    assert "sessions = true" in out
+    assert "sessions_max_rows = 6" in out
+
+
+def test_to_toml_survives_an_empty_cfg():
+    out = settings.to_toml({})
+    for key in settings.DEFAULTS:
+        if key == "accent":          # emitted commented-out when unset
+            continue
+        assert f"{key} = " in out, key
+
+
+def test_to_toml_emits_sessions_keys():
+    out = settings.to_toml(dict(settings.DEFAULTS, sessions=False,
+                                sessions_max_rows=3, sessions_on_strip=False))
+    assert "sessions = false" in out
+    assert "sessions_max_rows = 3" in out
+    assert "sessions_on_strip = false" in out
+
+
+# --------------------------------------------------------------------------- #
 # Fixtures / helpers
 # --------------------------------------------------------------------------- #
 @pytest.fixture

@@ -10,6 +10,7 @@ Interactions: left-click = open/close popover · left-drag = move (remembered)
 """
 
 import ctypes
+import dataclasses
 from ctypes import wintypes
 import json
 import sys
@@ -26,6 +27,7 @@ from PIL import Image, ImageDraw, ImageTk
 import usage_core as core
 import render
 import settings
+import sessions_core
 import cost
 import resume
 import config
@@ -304,6 +306,12 @@ class Popover:
             tuple((r["label"], r["pct"], r["color"]) for r in disp.get("model_rows") or []),
             disp.get("plan"),
             round(disp.get("cost_usd") or 0, 2),
+            # Live sessions: the dwell text is part of the signature, so a row
+            # that only ages ("4m" -> "5m") still triggers a redraw.
+            tuple((r["label"], r["project"], r["color"], r["detail"])
+                  for r in disp.get("sessions_rows") or []),
+            disp.get("sessions_overflow"), disp.get("sessions_summary"),
+            disp.get("sessions_rows") is not None,
         )
 
     @staticmethod
@@ -1054,6 +1062,20 @@ class BarWidget:
         self._photo = None
         self._hidden = False
 
+        # Live Claude Code sessions. These change far faster than the usage
+        # numbers (90s poll), so they refresh on the 1s UI tick instead —
+        # a snapshot costs well under a millisecond. Enrichment (titles, tools)
+        # reads transcript tails and is ~25x dearer, so it runs on its own
+        # slower cadence and its results are merged in by session id.
+        self._sessions_on = cfg["sessions"]
+        self._sessions_on_strip = cfg["sessions_on_strip"]
+        self._sessions_max_rows = cfg["sessions_max_rows"]
+        self._sess_tracker = sessions_core.SessionTracker()
+        self._sess_disp = {}
+        self._sess_extra = {}          # session_id -> enrichment fields
+        self._sess_enriched_at = 0.0
+        self._sess_known_ids = frozenset()
+
         self._apply_bg((233, 238, 243))  # provisional; refined by sampling
         self._place_initial()
         self._bind_events()
@@ -1143,7 +1165,8 @@ class BarWidget:
 
     def _get_disp(self):
         with self._lock:
-            return self._disp
+            disp = self._disp
+        return self._with_sessions(disp)
 
     def _toggle_popover(self):
         if self._popover is not None:
@@ -1510,6 +1533,9 @@ class BarWidget:
             "resume_prompt": self._resume_prompt,
             "resume_skip_permissions": self._resume_skip_perms,
             "resume_max_turns": self._resume_max_turns,
+            "sessions": self._sessions_on,
+            "sessions_max_rows": self._sessions_max_rows,
+            "sessions_on_strip": self._sessions_on_strip,
         }
 
     def _apply_settings(self, cfg):
@@ -1528,6 +1554,15 @@ class BarWidget:
         self._resume_prompt = cfg["resume_prompt"]
         self._resume_skip_perms = cfg["resume_skip_permissions"]
         self._resume_max_turns = cfg["resume_max_turns"]
+        sessions_was_on = self._sessions_on
+        self._sessions_on = cfg.get("sessions", self._sessions_on)
+        self._sessions_on_strip = cfg.get("sessions_on_strip", self._sessions_on_strip)
+        self._sessions_max_rows = cfg.get("sessions_max_rows", self._sessions_max_rows)
+        if self._sessions_on and not sessions_was_on:
+            # Re-enabled: forget the old history so Phase 3 doesn't announce
+            # every already-running session as newly appeared.
+            self._sess_tracker.reset()
+            self._sess_known_ids = frozenset()
         # accent: apply, or restore the theme's original when cleared
         self._accent = cfg["accent"]
         for k in render.THEMES:
@@ -1568,6 +1603,14 @@ class BarWidget:
         self._wake.set()  # nudge the poll thread so poll/cost apply immediately
 
     # -- drawing ---------------------------------------------------------- #
+    def _strip_metrics(self):
+        """Strip groups to draw — the usage meters plus, optionally, a live
+        session count."""
+        metrics = tuple(self._metrics)
+        if self._sessions_on and self._sessions_on_strip:
+            metrics += ("sessions",)
+        return metrics
+
     def _strip_sig(self, disp):
         return (
             self._bg_hex, self._theme,
@@ -1575,15 +1618,17 @@ class BarWidget:
             render._fmt_left(disp.get("session_resets_at")),
             disp.get("weekly_pct"), disp.get("weekly_color"),
             disp.get("face_pct"),
+            self._strip_metrics(),
+            disp.get("sessions_count"), disp.get("sessions_blocked"),
         )
 
     def _draw(self, disp):
         if self._card:  # off-Windows: a rounded floating pill (its own bg + alpha corners)
             T = render.THEMES.get(self._theme, render.THEMES["light"])
-            strip = render.render_strip(disp, T["panel_bot"], self._theme, scale=3, metrics=self._metrics)
+            strip = render.render_strip(disp, T["panel_bot"], self._theme, scale=3, metrics=self._strip_metrics())
             img = _round_alpha(strip, min(strip.size[1] // 2, 15))
         else:  # Windows: opaque strip painted in the sampled taskbar color (blends in)
-            img = render.render_strip(disp, self._bg_hex, self._theme, scale=3, metrics=self._metrics)
+            img = render.render_strip(disp, self._bg_hex, self._theme, scale=3, metrics=self._strip_metrics())
         self._photo = ImageTk.PhotoImage(img)
         w, h = img.size
         self.canvas.configure(width=w, height=h)
@@ -1598,6 +1643,58 @@ class BarWidget:
             self.root.geometry(f"{w}x{h}")
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
+
+    # -- live sessions ---------------------------------------------------- #
+    #: Seconds between transcript-tail enrichments. A snapshot is ~0.5ms so it
+    #: runs every tick; enrichment is ~5ms per session, so it doesn't.
+    SESS_ENRICH_EVERY = 5.0
+
+    def _sessions_tick(self):
+        """Refresh the live-session list. Runs on the main thread every second.
+
+        Never raises: a failure here must not take down the usage widget, which
+        is the app's actual job.
+        """
+        if not self._sessions_on or self._demo:
+            self._sess_disp = {}
+            return
+        try:
+            live = sessions_core.snapshot()
+            self._sess_tracker.update(live)
+            live = self._sess_tracker.sessions
+
+            # Re-enrich on a slow cadence, or immediately when the set of
+            # sessions changes so a new row isn't nameless for five seconds.
+            ids = frozenset(s.session_id for s in live)
+            now = time.monotonic()
+            if ids != self._sess_known_ids or \
+                    now - self._sess_enriched_at >= self.SESS_ENRICH_EVERY:
+                self._sess_known_ids = ids
+                self._sess_enriched_at = now
+                self._sess_extra = {
+                    s.session_id: {
+                        "title": s.title, "tool": s.tool, "model": s.model,
+                        "git_branch": s.git_branch, "last_prompt": s.last_prompt,
+                    }
+                    for s in sessions_core.enrich_all(live)
+                }
+            merged = []
+            for s in live:
+                extra = self._sess_extra.get(s.session_id)
+                merged.append(dataclasses.replace(s, **extra) if extra else s)
+            self._sess_disp = sessions_core.format_sessions(
+                merged, max_rows=self._sessions_max_rows)
+        except Exception:
+            _log_exc()
+            self._sess_disp = {}
+
+    def _with_sessions(self, disp):
+        """Overlay the session fields onto a usage disp dict for rendering."""
+        if not disp or not self._sess_disp:
+            return disp
+        out = dict(disp)
+        out.update(self._sess_disp)
+        return out
 
     # -- loops ------------------------------------------------------------ #
     def _poll_loop(self):
@@ -1679,6 +1776,11 @@ class BarWidget:
         # Process each new poll for alerts/resume state on the main thread — even
         # while hidden, so crossings/caps during fullscreen aren't lost. The toast
         # creation itself is deferred/suppressed via self._hidden.
+        # Live sessions refresh every tick regardless of visibility, so the
+        # tracker keeps its history across a fullscreen hide and Phase 3's
+        # alerts can't miss a transition that happened while we were away.
+        self._sessions_tick()
+
         with self._lock:
             disp = self._disp
             seq = self._poll_seq
@@ -1702,9 +1804,10 @@ class BarWidget:
             if rgb:
                 self._apply_bg(rgb)
         if disp is not None:
-            sig = self._strip_sig(disp)
+            merged = self._with_sessions(disp)
+            sig = self._strip_sig(merged)
             if sig != self._sig:
-                self._draw(disp)
+                self._draw(merged)
                 self._sig = sig
         self._topmost_ticks += 1
         if self._topmost_ticks >= 6 and self._popover is None:  # don't steal popover focus
