@@ -219,7 +219,10 @@ class TrayApp:
         blocked = merged.get("sessions_blocked") or 0
         if blocked:
             self.icon.icon = render_icon(str(blocked), "red")
-            self.icon.title = f"Claude · {blocked} session(s) waiting on you"
+            # "session(s)" everywhere is the lazy plural, and this string is
+            # read far more often at one than at many.
+            noun = "session" if blocked == 1 else "sessions"
+            self.icon.title = f"Claude · {blocked} {noun} waiting on you"
         else:
             self.icon.icon = render_icon(disp["face_pct"], disp["face_color"])
             self.icon.title = merged["tooltip"]

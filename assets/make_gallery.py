@@ -100,7 +100,13 @@ def grid_sheet(items, out, title, cols=3, note="", gap=26, pad=30, cap=22):
     f_cap = render._font("sb", 12)
     f_note = render._font("reg", 12)
     f_title = render._font("sb", 17)
-    cw = max(im.width for _c, im in items)
+    probe0 = ImageDraw.Draw(Image.new("RGB", (4, 4)))
+    # Columns are as wide as the WIDER of the card and its caption: a 64px
+    # tray disc under a four-word label would otherwise have its caption
+    # running into its neighbour's.
+    cw = max(max(im.width for _c, im in items),
+             max(probe0.textlength(c, font=f_cap) for c, _im in items) + 10)
+    cw = int(cw)
     rows = [items[i:i + cols] for i in range(0, len(items), cols)]
     row_h = [max(im.height for _c, im in r) + cap for r in rows]
     width = pad * 2 + cw * cols + gap * (cols - 1)
@@ -121,10 +127,13 @@ def grid_sheet(items, out, title, cols=3, note="", gap=26, pad=30, cap=22):
         # reads as scattered rather than as a sheet.
         base = y + rh - cap + 13
         for caption, im in row:
+            # Centred in the column, not against the card, so a narrow card
+            # under a wide caption still reads as one unit.
+            left = x + (cw - im.width) // 2
             sh, sp = drop_shadow(im.size, 10, 16, 50)
-            sheet.alpha_composite(sh, (x - sp, y - sp + 8))
-            sheet.alpha_composite(im.convert("RGBA"), (x, y))
-            d.text((x + im.width / 2, base), caption,
+            sheet.alpha_composite(sh, (left - sp, y - sp + 8))
+            sheet.alpha_composite(im.convert("RGBA"), (left, y))
+            d.text((x + cw / 2, base), caption,
                    font=f_cap, fill=SUBINK, anchor="mm")
             x += cw + gap
         y += rh + gap
@@ -306,8 +315,47 @@ def popover_gallery():
                     "top; each row shows how long it has held that state.")
 
 
+# --------------------------------------------------------------------------- #
+# The Windows tray icon — a surface the README never showed
+# --------------------------------------------------------------------------- #
+def tray_gallery():
+    try:
+        import tray_windows as tray
+    except Exception as exc:                    # pystray missing on this host
+        print("skipped gallery-tray.png:", exc)
+        return
+    import usage_core as core
+
+    def disc(text, color):
+        return tray.render_icon(text, color, size=64)
+
+    items = [("Starting up", disc("...", "grey")),
+             ("Comfortable", disc("22%", "green")),
+             ("Getting close", disc("61%", "amber")),
+             ("Near the limit", disc("94%", "red")),
+             ("Limit reached", disc("100%", "red"))]
+    # The non-numeric faces, one disc per distinct look rather than per status.
+    seen = {}
+    for status in core.Status:
+        d = core.status_display(status)
+        seen.setdefault((d["face_pct"], d["face_color"]), []).append(status)
+    words = {"-": "Offline / no data", "!": "Not logged in"}
+    for (text, color), _statuses in seen.items():
+        label = "Rate limited" if color == "red" else words.get(text, text)
+        items.append((label, disc(text, color)))
+    items.append(("1 waiting", disc("1", "red")))
+    items.append(("12 waiting", disc("12", "red")))
+    grid_sheet(items, "gallery-tray.png",
+               "The Windows tray icon", cols=5,
+               note="The number itself is the icon. A blocked session "
+                    "outranks the usage figure — usage is something to pace "
+                    "against, a blocked session is something to go and do — "
+                    "so the disc turns red and counts them instead.")
+
+
 if __name__ == "__main__":
     strip_gallery()
     contrast_gallery()
     toast_gallery()
     popover_gallery()
+    tray_gallery()

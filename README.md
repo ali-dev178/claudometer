@@ -110,6 +110,12 @@ Severity colours are handled separately, because red, amber and green *are* the 
 
 <p align="center"><img src="assets/gallery-toasts.png" alt="Every alert toast" width="760"></p>
 
+### The tray icon *(Windows)*
+
+The number itself is the icon. A blocked session outranks the usage figure — usage is something to pace against, a blocked session is something to go and do — so the disc turns red and counts them instead.
+
+<p align="center"><img src="assets/gallery-tray.png" alt="Every tray icon state" width="650"></p>
+
 ### Answering a session *(Windows)*
 
 <p align="center"><img src="assets/gallery-answer.png" alt="Every state of the answer window" width="960"></p>
