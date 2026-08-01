@@ -320,23 +320,37 @@ def test_the_sticky_toast_is_dismissed_when_sessions_are_turned_off():
 
 
 # --------------------------------------------------------------------------- #
-# _blend — its result goes straight to Pillow as a fill
+# Readable text on whatever the strip is sitting on
 # --------------------------------------------------------------------------- #
-def test_blend_midpoint():
-    assert widget_bar._blend("#000000", "#ffffff", 0.5) == "#808080"
+def test_contrast_ratio_extremes():
+    assert round(widget_bar._contrast((0, 0, 0), (255, 255, 255)), 1) == 21.0
+    assert round(widget_bar._contrast((80, 80, 80), (80, 80, 80)), 1) == 1.0
 
 
-@pytest.mark.parametrize("amount,expected", [(0, "#e8edf3"), (1, "#e5484d"),
-                                             (-3, "#e8edf3"), (5, "#e5484d")])
-def test_blend_clamps_the_amount(amount, expected):
-    assert widget_bar._blend("#e8edf3", "#e5484d", amount) == expected
+@pytest.mark.parametrize("rgb,expected", [
+    ((233, 238, 243), "light"),      # a light taskbar
+    ((32, 32, 32), "dark"),          # a dark taskbar
+    ((255, 255, 255), "light"),
+    ((0, 0, 0), "dark"),
+])
+def test_theme_matches_the_obvious_cases(rgb, expected):
+    assert widget_bar._theme_for_bg(rgb) == expected
 
 
-@pytest.mark.parametrize("a,b", [(None, "#ffffff"), ("bad", "#ffffff"),
-                                 ("#e8edf3", None), (None, None), (5, 7)])
-def test_blend_always_returns_a_usable_colour(a, b):
-    out = widget_bar._blend(a, b, 0.5)
-    assert isinstance(out, str) and out.startswith("#") and len(out) == 7, out
+@pytest.mark.parametrize("rgb", [(58, 110, 220), (128, 128, 128), (0, 150, 160),
+                                 (222, 205, 180), (120, 90, 30)])
+def test_theme_always_picks_the_more_readable_of_the_two(rgb):
+    import render
+
+    chosen = widget_bar._theme_for_bg(rgb)
+    ratios = {}
+    for name, theme in render.THEMES.items():
+        text = theme["neutral"].lstrip("#")
+        ratios[name] = widget_bar._contrast(
+            rgb, tuple(int(text[i:i + 2], 16) for i in (0, 2, 4)))
+    assert ratios[chosen] == max(ratios.values()), (
+        f"{rgb} picked {chosen} at {ratios[chosen]:.1f}:1 over "
+        f"{max(ratios, key=ratios.get)} at {max(ratios.values()):.1f}:1")
 
 
 def test_the_sticky_toast_survives_while_still_blocked():

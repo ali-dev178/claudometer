@@ -305,7 +305,11 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
     cy = H / 2
 
     dx = PAD + DOT_R
-    d.ellipse([dx - DOT_R, cy - DOT_R, dx + DOT_R, cy + DOT_R], fill=dot_color)
+    # The attention pulse swells the status dot only. The strip's background is
+    # sampled from whatever sits behind it so the widget blends in — repainting
+    # that would flash the entire strip, which is not what this is for.
+    r = DOT_R * (1.7 if disp.get("_pulse") else 1.0)
+    d.ellipse([dx - r, cy - r, dx + r, cy + r], fill=dot_color)
     x = PAD + DOT_R * 2 + DOTGAP
     for gi, g in enumerate(groups):
         if gi > 0:

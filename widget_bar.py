@@ -151,31 +151,43 @@ def _get_pixel(x, y):
         _user32.ReleaseDC(0, hdc)
 
 
-def _hexish(value):
-    return isinstance(value, str) and len(value) == 7 and value.startswith("#")
-
-
-def _blend(hex_a, hex_b, amount):
-    """Mix two #rrggbb colors; amount 0 = all a, 1 = all b.
-
-    Always returns something a renderer can use — the result goes straight to
-    Pillow as a fill, where a None would raise.
-    """
-    try:
-        a = tuple(int(hex_a[i:i + 2], 16) for i in (1, 3, 5))
-        b = tuple(int(hex_b[i:i + 2], 16) for i in (1, 3, 5))
-    except (TypeError, ValueError, IndexError):
-        if _hexish(hex_a):
-            return hex_a
-        return hex_b if _hexish(hex_b) else "#000000"
-    amount = min(max(float(amount), 0.0), 1.0)
-    return "#%02x%02x%02x" % tuple(
-        int(round(x + (y - x) * amount)) for x, y in zip(a, b))
-
-
 def _lum(rgb):
     r, g, b = rgb[:3]
     return 0.299 * r + 0.587 * g + 0.114 * b
+
+
+def _rel_luminance(rgb):
+    """WCAG relative luminance, for judging text contrast."""
+    out = []
+    for channel in rgb[:3]:
+        c = min(max(channel, 0), 255) / 255.0
+        out.append(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2]
+
+
+def _contrast(rgb_a, rgb_b):
+    """WCAG contrast ratio between two colours (1.0 … 21.0)."""
+    a, b = _rel_luminance(rgb_a), _rel_luminance(rgb_b)
+    lo, hi = sorted((a, b))
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _theme_for_bg(rgb):
+    """Pick the theme whose text is actually readable on *rgb*.
+
+    A plain luminance threshold gets this wrong on saturated colours: a mid
+    blue sits above the cutoff, so the light theme's near-black text is chosen
+    and the strip becomes hard to read. The strip samples whatever sits behind
+    it — which is sometimes a window, not the taskbar — so the choice is made
+    on measured contrast instead.
+    """
+    best, winner = 0.0, "light"
+    for name, theme in render.THEMES.items():
+        text = theme["neutral"].lstrip("#")
+        ratio = _contrast(rgb, tuple(int(text[i:i + 2], 16) for i in (0, 2, 4)))
+        if ratio > best:
+            best, winner = ratio, name
+    return winner
 
 
 _SHELL_CLASSES = {"Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"}
@@ -1377,7 +1389,7 @@ class BarWidget:
         if hexc == self._bg_hex:
             return
         self._bg_hex = hexc
-        self._theme = self._forced_theme or ("light" if _lum(rgb) > 140 else "dark")
+        self._theme = self._forced_theme or _theme_for_bg(rgb)
         if not self._card:  # card mode keeps its transparent bg (no taskbar to match)
             self.root.configure(bg=hexc)
             self.canvas.configure(bg=hexc)
@@ -1679,7 +1691,11 @@ class BarWidget:
             with self._lock:
                 disp = self._disp
             if disp is not None:
-                self._draw(self._with_sessions(disp))
+                merged = self._with_sessions(disp)
+                # Only the status dot pulses. The strip's background is sampled
+                # from the taskbar so it blends in — repainting that would make
+                # the whole widget flash, which is not what it's for.
+                self._draw(dict(merged, _pulse=self._flash))
         except Exception:
             _log_exc()
             return
@@ -2199,11 +2215,8 @@ class BarWidget:
             strip = render.render_strip(disp, T["panel_bot"], self._theme, scale=3, metrics=self._strip_metrics())
             img = _round_alpha(strip, min(strip.size[1] // 2, 15))
         else:  # Windows: opaque strip painted in the sampled taskbar color (blends in)
-            bg = self._bg_hex
-            if self._flash:   # attention pulse: tint the strip toward red
-                bg = _blend(bg, render.THEMES.get(self._theme,
-                                                  render.THEMES["light"])["red"], 0.45)
-            img = render.render_strip(disp, bg, self._theme, scale=3, metrics=self._strip_metrics())
+            img = render.render_strip(disp, self._bg_hex, self._theme, scale=3,
+                                      metrics=self._strip_metrics())
         self._photo = ImageTk.PhotoImage(img)
         w, h = img.size
         self.canvas.configure(width=w, height=h)
