@@ -41,6 +41,37 @@ _VK_RETURN = 0x0D
 #: a pasted essay from flooding a session's input buffer.
 MAX_LEN = 2000
 
+#: AttachConsole(ATTACH_PARENT_PROCESS): reattach to the console we were
+#: launched from, having borrowed a session's.
+_ATTACH_PARENT = -1
+
+
+def _detach(kernel32, had_console: bool) -> None:
+    """Let go of the session's console, and take our own back if we had one.
+
+    A packaged widget owns no console, so this is usually nothing. But run
+    from a terminal — `python app.py bar`, which is what the README tells
+    contributors to do — a bare FreeConsole silently gives that terminal up,
+    and everything printed afterwards goes nowhere.
+    """
+    try:
+        kernel32.FreeConsole()
+    except Exception:
+        return
+    if not had_console:
+        return
+    try:
+        kernel32.AttachConsole(_ATTACH_PARENT)
+    except Exception:
+        pass
+
+
+def _owns_console(kernel32) -> bool:
+    try:
+        return bool(kernel32.GetConsoleWindow())
+    except Exception:
+        return False
+
 if _IS_WIN:  # pragma: no cover - platform specific
     import ctypes.wintypes as wintypes
 
@@ -137,14 +168,17 @@ def read_screen(pid, max_rows: int = 120):
             kernel32 = ctypes.windll.kernel32
         except Exception:
             return None
+        had_console = _owns_console(kernel32)
         try:
             kernel32.FreeConsole()
         except Exception:
             pass
         try:
             if not kernel32.AttachConsole(pid):
+                _detach(kernel32, had_console)
                 return None
         except Exception:
+            _detach(kernel32, had_console)
             return None
         try:
             handle = kernel32.CreateFileW(
@@ -180,10 +214,7 @@ def read_screen(pid, max_rows: int = 120):
         except Exception:
             return None
         finally:
-            try:
-                kernel32.FreeConsole()
-            except Exception:
-                pass
+            _detach(kernel32, had_console)
 
 
 def _units(text: str):
@@ -250,15 +281,19 @@ def send_text(pid, text: str, submit: bool = True) -> Tuple[bool, Optional[str]]
             return False, str(exc)
         # We must own no console before attaching to someone else's. The widget
         # is a windowed app and has none, but detaching first is what makes a
-        # second send in the same run work.
+        # second send in the same run work — and if it DID have one (run from
+        # a terminal), _detach gives it back afterwards.
+        had_console = _owns_console(kernel32)
         try:
             kernel32.FreeConsole()
         except Exception:
             pass
         try:
             if not kernel32.AttachConsole(pid):
+                _detach(kernel32, had_console)
                 return False, "that session's console isn't reachable"
         except Exception as exc:
+            _detach(kernel32, had_console)
             return False, str(exc)
         try:
             handle = kernel32.CreateFileW(
@@ -283,7 +318,4 @@ def send_text(pid, text: str, submit: bool = True) -> Tuple[bool, Optional[str]]
         except Exception as exc:
             return False, str(exc)
         finally:
-            try:
-                kernel32.FreeConsole()
-            except Exception:
-                pass
+            _detach(kernel32, had_console)

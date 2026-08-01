@@ -14,6 +14,7 @@ else. All of it reads/writes the same ~/.claudometer.toml via settings.load/save
 
 import os
 import subprocess
+import time
 from datetime import datetime
 
 import rumps
@@ -46,6 +47,8 @@ class MenuApp(rumps.App):
         # Windows/floating-widget popover footer).
         self._pending_source = "auto"
         self._updated_item = None
+        self._updated_text = None   # stamped by the poll, not by a repaint
+        self._last_poll_at = 0.0
         self._sessions_on = self._cfg["sessions"]
         self._sessions_max_rows = self._cfg["sessions_max_rows"]
         self._sess_tracker = sessions_core.SessionTracker()
@@ -75,7 +78,18 @@ class MenuApp(rumps.App):
             return "%s %s" % (dot, disp.get("face_pct", "—"))
         return "%s %s" % (dot, " · ".join(parts))
 
-    def _tick(self, _):
+    def _tick(self, _, force: bool = False):
+        # rumps starts its NSTimer with a fire date of "now", so the timer
+        # fires the moment the run loop starts — right after the explicit
+        # first render in __init__. Two usage requests within a few hundred
+        # milliseconds, every launch. Skip the duplicate rather than drop the
+        # explicit render, which is what guarantees a menu before the first
+        # interval elapses. "Refresh now" forces through: a click that quietly
+        # did nothing would be worse than a spare request.
+        now = time.monotonic()
+        if not force and self._last_poll_at and now - self._last_poll_at < 2.0:
+            return
+        self._last_poll_at = now
         try:
             result = core.poll_once(self._state)
             if isinstance(result, core.Usage):
@@ -99,9 +113,13 @@ class MenuApp(rumps.App):
             self._rebuild(disp)
         # Always refresh the freshness line (kept out of `sig` so it doesn't
         # force a full menu rebuild every tick — that leaks rumps callbacks).
+        # Stamped HERE, by the poll, and remembered: _rebuild also runs when
+        # only the session list changed, and recomputing the time there would
+        # claim the usage numbers were refreshed when nothing was fetched.
         source, self._pending_source = self._pending_source, "auto"
+        self._updated_text = self._updated_label(source)
         if self._updated_item is not None:
-            self._updated_item.title = self._updated_label(source)
+            self._updated_item.title = self._updated_text
 
     def _updated_label(self, source: str) -> str:
         return f"Updated {datetime.now().strftime('%-I:%M %p')} · {source}"
@@ -127,8 +145,16 @@ class MenuApp(rumps.App):
         recent = self._sess_disp.get("sessions_recent") or []
         # Recent rows change the row COUNT, so they belong in the shape too, or
         # a session ending would never add its line.
+        # The header summary and the "+N more" line are rebuilt-only, so they
+        # belong in the shape: with more sessions than fit, one OUTSIDE the
+        # visible rows changing status leaves the rows byte-identical and the
+        # header would go on claiming "2 working · 4 done" indefinitely.
+        # Deliberately NOT the dwell text, which ticks every second and would
+        # rebuild the menu that often — rumps never prunes callbacks.
         shape = (tuple((r["session_id"], r["status"]) for r in rows),
-                 tuple(r["session_id"] for r in recent))
+                 tuple(r["session_id"] for r in recent),
+                 self._sess_disp.get("sessions_summary"),
+                 self._sess_disp.get("sessions_overflow"))
         if shape != self._sess_shape:
             # The set of sessions changed, so the row COUNT changed — only a
             # rebuild can add or remove items.
@@ -214,7 +240,8 @@ class MenuApp(rumps.App):
 
         rows.append(None)
         # A disabled (callback-less) info line showing data freshness + source.
-        self._updated_item = rumps.MenuItem(self._updated_label(self._pending_source))
+        self._updated_item = rumps.MenuItem(
+            self._updated_text or self._updated_label(self._pending_source))
         rows.append(self._updated_item)
         rows.append(self._settings_menu())
         rows.append(rumps.MenuItem("Refresh now", callback=self._refresh))
@@ -322,7 +349,7 @@ class MenuApp(rumps.App):
 
     def _refresh(self, _):
         self._pending_source = "manual"  # this tick's data came from a click
-        self._tick(None)
+        self._tick(None, force=True)
 
     def run(self) -> None:
         super().run()

@@ -1045,7 +1045,7 @@ def test_parse_console_prompt_finds_the_highlighted_option():
 
 def test_parse_console_prompt_marker_elsewhere():
     screen = ["Pick one", "  1. first", "> 2. second", "  3. third",
-              "Enter to select"]
+              "Enter to select · ↑/↓ to navigate · Esc to cancel"]
     out = sc.parse_console_prompt(screen)
     assert out["selected"] == 2 and len(out["options"]) == 3
 
@@ -1171,6 +1171,36 @@ def test_latest_reply_is_capped():
     assert len(out) <= 120
 
 
+def test_prose_that_mentions_cancelling_is_not_a_menu():
+    # Claude writing a numbered list and then a sentence containing one hint
+    # phrase used to become clickable buttons — and clicking one typed a bare
+    # digit into the session as the next instruction.
+    screen = [
+        "● I found three problems:",
+        "  1. the retry budget is unbounded",
+        "  2. the timeout is per-attempt",
+        "  3. errors are swallowed",
+        "● Tell me which to fix, or press Esc to cancel.",
+        "> ",
+    ]
+    assert sc.parse_console_prompt(screen) is None, (
+        "inventing a menu is not a display glitch: the options become buttons "
+        "and clicking one sends a wrong instruction to a live agent")
+
+
+def test_the_real_hint_bar_is_still_a_menu():
+    screen = ["Which way round?", "> 1. First", "  2. Second",
+              "Enter to select · ↑/↓ to navigate · Esc to cancel"]
+    out = sc.parse_console_prompt(screen)
+    assert out is not None and out["options"] == ("First", "Second")
+
+
+def test_a_two_phrase_hint_bar_is_enough():
+    screen = ["Which way round?", "> 1. First", "  2. Second",
+              "Enter to select · Esc to cancel"]
+    assert sc.parse_console_prompt(screen) is not None
+
+
 def test_parse_console_prompt_needs_the_menu_hint():
     # Numbered prose is not a menu.
     screen = ["Here are three things:", "1. one", "2. two", "3. three"]
@@ -1179,13 +1209,13 @@ def test_parse_console_prompt_needs_the_menu_hint():
 
 def test_parse_console_prompt_rejects_a_broken_run():
     # 1,2,4 isn't a menu we can address by number.
-    screen = ["Pick", "  1. a", "  2. b", "  4. d", "Enter to select"]
+    screen = ["Pick", "  1. a", "  2. b", "  4. d", "Enter to select · ↑/↓ to navigate · Esc to cancel"]
     assert sc.parse_console_prompt(screen) is None
 
 
 def test_parse_console_prompt_skips_separators_for_the_question():
     screen = ["The actual question?", "────────────────────", "  1. a",
-              "  2. b", "Enter to select"]
+              "  2. b", "Enter to select · ↑/↓ to navigate · Esc to cancel"]
     assert sc.parse_console_prompt(screen)["question"] == "The actual question?"
 
 
@@ -1195,11 +1225,11 @@ def test_parse_console_prompt_handles_nothing(screen):
 
 
 def test_parse_console_prompt_without_options_is_none():
-    assert sc.parse_console_prompt(["Enter to select"]) is None
+    assert sc.parse_console_prompt(["Enter to select · ↑/↓ to navigate · Esc to cancel"]) is None
 
 
 def test_parse_console_prompt_scrubs_control_characters():
-    screen = ["Question\there?", "  1. opt\tone", "  2. two", "Enter to select"]
+    screen = ["Question\there?", "  1. opt\tone", "  2. two", "Enter to select · ↑/↓ to navigate · Esc to cancel"]
     out = sc.parse_console_prompt(screen)
     assert "\t" not in out["question"]
     assert all("\t" not in o for o in out["options"])

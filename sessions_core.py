@@ -1371,6 +1371,15 @@ _SCREEN_OPTION_RE = re.compile(r"^\s*([>❯»❯]?)\s*(\d{1,2})[.)]\s+(\S.*)$")
 #: numbers above really are a choice and not, say, a numbered list in prose.
 _MENU_HINTS = ("to select", "to navigate", "to cancel")
 
+#: …but ONE of those phrases is a sentence Claude could easily write — "tell
+#: me which to fix, or press Esc to cancel" — and mistaking prose for a menu
+#: is not a display glitch: the options become buttons, and clicking one types
+#: a bare digit into a live session as your next prompt. The real hint bar
+#: lists several at once ("Enter to select · ↑/↓ to navigate · Esc to
+#: cancel"), so two are required. Missing a menu costs a typed number;
+#: inventing one costs a wrong instruction to an agent.
+_MENU_HINTS_REQUIRED = 2
+
 #: Box drawing, spinners and status glyphs that are never the question.
 _SCREEN_NOISE = "─━│┃┄┅┈┉╌╍═�texttt▪▫◦·✻✽⎿⏵❯>"
 
@@ -1458,7 +1467,7 @@ def parse_console_prompt(lines):
     hint_at = None
     for index in range(len(rows) - 1, -1, -1):
         low = rows[index].lower()
-        if any(h in low for h in _MENU_HINTS):
+        if sum(h in low for h in _MENU_HINTS) >= _MENU_HINTS_REQUIRED:
             hint_at = index
             break
     if hint_at is None:

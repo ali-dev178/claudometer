@@ -484,7 +484,7 @@ class Polling(Answering):
 
 _SCREEN = ["  ⏺ Reading the release notes.", "",
            "  Which way round?", "  > 1. First", "    2. Second",
-           "  Enter to select"]
+           "  Enter to select · ↑/↓ to navigate · Esc to cancel"]
 
 
 def test_a_poll_reports_the_live_row_and_its_question(monkeypatch):
@@ -528,6 +528,43 @@ def test_a_session_past_the_row_limit_is_still_live(monkeypatch):
     assert w._poll_session({"pid": 999})["alive"] is True
     assert w._send_answer({"pid": 999}, "carry on") == (True, None), (
         "an answer to a session that scrolled off the list must still land")
+
+
+class Striping(Widget):
+    _bg_hex = "#202020"
+    _theme = "dark"
+    _strip_sig = widget_bar.BarWidget._strip_sig
+    _strip_metrics = lambda self: ("session",)          # noqa: E731
+    _with_sessions = widget_bar.BarWidget._with_sessions
+
+
+def _sig_for(*sessions):
+    w = Striping()
+    w._sess_disp = sc.format_sessions(list(sessions))
+    return w._strip_sig(w._with_sessions({"session_pct": 5}))
+
+
+def test_a_session_changing_status_repaints_the_strip():
+    # Same count, same blocked count, different colour. The strip only redraws
+    # when this signature changes, so leaving the dots out of it meant the row
+    # kept stale colours until something unrelated moved — in practice the
+    # reset countdown, up to a minute later.
+    done = _sig_for(_session(pid=7, status=sc.IDLE))
+    working = _sig_for(_session(pid=7, status=sc.BUSY))
+    assert done != working, (
+        "done -> working must repaint the dot; it is the whole point of the "
+        "at-a-glance row")
+
+
+def test_a_session_blocking_repaints_the_strip():
+    assert _sig_for(_session(pid=7, status=sc.BUSY)) != \
+        _sig_for(_session(pid=7, status=sc.WAITING))
+
+
+def test_an_unchanged_session_list_does_not_repaint():
+    assert _sig_for(_session(pid=7, status=sc.BUSY)) == \
+        _sig_for(_session(pid=7, status=sc.BUSY)), (
+        "redrawing every tick would undo the point of having a signature")
 
 
 def test_a_session_that_really_ended_is_not_live():

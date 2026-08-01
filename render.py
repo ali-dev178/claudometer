@@ -57,6 +57,36 @@ _MAC_FONTS = {  # macOS system fonts (Helvetica Neue is reliably present)
     "light": "/System/Library/Fonts/HelveticaNeue.ttc",
 }
 
+#: HelveticaNeue.ttc is a COLLECTION: every weight is one file, and asking for
+#: it gives you face 0 — Regular — whichever weight you wanted. Semibold
+#: headings, bold numbers and light captions all came out identical on macOS.
+#: Faces are chosen by name rather than index because the order inside the
+#: collection is not guaranteed across macOS versions.
+_MAC_FACES = {
+    "sb": ("HelveticaNeue-Medium", "HelveticaNeue-Bold"),
+    "bold": ("HelveticaNeue-Bold",),
+    "light": ("HelveticaNeue-Light", "HelveticaNeue-Thin"),
+}
+
+
+def _mac_face(path, kind, size):
+    """Pick the right face out of a .ttc, or None to fall through."""
+    wanted = _MAC_FACES.get(kind)
+    if not wanted or not path.endswith(".ttc"):
+        return None
+    for index in range(12):          # collections are small; 12 is generous
+        try:
+            face = ImageFont.truetype(path, size, index=index)
+        except Exception:
+            break
+        try:
+            name = "-".join(p for p in face.getname() if p).replace(" ", "")
+        except Exception:
+            continue
+        if any(w.replace(" ", "") in name for w in wanted):
+            return face
+    return None
+
 
 def _font(kind, size):
     size = int(size)
@@ -75,7 +105,7 @@ def _font(kind, size):
     f = None
     for path in candidates:
         try:
-            f = ImageFont.truetype(path, size)
+            f = _mac_face(path, kind, size) or ImageFont.truetype(path, size)
             break
         except OSError:
             continue

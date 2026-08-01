@@ -24,7 +24,7 @@ MENU = [
     "  > 1. Call them out at the top",
     "    2. Keep them in with the rest",
     "    3. Leave them out for now",
-    "  Enter to select",
+    "  Enter to select · ↑/↓ to navigate · Esc to cancel",
 ]
 
 CHAT = [
@@ -271,7 +271,7 @@ MOVED = [
     "  Which heading should they go under?",
     "  > 1. Breaking changes",
     "    2. Upgrade notes",
-    "  Enter to select",
+    "  Enter to select · ↑/↓ to navigate · Esc to cancel",
 ]
 
 

@@ -147,3 +147,61 @@ def test_a_non_bmp_character_becomes_a_surrogate_pair():
 
 def test_ordinary_text_is_one_unit_per_character():
     assert list(console_send._units("café")) == ["c", "a", "f", "é"]
+
+
+# --------------------------------------------------------------------------- #
+# Borrowing a session's console must not cost us our own
+# --------------------------------------------------------------------------- #
+class _Kernel:
+    """Records what a detach did, so the logic can be checked anywhere."""
+
+    def __init__(self):
+        self.calls = []
+
+    def FreeConsole(self):
+        self.calls.append("free")
+        return 1
+
+    def AttachConsole(self, pid):
+        self.calls.append(("attach", pid))
+        return 1
+
+
+def test_a_borrowed_console_is_given_back_when_we_had_one():
+    k = _Kernel()
+    console_send._detach(k, had_console=True)
+    assert k.calls == ["free", ("attach", console_send._ATTACH_PARENT)], (
+        "run from a terminal, a bare FreeConsole hands that terminal back and "
+        "everything printed afterwards goes nowhere")
+
+
+def test_nothing_is_reattached_when_we_never_had_a_console():
+    k = _Kernel()
+    console_send._detach(k, had_console=False)
+    assert k.calls == ["free"], (
+        "the packaged widget owns no console — attaching to its parent would "
+        "be claiming one it was never given")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows console")
+def test_the_widgets_own_console_survives_a_send():
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    before = bool(kernel32.GetConsoleWindow())
+    if not before:
+        pytest.skip("this run has no console to lose")
+    console_send.send_text(999_999, "x")       # a pid with no console
+    assert bool(kernel32.GetConsoleWindow()) is True, (
+        "run from a terminal — which is what the README tells contributors to "
+        "do — a bare FreeConsole hands that terminal back and everything "
+        "printed afterwards goes nowhere")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows console")
+def test_the_widgets_own_console_survives_a_read():
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    if not kernel32.GetConsoleWindow():
+        pytest.skip("this run has no console to lose")
+    console_send.read_screen(999_999)
+    assert bool(kernel32.GetConsoleWindow()) is True

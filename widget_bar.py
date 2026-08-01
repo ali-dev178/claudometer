@@ -2931,6 +2931,13 @@ class BarWidget:
             disp.get("face_pct"),
             self._strip_metrics(),
             disp.get("sessions_count"), disp.get("sessions_blocked"),
+            # The dot COLOURS, not just how many there are. A session going
+            # from done to working changes neither count, so without this the
+            # strip kept the stale colours until something unrelated moved —
+            # in practice the reset countdown ticking over, up to a minute
+            # later. The dots are the whole point of the at-a-glance row.
+            tuple(disp.get("sessions_dots") or ()),
+            disp.get("sessions_dots_overflow"),
         )
 
     def _draw(self, disp):
