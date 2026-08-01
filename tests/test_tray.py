@@ -16,8 +16,15 @@ from PIL import Image
 import sessions_core as sc
 import usage_core as core
 
-tray = pytest.importorskip("tray_windows",
-                           reason="needs pystray, which is Windows/Linux only")
+try:
+    import tray_windows as tray
+except Exception as exc:                    # noqa: BLE001 - see below
+    # NOT importorskip: on headless Linux pystray imports fine and then raises
+    # while choosing a backend, because there is no display to put an icon in.
+    # importorskip only rescues ImportError, so CI collected this file and
+    # went red on a machine that has no tray at all.
+    tray = None
+    pytest.skip(f"no tray on this machine: {exc}", allow_module_level=True)
 
 
 # --------------------------------------------------------------------------- #
