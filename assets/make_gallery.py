@@ -169,31 +169,66 @@ def strip_gallery():
         sessions(*[(f"Session {n}", "repo", B, 60 * n, "") for n in range(11)]),
         max_rows=6)
 
+    import usage_core as uc
+
+    def status(state):
+        """Straight from usage_core, so the wording can't drift from the app."""
+        return uc.status_display(state)
+
+    all_colours = sc.format_sessions(sessions(
+        ("Blocked", "a", W, 60, "input needed"), ("Working", "b", B, 60, ""),
+        ("Shell", "c", S, 60, ""), ("Done", "d", I, 60, "")))
+    dot_cap = sc.format_sessions(
+        sessions(*[(f"S{n}", "repo", B, 60, "") for n in range(14)]))
+
     items = [
+        ("Fresh window — 0%", strip(usage(0, "green", 0))),
         ("Comfortable", strip(usage(22, "green", 6))),
         ("Getting close", strip(usage(61, "amber"))),
         ("Near the limit", strip(usage(94, "red", 42, "amber"))),
         ("Limit reached", strip(usage(100, "red", 42, "amber"))),
         ("Weekly is the tight one", strip(usage(31, "green", 88, "red"))),
+        ("Under an hour left",
+         strip(dict(usage(77, "amber"),
+                    session_resets_at=t + timedelta(minutes=44)))),
+        ("Under a minute left",
+         strip(dict(usage(77, "amber"),
+                    session_resets_at=t + timedelta(seconds=35)))),
+        ("Resetting right now",
+         strip(dict(usage(99, "red"),
+                    session_resets_at=t - timedelta(seconds=5)))),
+        ("Reset time unknown",
+         strip(dict(usage(61, "amber"), session_resets_at=None))),
         ("Session meter only", strip(usage(61, "amber"), metrics=("session",))),
         ("Weekly meter only", strip(usage(61, "amber"), metrics=("weekly",))),
         ("With live sessions", strip(dict(usage(61, "amber"), **live))),
         ("One session, nothing wrong", strip(dict(usage(22, "green"), **calm))),
+        ("Every session state at once",
+         strip(dict(usage(61, "amber"), **all_colours))),
         ("More than fit — +N", strip(dict(usage(61, "amber"), **crowd))),
+        ("Past the dot cap", strip(dict(usage(61, "amber"), **dot_cap))),
         ("No sessions running",
          strip(dict(usage(61, "amber"), **sc.format_sessions([])))),
         ("A session needs you (pulse)",
          strip(dict(usage(61, "amber"), _pulse=True, **live))),
-        ("Offline / no data", strip({"session": "offline — last known"})),
-        ("Rate limited", strip({"session": "usage limit reached",
-                                "face_color": "red"})),
+        ("First run — no data yet", strip(status(uc.Status.NO_DATA))),
+        ("Offline", strip(status(uc.Status.OFFLINE))),
+        ("Not logged in", strip(status(uc.Status.NO_CREDS))),
+        ("Rate limited", strip(status(uc.Status.RATE_LIMITED))),
+        ("Error fetching usage", strip(status(uc.Status.ERROR))),
+        ("Offline, sessions still listed",
+         strip(dict(status(uc.Status.OFFLINE), **live))),
         ("The tour, unmistakably",
          strip(dict(usage(61, "amber"), _demo=True, **live))),
+        ("Light palette, light taskbar",
+         strip(dict(usage(61, "amber"), **live), "#f3f3f3", "light")),
     ]
     rows_sheet(items, "gallery-strip.png", "Every state the strip can be in",
-               "Real renders, dark palette on a dark taskbar. "
-               "Blocked sessions sort first, so a red dot always leads.",
-               label_w=230)
+               "Real renders, dark palette on a dark taskbar unless noted. "
+               "Blocked sessions sort first, so a red dot always leads. The "
+               "status states come from usage_core, so their wording is the "
+               "app's own.",
+               label_w=240)
 
 
 # --------------------------------------------------------------------------- #
@@ -325,6 +360,88 @@ def popover_gallery():
 
 
 # --------------------------------------------------------------------------- #
+# The session rows, on their own
+# --------------------------------------------------------------------------- #
+def rows_gallery():
+    """Crop the live-sessions block out of a popover, using its own hit map.
+
+    The rows only exist inside the popover, and a sheet of full popovers to
+    compare four words of row text would be mostly meter. The hit rects are
+    where the app itself thinks the rows are, so cropping to them can't drift
+    from what is drawn.
+    """
+    t = now()
+    usage = {"plan": "Plan: Max (5x)",
+             "session_pct": 61, "session_color": "amber",
+             "session_resets_at": t + timedelta(minutes=82),
+             "weekly_pct": 18, "weekly_color": "green",
+             "weekly_resets_at": t + timedelta(days=3), "model_rows": []}
+
+    def one(*spec):
+        return sc.format_sessions(sessions(*spec))
+
+    def _rects(disp, theme):
+        _img, hits = render.render_popover(dict(usage, **disp), theme)
+        return [r for key, r in hits.items() if key.startswith("session:")]
+
+    #: Where the block starts is the same whatever is in it — everything above
+    #: is the usage half — so the empty case borrows the offset from a render
+    #: that has a row to measure.
+    reference = one(("x", "y", B, 60, ""))
+
+    def block(disp, theme="light"):
+        img, hits = render.render_popover(dict(usage, **disp), theme)
+        rects = [r for key, r in hits.items() if key.startswith("session:")]
+        ref = rects or _rects(reference, theme)
+        top = int(min(r[1] for r in ref)) - 24       # include the header line
+        # The "+N more" line sits below every row rect, so it needs room —
+        # but only when there is one. Reaching for it unconditionally drags
+        # the popover's footer into every other shot.
+        if not rects:
+            bottom = top + 56                        # the empty-state note
+        else:
+            bottom = int(max(r[3] for r in ref)) + \
+                (30 if disp.get("sessions_overflow") else 6)
+        return img.crop((0, max(0, top), img.width, min(img.height, bottom)))
+
+    long_title = ("Investigate why the nightly export job silently drops rows "
+                  "when the upstream feed is late", "data-platform", B, 300, "")
+    items = [
+        ("Needs you — with the reason",
+         block(one(("Ship the release pipeline", "claude-widget", W, 240,
+                    "input needed")))),
+        ("A permission prompt",
+         block(one(("Refactor the payment retries", "checkout-api", W, 35,
+                    "permission to run Bash")))),
+        ("Working", block(one(("Draft the migration plan", "docs-site", B, 45, "")))),
+        ("Running a command",
+         block(one(("Draft the migration plan", "docs-site", S, 8, "")))),
+        ("Done", block(one(("Explore the caching idea", "proxy-passer", I, 1560, "")))),
+        ("Blocked first, longest-blocked leading",
+         block(one(("Just blocked", "a", W, 20, "input needed"),
+                   ("Blocked a while", "b", W, 900, "input needed"),
+                   ("Working", "c", B, 30, "")))),
+        ("A long title elides", block(one(long_title))),
+        ("More than fit", block(sc.format_sessions(
+            sessions(*[(f"Session {n}", "repo", B, 60 * (n + 1), "")
+                       for n in range(9)]), max_rows=4))),
+        ("Just one row", block(sc.format_sessions(
+            sessions(*[(f"Session {n}", "repo", B, 60, "") for n in range(5)]),
+            max_rows=1))),
+        ("Nothing running", block(sc.format_sessions([]))),
+        ("Dark", block(one(("Ship the release pipeline", "claude-widget", W,
+                            240, "input needed"),
+                           ("Explore the caching idea", "proxy-passer", I,
+                            1560, "")), "dark")),
+    ]
+    rows_sheet(items, "gallery-rows.png", "A session row, in every state",
+               "Cropped out of the real popover using its own click map. Each "
+               "row carries what the session is doing and how long it has been "
+               "doing it; a blocked one also carries why.",
+               label_w=260, shadow=True)
+
+
+# --------------------------------------------------------------------------- #
 # The Windows tray icon — a surface the README never showed
 # --------------------------------------------------------------------------- #
 def tray_gallery():
@@ -367,4 +484,5 @@ if __name__ == "__main__":
     contrast_gallery()
     toast_gallery()
     popover_gallery()
+    rows_gallery()
     tray_gallery()

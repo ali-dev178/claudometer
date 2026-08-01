@@ -106,6 +106,12 @@ Severity colours are handled separately, because red, amber and green *are* the 
 
 <p align="center"><img src="assets/gallery-popover.png" alt="Every popover state" width="860"></p>
 
+### A session row
+
+Each row carries what the session is doing and how long it's been doing it; a blocked one also carries why.
+
+<p align="center"><img src="assets/gallery-rows.png" alt="Every session row state" width="680"></p>
+
 ### Alerts
 
 <p align="center"><img src="assets/gallery-toasts.png" alt="Every alert toast" width="760"></p>
