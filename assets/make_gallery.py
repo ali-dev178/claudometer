@@ -272,40 +272,69 @@ def contrast_gallery():
 # Toasts
 # --------------------------------------------------------------------------- #
 def toast_gallery():
-    def toast(pct, title, sub, color, theme="light"):
-        return render.render_toast(pct, title, sub, color, theme)
+    """Built from sessions_core's own alert payloads, not from prose.
+
+    Hand-writing these got three of them wrong — the stuck toast puts its
+    dwell in the TITLE, a subtitle names the session rather than its project,
+    and a mixed batch reads "1 need you · 2 finished" rather than the tidier
+    thing one would invent. A screenshot of a string the app never emits is
+    worse than no screenshot.
+    """
+    def card(payload, theme="light", **kw):
+        return render.render_toast(None, payload["title"], payload["subtitle"],
+                                   payload["color"], theme, **kw)
+
+    def alert(session, after):
+        return sc.alert_for(sc.Transition("status", session, sc.BUSY, after))
+
+    blocked = sessions(("Ship the release pipeline", "claude-widget", W, 240,
+                        "input needed"))[0]
+    perm = sessions(("Refactor the payment retries", "checkout-api", W, 35,
+                     "permission to run Bash"))[0]
+    tests = sessions(("Ship the release pipeline", "claude-widget", W, 20,
+                      "run the test suite?"))[0]
+    notes = sessions(("Draft the migration plan", "docs-site", W, 20,
+                      "where do the notes go?"))[0]
+    done = sessions(("Explore the caching idea", "proxy-passer", I, 1560, ""))[0]
+    also = sessions(("Draft the migration plan", "docs-site", I, 30, ""))[0]
+
+    needs = alert(blocked, W)
+    finished = alert(done, I)
+    same_kind = [needs, alert(perm, W),
+                 alert(sessions(("Tidy the changelog", "web", W, 90,
+                                 "input needed"))[0], W)]
+    mixed = [needs, finished, alert(also, I)]
 
     items = [
         ("A short prompt — answer it here",
-         render.render_toast(None, "Needs you",
-                             "claude-widget · run the test suite?", "red",
-                             "light", choices=("Yes", "No"))),
+         card(alert(tests, W), choices=("Yes", "No"))),
         ("…or three, still decidable",
-         render.render_toast(None, "Needs you",
-                             "docs-site · where do the notes go?", "red",
-                             "dark", choices=("Top", "Inline", "Skip"))),
-        ("A session needs you — waits until dealt with",
-         toast(None, "Needs you", "Ship the release pipeline · input needed", "red")),
-        ("Permission prompt, from the hook",
-         toast(None, "Needs you",
-               "checkout-api · permission to run Bash", "red")),
-        ("One finished",
-         toast(None, "Finished", "Explore the caching idea · proxy-passer", "green")),
-        ("Several at once, summarised",
-         toast(None, "3 session updates", "2 finished · 1 needs you", "amber")),
-        ("Blocked too long",
-         toast(None, "Still waiting", "Ship the release pipeline · 12m", "red")),
+         card(alert(notes, W), "dark", choices=("Top", "Inline", "Skip"))),
+        ("A session needs you — waits until dealt with", card(needs)),
+        ("A permission prompt", card(alert(perm, W))),
+        ("One finished", card(finished)),
+        ("A session ended (opt-in)",
+         card(sc.alert_for(sc.Transition("gone", done)))),
+        ("Blocked too long", card(sc.alert_for_stuck(blocked))),
+        ("Three of the same, summarised",
+         card(sc.coalesce_alerts(same_kind))),
+        ("A mixed batch", card(sc.coalesce_alerts(mixed), "dark")),
         ("Crossing a usage threshold",
-         toast(80, "Session usage at 80%", "1h 8m left", "amber")),
+         render.render_toast(80, "Session usage at 80%", "1h 8m left",
+                             "amber", "light")),
         ("The weekly window, dark theme",
-         toast(92, "Weekly usage at 92%", "resets Thu 10:59 AM", "red", "dark")),
-        ("Out of session for now",
-         toast(100, "Session limit reached", "resets in 6m", "red", "dark")),
+         render.render_toast(92, "Weekly usage at 92%", "resets Thu 10:59 AM",
+                             "red", "dark")),
+        ("Approaching, with no reset time",
+         render.render_toast(90, "Session usage at 90%",
+                             "you're approaching your limit", "red", "light")),
     ]
     grid_sheet(items, "gallery-toasts.png", "Every alert, and when you get it",
                cols=2,
-               note="A “needs you” toast has no timeout: it waits until "
-                    "you deal with it or the session unblocks. The rest fade.")
+               note="A “needs you” toast has no timeout: it waits until you "
+                    "deal with it or the session unblocks. The rest fade. "
+                    "Every card here is built from the alert payload the app "
+                    "itself would emit.")
 
 
 # --------------------------------------------------------------------------- #
@@ -344,9 +373,18 @@ def popover_gallery():
         d.update(extra)
         return d
 
-    models = [{"label": "Opus", "pct": 71, "color": "amber"},
-              {"label": "Sonnet", "pct": 23, "color": "green"},
-              {"label": "Fable", "pct": 4, "color": "green"}]
+    # Through format_breakdown, so the row labels and their colour thresholds
+    # are the app's rather than mine.
+    scoped = uc.Usage(
+        limits=[uc.Limit("session", "session", 61.0, "normal",
+                         t + timedelta(minutes=82), None, True),
+                uc.Limit("weekly_all", "weekly", 18.0, "normal",
+                         t + timedelta(days=3), None, False)]
+        + [uc.Limit("weekly_scoped", "weekly", pct, "normal",
+                    t + timedelta(days=3), name, False)
+           for name, pct in (("Opus", 71.0), ("Sonnet", 23.0), ("Fable", 4.0))],
+        plan="max", rate_tier="default_claude_max_5x")
+    models = uc.format_breakdown(scoped)["model_rows"]
 
     items = [
         ("Usage only", pop(usage)),
@@ -374,7 +412,8 @@ def popover_gallery():
                                "dot": "green"}, **full))),
         ("Before the first poll",
          pop(dict(usage, foot={"text": "Auto-updating", "dot": "green"}))),
-        ("Pro plan", pop(dict(usage, plan="Plan: Pro"))),
+        ("Pro plan", pop(dict(usage, plan=uc.format_breakdown(
+            uc.Usage(limits=[], plan="pro", rate_tier=""))["plan"]))),
         ("Dark", pop(dict(usage, **full), "dark")),
         ("Offline", pop(status(uc.Status.OFFLINE))),
         ("Not logged in", pop(status(uc.Status.NO_CREDS))),
