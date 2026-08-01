@@ -110,8 +110,8 @@ class Harness:
     def quick(self):
         return [b.cget("text") for b in self.win._quick.winfo_children()]
 
-    def mirror(self):
-        return self.win._view.get("1.0", "end").strip()
+    def reply(self):
+        return self.win._reply.cget("text")
 
     def note(self):
         return self.win._note.cget("text")
@@ -165,13 +165,11 @@ def test_a_menu_leaves_out_yes_no(harness):
         "Yes and No mean nothing against a numbered menu")
 
 
-def test_the_mirror_stops_where_the_menu_starts(harness):
+def test_a_question_crowds_out_the_transcript(harness):
     h = harness([_state()])
-    text = h.mirror()
-    assert "Reading the release notes" in text
-    assert "Call them out at the top" not in text, (
-        "the options are drawn as buttons below — repeating them in the "
-        "mirror just pushes the buttons off the bottom")
+    assert h.reply() == "", (
+        "the question and its choices say it better right below — showing "
+        "the terminal's version of the same thing above is noise")
 
 
 def test_picking_an_option_sends_its_number(harness):
@@ -206,9 +204,24 @@ def test_the_menu_gives_way_to_the_conversation(harness):
     h.win._tick()
     h.pump()
     assert h.buttons() == [], "the question has been answered"
-    assert "put them at the top" in h.mirror(), (
-        "what it said back is the reason to keep watching")
+    assert "put them at the top" in h.reply(), (
+        "what it said back is the whole reason the window stayed")
     assert h.win._entry.cget("state") == "normal"
+
+
+def test_only_what_it_said_since_you_last_typed(harness):
+    h = harness([_state(["⏺ An older answer nobody needs again.",
+                         "> put them at the top",
+                         "⏺ Done — they're in their own section now.",
+                         "> "])])
+    assert h.reply() == "Done — they're in their own section now."
+
+
+def test_the_transcript_is_prose_not_a_terminal(harness):
+    h = harness([_state(CHAT)])
+    assert "\n" not in h.reply() and "⏺" not in h.reply(), (
+        "terminal lines are wrapped to the terminal's width and marked with "
+        "glyphs a UI font lacks — the sentence is what matters")
 
 
 def test_a_failed_send_says_why_and_keeps_the_text(harness):
@@ -352,14 +365,10 @@ def test_the_window_settling_into_place_is_not_a_resize(harness):
     assert h.win._user_sized is False
 
 
-def test_more_history_is_kept_than_is_shown(harness):
-    long_run = [f"  line {n}" for n in range(60)]
-    h = harness([_state(long_run)])
-    text = h.mirror()
-    assert text.count("\n") + 1 > widget_bar.AnswerWindow.VIEW_LINES, (
-        "a stretched window should reveal history that was already there, "
-        "not more empty panel")
-    assert "line 59" in text and "line 0" not in text
+def test_nothing_said_yet_shows_no_transcript(harness):
+    h = harness([_state(["> just do it", "✻ Cogitated for 14s"])])
+    assert h.reply() == "", (
+        "an empty box where a sentence goes reads as something failing")
 
 
 # --------------------------------------------------------------------------- #

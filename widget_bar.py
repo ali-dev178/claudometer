@@ -525,16 +525,13 @@ class AnswerWindow:
     not the end of one, and a window that vanished would send you to the
     terminal for the very thing it exists to save you.
 
-    So it stays, mirrors the session's own screen, and keeps taking input.
+    So it stays, shows what the session says back, and keeps taking input.
     Reading and writing both go by process id, so it follows that session
     whichever terminal tab it lives in.
     """
 
     W = 470
     POLL_MS = 900
-    VIEW_LINES = 14
-    MIN_LINES = 4
-    HISTORY = 40
 
     def __init__(self, root, theme, row, on_send, on_open_terminal,
                  poll=None, on_close=None):
@@ -593,20 +590,15 @@ class AnswerWindow:
         # Emptying one and leaving it in place does NOT work: Tk keeps the
         # height the frame last asked for, which leaves a band of dead space
         # where a question used to be.
-        self._view_box = tk.Frame(pad, bg=bg)
-        # A live mirror of the session's own screen: the conversation itself,
-        # which is what makes "chat about this" answerable from here.
-        # width=1 so the mirror never dictates how wide the window is — it
-        # fills whatever the question and the buttons ask for. wrap="word"
-        # because a terminal wider than this panel would otherwise have its
-        # lines quietly cut off at the right edge.
-        self._view = tk.Text(self._view_box, width=1, height=self.MIN_LINES,
-                             bg=T["key"], fg=dim, bd=0, relief="flat",
-                             wrap="word", font=("Consolas", 9),
-                             highlightthickness=0, insertwidth=0,
-                             padx=8, pady=6)
-        self._view.pack(fill="both", expand=True)
-        self._view.configure(state="disabled")
+        # What the session has said since you last typed — and only that. It
+        # carries the window while a conversation is going, and stays away
+        # entirely when there is a question, which says the same thing better
+        # in the lines right below.
+        self._reply_box = tk.Frame(pad, bg=bg)
+        self._reply = tk.Message(self._reply_box, text="", bg=bg, fg=dim,
+                                 font=("Segoe UI", 10), width=self.W - 44,
+                                 anchor="w", justify="left")
+        self._reply.pack(fill="x")
 
         self._note_box = tk.Frame(pad, bg=bg)
         self._note = tk.Label(self._note_box, text="", bg=bg, fg=dim,
@@ -657,7 +649,7 @@ class AnswerWindow:
         # Top to bottom. Sections not currently in use are left out entirely
         # rather than packed empty.
         self._sections = (
-            (self._view_box, {"fill": "both", "expand": True}),
+            (self._reply_box, {"fill": "x", "pady": (0, 4)}),
             (self._note_box, {"fill": "x", "pady": (8, 0)}),
             (self._q_box, {"fill": "x", "pady": (10, 4)}),
             (self._opts, {"fill": "x", "pady": (6, 0)}),
@@ -669,14 +661,6 @@ class AnswerWindow:
         self._render(self.row)
         self._place(root)
         self._tick()
-        # A second pass: the first one gave the window its size, and only now
-        # does the mirror have a width to measure its own wrapping against.
-        try:
-            self.top.update_idletasks()
-            self._show_screen(self._lines, self._upto)
-            self._place()
-        except Exception:
-            pass
         try:
             self.top.lift()
             self.top.focus_force()
@@ -736,8 +720,8 @@ class AnswerWindow:
             pass
 
     def _wanted(self, box):
-        if box is self._view_box:
-            return bool(self._lines)
+        if box is self._reply_box:
+            return bool(self._reply.cget("text"))
         if box is self._note_box:
             return bool(self._note.cget("text"))
         if box is self._q_box:
@@ -802,37 +786,15 @@ class AnswerWindow:
                       cursor="hand2").pack(side="left", padx=(0, 8),
                                            pady=(10, 0))
 
-    def _show_screen(self, lines, upto=None):
-        """Mirror the session's screen, stopping where the menu begins.
+    def _show_reply(self, lines, upto=None, question=""):
+        """Show what the session said, unless it is about to ask it anyway.
 
-        The choices are already drawn as buttons below; showing them twice
-        would just push the buttons off the bottom.
+        With a question on screen this would be the same words twice — the
+        transcript of it above, the point of it below.
         """
         try:
-            # Keep more than fits: the panel auto-sizes to VIEW_LINES, but a
-            # window the user has stretched should reward them with the
-            # history that was already there rather than more empty grey.
-            keep = sessions_core.screen_text(lines, upto, self.HISTORY)
-            self._view.configure(state="normal")
-            self._view.delete("1.0", "end")
-            self._view.insert("1.0", "\n".join(keep))
-            # Fit the panel to what's in it. A fixed height leaves a slab of
-            # empty grey above a two-line exchange, and hides half a long one.
-            shown = len(keep)
-            try:
-                # Settle the layout first: until the panel has its real width
-                # every line "wraps" into dozens, and the count comes back as
-                # the maximum every time.
-                self._view.update_idletasks()
-                if self._view.winfo_width() > 1:
-                    shown = int(
-                        self._view.count("1.0", "end", "displaylines")[0])
-            except Exception:
-                pass
-            self._view.configure(
-                height=max(self.MIN_LINES, min(self.VIEW_LINES, shown)))
-            self._view.see("end")
-            self._view.configure(state="disabled")
+            text = "" if question else sessions_core.latest_reply(lines, upto)
+            self._reply.configure(text=text)
         except Exception:
             pass
 
@@ -902,10 +864,10 @@ class AnswerWindow:
         if self.alive:
             self._lines = state.get("lines")
             self._upto = prompt["start"] if prompt else None
-            self._show_screen(self._lines, self._upto)
+            self._show_reply(self._lines, self._upto, row.get("question"))
         if not self.alive:
-            # Keep the last screen up — it is the only remaining record of what
-            # the session said — but nothing can be sent to it any more.
+            # The last thing it said stays up — it is the only remaining
+            # record of it — but nothing can be sent to it any more.
             self._set_note("This session has ended.")
             self._disable()
         elif not self.readable:

@@ -160,7 +160,7 @@ Clicking a blocked session opens it in a small window showing **the question it 
 
 The question comes off the session's own screen, because that is the only place it exists — Claude Code's transcript records a tool call *after* it has been answered, so while a session is waiting the transcript doesn't know what it asked.
 
-The window **stays open** once you answer. Choosing *"chat about this"* starts a conversation, not an ending, so it keeps mirroring the session and keeps taking messages — you only go to the terminal if you want to.
+The window **stays open** once you answer. Choosing *"chat about this"* starts a conversation, not an ending, so it shows what the session says back and keeps taking messages — you only go to the terminal if you want to. What it says is shown as prose rather than as a copy of the terminal: output is wrapped to the terminal's width and studded with glyphs, and the sentence is the part that matters.
 
 It handles the rest of what a session can do to you: it says when one is **working** (anything you send is queued, exactly as typing into the terminal would be), when a menu **moved** under your pointer (that choice is refused rather than sent to a question you never read), and when the session has **ended** (the last thing it said stays up; nothing more can be sent).
 

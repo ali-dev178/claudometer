@@ -951,41 +951,63 @@ def test_parse_console_prompt_marker_elsewhere():
     assert out["selected"] == 2 and len(out["options"]) == 3
 
 
-def test_screen_text_drops_the_furniture():
-    out = sc.screen_text(REAL_SCREEN)
-    assert "─────────────────────────────────────────────────" not in out, (
-        "a rule wraps onto two lines in a narrow panel and says nothing")
-    assert "> again" in out, "what the user typed is not furniture"
+# --------------------------------------------------------------------------- #
+# What a session has said since you last typed
+# --------------------------------------------------------------------------- #
+TALKING = [
+    "⏺ An older answer you have already read.",
+    "> put the breaking changes at the top",
+    "⏺ Right — they get their own section, above everything else.",
+    "  Two of the four are only breaking if you were relying on the old",
+    "  default, so I'll say which.",
+    "",
+    "  Do you want the old default documented as well?",
+    "> ",
+]
 
 
-def test_screen_text_stops_at_the_prompt():
+def test_latest_reply_starts_after_your_last_input():
+    out = sc.latest_reply(TALKING)
+    assert out.startswith("Right — they get their own section")
+    assert "already read" not in out, (
+        "you answered that one — what makes this worth showing is the part "
+        "you haven't")
+
+
+def test_latest_reply_rejoins_the_terminals_wrapping():
+    out = sc.latest_reply(TALKING)
+    assert "the old default, so I'll say which." in out, (
+        "a line break at the terminal's width is not a sentence ending")
+    assert "\n" not in out
+
+
+def test_latest_reply_drops_the_bookkeeping():
+    out = sc.latest_reply(["> go on", "✻ Cogitated for 14s",
+                           "⎿  Read 4 files (312 lines)", " [ ] Bad advice",
+                           "⏺ Here's what I found."])
+    assert out == "Here's what I found.", (
+        "how long it thought and what a tool returned is not it talking")
+
+
+def test_latest_reply_is_empty_when_it_has_not_spoken():
+    assert sc.latest_reply(["> just do it", "✻ Cogitated for 14s"]) == ""
+    assert sc.latest_reply(None) == "" and sc.latest_reply([]) == ""
+
+
+def test_latest_reply_does_not_mistake_a_menu_choice_for_your_input():
+    out = sc.latest_reply(["⏺ Which way round?", "> 1. First", "  2. Second"])
+    assert out.startswith("Which way round?"), (
+        "'> 1.' is the menu's highlight marker, not something you typed")
+
+
+def test_latest_reply_stops_at_the_prompt():
     start = sc.parse_console_prompt(REAL_SCREEN)["start"]
-    out = sc.screen_text(REAL_SCREEN, upto=start)
-    assert not any("Networking events" in line for line in out), (
-        "the caller is drawing those as buttons")
-    assert "> again" in out
+    assert "Networking events" not in sc.latest_reply(REAL_SCREEN, upto=start)
 
 
-def test_screen_text_keeps_the_end_not_the_beginning():
-    out = sc.screen_text([f"line {n}" for n in range(40)], limit=3)
-    assert out == ["line 37", "line 38", "line 39"], (
-        "the newest output is the part worth showing")
-
-
-def test_screen_text_swaps_glyphs_a_mono_font_lacks():
-    out = sc.screen_text(["⏺ Read 4 files", "  ⎿  312 lines"])
-    assert out == ["• Read 4 files", "  └  312 lines"], (
-        "Consolas has no ⏺ or ⎿ — left alone they draw as empty boxes on "
-        "nearly every line, which reads as a broken panel")
-
-
-def test_screen_text_leaves_the_words_alone():
-    line = "  Networking events aren't useless — they're badly matched."
-    assert sc.screen_text([line]) == [line]
-
-
-def test_screen_text_survives_nothing():
-    assert sc.screen_text(None) == [] and sc.screen_text([]) == []
+def test_latest_reply_is_capped():
+    out = sc.latest_reply(["⏺ " + "word " * 400], max_chars=120)
+    assert len(out) <= 120
 
 
 def test_parse_console_prompt_needs_the_menu_hint():

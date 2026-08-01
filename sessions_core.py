@@ -1344,30 +1344,42 @@ def _is_noise(line: str) -> bool:
     return len(letters) / len(stripped) < 0.35
 
 
-#: Claude Code's TUI glyphs, and the nearest thing a monospace UI font has.
-#: Left as-is they draw as empty boxes on nearly every line of output, which
-#: reads as a broken panel rather than as a session talking.
-_SCREEN_GLYPHS = str.maketrans({
-    "⏺": "•", "⧉": "•", "✻": "*", "✽": "*", "✢": "*", "✶": "*",
-    "⎿": "└", "⏵": ">", "❯": ">", "·": "·",
-})
+#: A line the user typed, echoed back. Deliberately NOT a numbered option:
+#: "> 1. Keep it" is the menu's highlight marker, not something you said.
+_USER_LINE_RE = re.compile(r"^\s*[>❯⏵]\s*(?!\d{1,2}[.)]\s)(\S.*)$")
+
+#: Claude Code's own bookkeeping: how long it thought, what a tool returned,
+#: which topic a question belongs to. None of it is the session talking.
+_ASIDE_RE = re.compile(r"^\s*(?:[✻✽✢✶*]\s|[⎿└]|\[.?\]\s|\d+\s*(?:tokens|lines))")
+
+#: The bullet Claude Code puts in front of what it says.
+_SAID = " ⏺•⧉\t"
 
 
-def screen_text(lines, upto=None, limit: int = 14):
-    """A session's screen, tidied enough to read in a small panel.
+def latest_reply(lines, upto=None, max_chars: int = 600):
+    """What the session has said since you last typed, as one piece of prose.
 
-    Drops the rules, spinners and empty prompt lines a TUI draws to fill its
-    window: each of them wraps onto two lines in a panel this narrow, and none
-    of them says anything. What is left is what the session actually wrote.
+    Terminal output is wrapped to the terminal's width and studded with
+    glyphs a UI font doesn't have, so it is rejoined rather than mirrored —
+    what matters is the sentence, not the column it broke at.
 
-    *upto* trims at the start of a prompt, for callers that are already showing
-    that prompt's choices as buttons.
+    Anything before your last input is left out: you have already read it, and
+    what makes this worth showing is the part you haven't answered yet.
     """
     rows = list(lines or [])
     if upto is not None and 0 < upto <= len(rows):
         rows = rows[:upto]
-    return [row.translate(_SCREEN_GLYPHS)
-            for row in rows if not _is_noise(row)][-limit:]
+    start = 0
+    for index, row in enumerate(rows):
+        if _USER_LINE_RE.match(row):
+            start = index + 1
+    said = []
+    for row in rows[start:]:
+        if _is_noise(row) or _ASIDE_RE.match(row) or _USER_LINE_RE.match(row):
+            continue
+        said.append(row.strip().lstrip(_SAID).strip())
+    text = oneline(" ".join(part for part in said if part), max_chars)
+    return text
 
 
 def parse_console_prompt(lines):
