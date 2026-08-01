@@ -54,6 +54,7 @@ class Widget:
         self._sess_known_ids = frozenset()
         self._sess_sticky_pid = 0
         self._sess_disp = {}
+        self._answer_win = None
         self.toasts = []
         self.pulses = 0
 
@@ -65,6 +66,7 @@ class Widget:
         self.pulses = getattr(self, "pulses", 0) + 1
 
     _retire_sticky_toast = widget_bar.BarWidget._retire_sticky_toast
+    _close_answer = widget_bar.BarWidget._close_answer
     _toast = None
 
     _sessions_tick = widget_bar.BarWidget._sessions_tick
@@ -415,17 +417,18 @@ def test_send_refuses_a_session_that_has_gone(monkeypatch):
     assert not sent, "nothing may be typed into a session that no longer exists"
 
 
-def test_send_refuses_a_session_that_stopped_waiting(monkeypatch):
+def test_a_session_that_stopped_waiting_can_still_be_talked_to(monkeypatch):
     sent = []
     monkeypatch.setattr(widget_bar.console_send, "send_text",
-                        lambda *a, **k: sent.append(a) or (True, None))
+                        lambda pid, text, **k: sent.append((pid, text)) or (True, None))
     w = Answering()
     row = _blocked_disp()["sessions_rows"][0]
-    # It was answered in the terminal while the window was open.
+    # Answering started a conversation: it is working now, and the next
+    # message has to reach it — that is the whole point of the window staying.
     w._sess_disp = sc.format_sessions([_session(pid=7, status=sc.BUSY)])
-    ok, err = w._send_answer(row, "yes")
-    assert ok is False and "waiting" in err.lower()
-    assert not sent, "an answer to a question already dealt with must not land"
+    ok, err = w._send_answer(row, "make it shorter")
+    assert (ok, err) == (True, None)
+    assert sent == [(7, "make it shorter")], sent
 
 
 def test_a_good_send_reaches_the_right_pid(monkeypatch):
@@ -468,6 +471,118 @@ def test_a_failed_send_reports_the_reason(monkeypatch):
 def test_the_row_carries_the_question():
     rows = _blocked_disp()["sessions_rows"]
     assert rows[0]["question"] == "input needed"
+
+
+# --------------------------------------------------------------------------- #
+# One look at a session: what the answer window polls
+# --------------------------------------------------------------------------- #
+class Polling(Answering):
+    _poll_session = widget_bar.BarWidget._poll_session
+    _DEMO_SCREEN = widget_bar.BarWidget._DEMO_SCREEN
+
+
+_SCREEN = ["  ⏺ Reading the release notes.", "",
+           "  Which way round?", "  > 1. First", "    2. Second",
+           "  Enter to select"]
+
+
+def test_a_poll_reports_the_live_row_and_its_question(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "read_screen",
+                        lambda pid, **k: _SCREEN)
+    w = Polling()
+    w._sess_disp = _blocked_disp(pid=4242)
+    state = w._poll_session({"pid": 4242})
+    assert state["alive"] is True and state["readable"] is True
+    assert state["prompt"]["options"] == ("First", "Second")
+    assert state["prompt"]["selected"] == 1
+    assert state["row"]["pid"] == 4242
+
+
+def test_a_poll_of_a_departed_session_reads_no_console(monkeypatch):
+    reads = []
+    monkeypatch.setattr(widget_bar.console_send, "read_screen",
+                        lambda pid, **k: reads.append(pid) or _SCREEN)
+    w = Polling()
+    w._sess_disp = sc.format_sessions([])
+    state = w._poll_session({"pid": 4242})
+    assert state["alive"] is False and state["prompt"] is None
+    assert not reads, (
+        "that pid belongs to something else now — reading its console is at "
+        "best useless and at worst somebody else's screen")
+
+
+def test_an_unreadable_screen_is_reported_not_guessed(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "read_screen",
+                        lambda pid, **k: None)
+    w = Polling()
+    w._sess_disp = _blocked_disp(pid=4242)
+    state = w._poll_session({"pid": 4242})
+    assert state["alive"] is True and state["readable"] is False
+    assert state["prompt"] is None
+
+
+def test_a_screen_read_that_throws_does_not_break_the_poll(monkeypatch):
+    def boom(pid, **k):
+        raise OSError("attach failed")
+
+    monkeypatch.setattr(widget_bar.console_send, "read_screen", boom)
+    w = Polling()
+    w._sess_disp = _blocked_disp(pid=4242)
+    state = w._poll_session({"pid": 4242})
+    assert state["alive"] is True and state["readable"] is False
+
+
+# --------------------------------------------------------------------------- #
+# The tour must never touch a real console
+# --------------------------------------------------------------------------- #
+def test_the_demo_reads_no_console(monkeypatch):
+    reads = []
+    monkeypatch.setattr(widget_bar.console_send, "read_screen",
+                        lambda pid, **k: reads.append(pid) or _SCREEN)
+    w = Polling()
+    w._demo = True
+    w._sess_disp = _blocked_disp(pid=900001)
+    state = w._poll_session({"pid": 900001})
+    assert not reads, (
+        "demo pids are invented and a real process may hold one — the tour "
+        "must not go reading its screen")
+    assert state["readable"] is True and state["prompt"] is not None
+
+
+def test_the_demo_screen_parses_into_a_real_prompt():
+    prompt = sc.parse_console_prompt(list(widget_bar.BarWidget._DEMO_SCREEN))
+    assert prompt is not None, (
+        "the tour runs the canned screen through the real parser, so it has "
+        "to be something the parser actually recognises")
+    assert len(prompt["options"]) == 3 and prompt["selected"] == 1
+    assert "breaking changes" in prompt["question"]
+
+
+def test_the_demo_sends_nothing(monkeypatch):
+    sent = []
+    monkeypatch.setattr(widget_bar.console_send, "send_text",
+                        lambda *a, **k: sent.append(a) or (True, None))
+    w = Answering()
+    w._demo = True
+    w._sess_disp = _blocked_disp(pid=900001)
+    ok, err = w._send_answer(w._sess_disp["sessions_rows"][0], "1")
+    assert (ok, err) == (True, None), "the tour has to look like it worked"
+    assert not sent, "…but nothing may actually be typed into a real process"
+
+
+def test_the_demo_raises_no_window(monkeypatch):
+    raised = []
+    monkeypatch.setattr(widget_bar.focus, "window_for_pid",
+                        lambda *a, **k: raised.append(a) or 1)
+    monkeypatch.setattr(widget_bar.focus, "raise_window",
+                        lambda *a, **k: raised.append(a) or True)
+    w = Answering()
+    w._demo = True
+    w._focus_session = widget_bar.BarWidget._focus_session.__get__(w)
+    w._focus_session({"pid": 900001})
+    assert not raised and w.notes, (
+        "a demo pid could belong to a real process — bringing its window "
+        "forward would be someone else's window")
 
 
 def test_a_working_row_has_no_question():

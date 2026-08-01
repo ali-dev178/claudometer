@@ -1,0 +1,143 @@
+"""Capture the answer window into assets/answer.png.
+
+Two shots side by side: the question a blocked session is asking, and the
+conversation that follows once it has been answered — which is the part that
+is easy to assume doesn't exist.
+
+Like capture_settings.py this is a real Tk window, so it must run on Windows
+with a display:
+
+    py assets/capture_answer.py
+"""
+import ctypes
+import os
+import sys
+import tempfile
+from ctypes import wintypes
+
+os.environ.setdefault("CLAUDOMETER_CONFIG",
+                      os.path.join(tempfile.gettempdir(), "cw_capture.toml"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import tkinter as tk                       # noqa: E402
+from PIL import Image, ImageDraw           # noqa: E402
+import render                              # noqa: E402
+import sessions_core as sc                 # noqa: E402
+import widget_bar                          # noqa: E402
+from capture_settings import BMIH           # noqa: E402
+from make_assets import drop_shadow         # noqa: E402
+
+OUT = os.path.dirname(os.path.abspath(__file__))
+user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
+
+
+def _capture(hwnd):
+    """Copy the window's own device context.
+
+    PrintWindow — which capture_settings.py uses — leaves black bands across
+    this one: several widgets never answer the redraw it forces. Reading what
+    is genuinely on screen avoids the question. The window is topmost, so
+    nothing is in front of it to be copied by mistake.
+    """
+    r = wintypes.RECT()
+    user32.GetClientRect(hwnd, ctypes.byref(r))
+    w, h = r.right, r.bottom
+    hdc = user32.GetDC(hwnd)
+    memdc = gdi32.CreateCompatibleDC(hdc)
+    bmp = gdi32.CreateCompatibleBitmap(hdc, w, h)
+    gdi32.SelectObject(memdc, bmp)
+    gdi32.BitBlt(memdc, 0, 0, w, h, hdc, 0, 0, 0x00CC0020)   # SRCCOPY
+    bmi = BMIH()
+    bmi.biSize = ctypes.sizeof(BMIH)
+    bmi.biWidth, bmi.biHeight = w, -h
+    bmi.biPlanes, bmi.biBitCount, bmi.biCompression = 1, 32, 0
+    buf = ctypes.create_string_buffer(w * h * 4)
+    gdi32.GetDIBits(memdc, bmp, 0, h, buf, ctypes.byref(bmi), 0)
+    img = Image.frombuffer("RGB", (w, h), buf, "raw", "BGRX", 0, 1)
+    gdi32.DeleteObject(bmp)
+    gdi32.DeleteDC(memdc)
+    user32.ReleaseDC(hwnd, hdc)
+    return img
+
+#: Verbatim from a real waiting session — including the descriptions Claude
+#: Code prints under each choice, which the parser has to step over.
+ASKING = [
+    "✻ Crunched for 5m 15s",
+    "> what else is overrated?",
+    "─────────────────────────────────────────────────",
+    " [ ] Overrated",
+    "What's the most overrated thing everyone seems to agree is great?",
+    "> 1. Networking events",
+    "     Rooms full of people exchanging cards and never speaking again.",
+    "  2. Waking up at 5am",
+    "     The productivity cult's favourite badge of honour.",
+    "  3. Open-plan offices",
+    "  4. Most new AI tools",
+    "  5. Type something.",
+    "  6. Chat about this",
+    "Enter to select · ↑/↓ to navigate · Esc to cancel",
+]
+
+TALKING = [
+    "> 6",
+    "⏺ Fair — \"overrated\" is doing a lot of work in that question.",
+    "  Networking events aren't useless, they're just badly matched to what",
+    "  most people go in wanting. The ones who get value out of them have",
+    "  usually decided beforehand who they want to talk to.",
+    "",
+    "  Which of these did you actually want to argue about?",
+    "> ",
+]
+
+
+def _grab(theme, lines, status, dwell_ms):
+    row = sc.format_sessions([sc.Session(
+        session_id="s", pid=4242, cwd="/work/mian-electric",
+        name="mian-electric-b8", title="Answer random questions",
+        status=status, waiting_for="input needed",
+        status_updated_at=sc.now_ms() - dwell_ms)])["sessions_rows"][0]
+    state = {"alive": True, "readable": True, "row": row, "lines": lines,
+             "prompt": sc.parse_console_prompt(lines)}
+    root = tk.Tk()
+    root.geometry("100x24+0+0")   # a tiny visible master keeps the child mapped
+    win = widget_bar.AnswerWindow(root, theme, row,
+                                  on_send=lambda r, t, s=True: (True, None),
+                                  on_open_terminal=lambda r: None,
+                                  poll=lambda r: state)
+    win.top.deiconify()
+    win.top.geometry("+80+80")    # on screen and clear of the taskbar
+    win.top.lift()
+    for _ in range(60):
+        win.top.update_idletasks()
+        win.top.update()
+    img = _capture(win.top.winfo_id())
+    root.destroy()
+    return img
+
+
+def main():
+    asking = _grab("light", ASKING, sc.WAITING, 4 * 60_000)
+    talking = _grab("dark", TALKING, sc.IDLE, 30_000)
+    m, gap = 44, 46
+    W = m + asking.width + gap + talking.width + m
+    H = m + max(asking.height, talking.height) + 34 + m
+    bg = render._vgrad(W, H, "#eef1f6", "#e2e7ef").convert("RGBA")
+    d = ImageDraw.Draw(bg)
+    f = render._font("sb", 13)
+
+    def place(im, x, label):
+        sh, pad = drop_shadow(im.size, 10, 20, 70)
+        bg.alpha_composite(sh, (x - pad, m - pad + 7))
+        bg.paste(im, (x, m))
+        d.text((x + im.width / 2, m + max(asking.height, talking.height) + 16),
+               label, font=f, fill="#5b6675", anchor="mm")
+
+    place(asking, m, "It asks — you answer, without leaving what you're doing")
+    place(talking, m + asking.width + gap,
+          "…and it stays, because that was the start of a conversation")
+    bg.convert("RGB").save(os.path.join(OUT, "answer.png"))
+    print("wrote assets/answer.png", (W, H))
+
+
+if __name__ == "__main__":
+    main()

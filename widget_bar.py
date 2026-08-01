@@ -518,30 +518,48 @@ class Popover:
 # Threshold alert toast
 # --------------------------------------------------------------------------- #
 class AnswerWindow:
-    """Answer a blocked session without leaving what you're doing.
+    """Talk to one session without leaving what you're doing.
 
-    Shows what the session is waiting on, one-click Yes / No, and a box for
-    anything else. The answer goes to that session's console by pid, so it
-    lands in the right session regardless of which terminal tab is in front —
-    and without stealing your focus.
+    Opens on a blocked session showing what it is asking, but does NOT close
+    when you answer — picking "Chat about this" is the start of a conversation,
+    not the end of one, and a window that vanished would send you to the
+    terminal for the very thing it exists to save you.
+
+    So it stays, mirrors the session's own screen, and keeps taking input.
+    Reading and writing both go by process id, so it follows that session
+    whichever terminal tab it lives in.
     """
 
-    W = 380
+    W = 470
+    POLL_MS = 900
+    VIEW_LINES = 14
+    MIN_LINES = 4
 
     def __init__(self, root, theme, row, on_send, on_open_terminal,
-                 on_close=None):
+                 poll=None, on_close=None):
         self._on_send = on_send
         self._on_open = on_open_terminal
+        self._poll = poll
         self._on_close = on_close
         self._closed = False
-        self.row = row
+        self._after = None
+        self._options = None       # last option set, so buttons only rebuild
+        self._quick_kind = None    # ditto for the Yes/No row
+        self._size = None          # ditto for the geometry
+        self._corner = None        # bottom-right it is pinned to
+        self._lines = None         # last screen, so it can be re-fitted
+        self._upto = None
+        self.alive = True
+        self.readable = True
+        self.row = dict(row)
+        self.pid = row.get("pid")
         T = render.THEMES.get(theme, render.THEMES["light"])
+        self.T = T
         bg, fg, dim = T["panel_bot"], T["neutral"], T["dim"]
 
         self.top = tk.Toplevel(root)
-        self.top.title("Answer session")
+        self.top.title(f"{(row.get('label') or 'Session')[:40]} — Claudometer")
         self.top.configure(bg=bg)
-        self.top.resizable(False, False)
         try:
             self.top.attributes("-topmost", True)
         except Exception:
@@ -550,131 +568,407 @@ class AnswerWindow:
         self.top.bind("<Escape>", lambda e: self.close())
 
         pad = tk.Frame(self.top, bg=bg)
-        pad.pack(fill="both", expand=True, padx=18, pady=14)
+        pad.pack(fill="both", expand=True, padx=16, pady=12)
 
         head = tk.Frame(pad, bg=bg)
         head.pack(fill="x")
-        tk.Canvas(head, width=10, height=10, bg=bg, highlightthickness=0).pack(
-            side="left", padx=(0, 8))
-        dot = head.winfo_children()[0]
-        dot.create_oval(1, 1, 9, 9, fill=render.sev_color(T, row.get("color", "red")),
-                        outline="")
-        tk.Label(head, text=(row.get("label") or "session")[:44], bg=bg, fg=fg,
+        self._dot = tk.Canvas(head, width=10, height=10, bg=bg,
+                              highlightthickness=0)
+        self._dot.pack(side="left", padx=(0, 8))
+        self._paint_dot(row.get("color", "red"))
+        tk.Label(head, text=(row.get("label") or "session")[:46], bg=bg, fg=fg,
                  font=("Segoe UI Semibold", 11), anchor="w").pack(side="left")
-        # Project and how long it's been waiting — NOT row["detail"], which
-        # embeds the question and would repeat it directly above itself.
-        dwell = row.get("dwell") or ""
-        tk.Label(pad, text=f"{row.get('project', '')}"
-                           + (f" · waiting {dwell}" if dwell else ""),
-                 bg=bg, fg=dim, font=("Segoe UI", 9), anchor="w").pack(
-                     fill="x", pady=(2, 10))
+        self._sub = tk.Label(pad, text="", bg=bg, fg=dim, font=("Segoe UI", 9),
+                             anchor="w")
+        self._sub.pack(fill="x", pady=(2, 8))
 
-        question = row.get("question") or row.get("status_text") or ""
-        if question:
-            tk.Message(pad, text=question, bg=bg, fg=fg, font=("Segoe UI", 10),
-                       width=self.W - 40, anchor="w", justify="left").pack(
-                           fill="x", pady=(0, 12))
+        # Each section below is a container that is packed or unpacked whole.
+        # Emptying one and leaving it in place does NOT work: Tk keeps the
+        # height the frame last asked for, which leaves a band of dead space
+        # where a question used to be.
+        self._view_box = tk.Frame(pad, bg=bg)
+        # A live mirror of the session's own screen: the conversation itself,
+        # which is what makes "chat about this" answerable from here.
+        # width=1 so the mirror never dictates how wide the window is — it
+        # fills whatever the question and the buttons ask for. wrap="word"
+        # because a terminal wider than this panel would otherwise have its
+        # lines quietly cut off at the right edge.
+        self._view = tk.Text(self._view_box, width=1, height=self.MIN_LINES,
+                             bg=T["key"], fg=dim, bd=0, relief="flat",
+                             wrap="word", font=("Consolas", 9),
+                             highlightthickness=0, insertwidth=0,
+                             padx=8, pady=6)
+        self._view.pack(fill="both", expand=True)
+        self._view.configure(state="disabled")
 
-        options = list(row.get("options") or [])
-        if options:
-            # The session offered a numbered menu, so offer the same choices
-            # rather than a Yes/No that means nothing here. Picking one sends
-            # its number, which is how that menu is answered.
-            selected = int(row.get("selected") or 0)
-            for index, label in enumerate(options, start=1):
-                here = index == selected      # what the session has highlighted
-                tk.Button(pad, text=f"{index}.  {label}",
-                          command=lambda n=index: self._send(str(n)),
-                          bg=T["accent_soft"] if here else T["track"],
-                          fg=fg, activebackground=T["accent"],
-                          activeforeground="#ffffff", bd=0, relief="flat",
-                          font=("Segoe UI Semibold" if here else "Segoe UI", 10),
-                          anchor="w", padx=12, pady=6,
-                          cursor="hand2").pack(fill="x", pady=(0, 4))
-            tk.Label(pad, text="…or type an answer", bg=bg, fg=dim,
-                     font=("Segoe UI", 9), anchor="w").pack(fill="x",
-                                                            pady=(6, 2))
-        else:
-            quick = tk.Frame(pad, bg=bg)
-            quick.pack(fill="x")
-            # Yes/No answer a permission prompt; a bare Enter accepts whatever
-            # option a menu already has highlighted.
-            for label, text, primary in (("Yes", "yes", True),
-                                         ("No", "no", False),
-                                         ("⏎ Enter", "", False)):
-                tk.Button(quick, text=label,
-                          command=lambda t=text: self._send(t, submit=True),
-                          bg=T["accent"] if primary else T["track"],
-                          fg="#ffffff" if primary else fg,
-                          activebackground=T["accent"] if primary else T["track"],
-                          bd=0, relief="flat", font=("Segoe UI Semibold", 10),
-                          padx=(22 if primary else 16), pady=5,
-                          cursor="hand2").pack(side="left", padx=(0, 8))
+        self._note_box = tk.Frame(pad, bg=bg)
+        self._note = tk.Label(self._note_box, text="", bg=bg, fg=dim,
+                              font=("Segoe UI", 9), anchor="w", justify="left",
+                              wraplength=self.W - 44)
+        self._note.pack(fill="x")
+
+        self._q_box = tk.Frame(pad, bg=bg)
+        self._question = tk.Message(self._q_box, text="", bg=bg, fg=fg,
+                                    font=("Segoe UI", 10), width=self.W - 44,
+                                    anchor="w", justify="left")
+        self._question.pack(fill="x")
+
+        self._opts = tk.Frame(pad, bg=bg)
+        self._quick = tk.Frame(pad, bg=bg)
 
         entry_row = tk.Frame(pad, bg=bg)
-        entry_row.pack(fill="x", pady=(12, 0))
         self.var = tk.StringVar()
-        entry = tk.Entry(entry_row, textvariable=self.var, bg=T["track"], fg=fg,
-                         insertbackground=fg, bd=0, relief="flat",
-                         font=("Segoe UI", 10))
-        entry.pack(side="left", fill="x", expand=True, ipady=5)
-        entry.bind("<Return>", lambda e: self._send(self.var.get()))
-        tk.Button(entry_row, text="Send",
-                  command=lambda: self._send(self.var.get()),
-                  bg=T["accent"], fg="#ffffff", activebackground=T["accent"],
-                  bd=0, relief="flat", font=("Segoe UI Semibold", 10),
-                  padx=16, pady=4, cursor="hand2").pack(side="right",
-                                                        padx=(8, 0))
+        self._entry = tk.Entry(entry_row, textvariable=self.var, bg=T["track"],
+                               fg=fg, insertbackground=fg, bd=0, relief="flat",
+                               font=("Segoe UI", 10))
+        self._entry.pack(side="left", fill="x", expand=True, ipady=5)
+        self._entry.bind("<Return>", lambda e: self._send(self.var.get()))
+        self._send_btn = tk.Button(
+            entry_row, text="Send", command=lambda: self._send(self.var.get()),
+            bg=T["accent"], fg="#ffffff", activebackground=T["accent"],
+            bd=0, relief="flat", font=("Segoe UI Semibold", 10), padx=16,
+            pady=4, cursor="hand2")
+        self._send_btn.pack(side="right", padx=(8, 0))
+        # Enter on its own accepts whatever a menu has highlighted, and is how
+        # a multiple-choice prompt is confirmed once the picks are made.
+        self._enter_btn = tk.Button(
+            entry_row, text="↵", command=lambda: self._send("", submit=True),
+            bg=T["track"], fg=fg, activebackground=T["track"], bd=0,
+            relief="flat", font=("Segoe UI", 10), padx=10, pady=4,
+            cursor="hand2")
+        self._enter_btn.pack(side="right", padx=(8, 0))
 
-        foot = tk.Label(pad, text="Open the terminal  →", bg=bg, fg=T["accent"],
-                        font=("Segoe UI", 9), cursor="hand2", anchor="e")
-        foot.pack(fill="x", pady=(12, 0))
-        foot.bind("<Button-1>", lambda e: self._open_terminal())
-
-        self.status = tk.Label(pad, text="", bg=bg, fg=dim,
+        foot = tk.Frame(pad, bg=bg)
+        self.status = tk.Label(foot, text="", bg=bg, fg=dim,
                                font=("Segoe UI", 9), anchor="w")
-        self.status.pack(fill="x", pady=(6, 0))
+        self.status.pack(side="left")
+        link = tk.Label(foot, text="Open the terminal  →", bg=bg,
+                        fg=T["accent"], font=("Segoe UI", 9), cursor="hand2")
+        link.pack(side="right")
+        link.bind("<Button-1>", lambda e: self._open_terminal())
 
-        self._centre(root)
+        # Top to bottom. Sections not currently in use are left out entirely
+        # rather than packed empty.
+        self._sections = (
+            (self._view_box, {"fill": "both", "expand": True}),
+            (self._note_box, {"fill": "x", "pady": (8, 0)}),
+            (self._q_box, {"fill": "x", "pady": (10, 4)}),
+            (self._opts, {"fill": "x", "pady": (6, 0)}),
+            (self._quick, {"fill": "x", "pady": (10, 0)}),
+            (entry_row, {"fill": "x", "pady": (10, 0)}),
+            (foot, {"fill": "x", "pady": (8, 0)}),
+        )
+        self._laid_out = None
+        self._render(self.row)
+        self._place(root)
+        self._tick()
+        # A second pass: the first one gave the window its size, and only now
+        # does the mirror have a width to measure its own wrapping against.
+        try:
+            self.top.update_idletasks()
+            self._show_screen(self._lines, self._upto)
+            self._place()
+        except Exception:
+            pass
         try:
             self.top.lift()
             self.top.focus_force()
-            entry.focus_set()
+            self._entry.focus_set()
         except Exception:
             pass
 
-    def _centre(self, root):
+    # -- rendering --------------------------------------------------------- #
+    def _paint_dot(self, color):
         try:
-            self.top.update_idletasks()
-            w, h = self.top.winfo_reqwidth(), self.top.winfo_reqheight()
-            wl, wt_, wr, wb = _monitor_workarea(
-                root.winfo_rootx() + root.winfo_width() // 2,
-                root.winfo_rooty() + root.winfo_height() // 2)
-            x = int(wr - w - 24)
-            y = int(wb - h - 24)
-            self.top.geometry(f"{max(w, self.W)}x{h}+{x}+{y}")
+            self._dot.delete("all")
+            self._dot.create_oval(1, 1, 9, 9,
+                                  fill=render.sev_color(self.T, color),
+                                  outline="")
         except Exception:
             pass
+
+    def _set_subtitle(self, row):
+        if not self.alive:
+            text = f"{row.get('project') or ''}  ·  ended"
+        else:
+            dwell = row.get("dwell") or ""
+            parts = [row.get("project") or "", row.get("status_text") or ""]
+            if dwell:
+                parts.append(dwell)
+            text = "  ·  ".join(p for p in parts if p)
+        try:
+            self._sub.configure(text=text.strip(" ·"))
+        except Exception:
+            pass
+
+    def _set_note(self, text):
+        try:
+            self._note.configure(text=text)
+        except Exception:
+            pass
+
+    def _relayout(self):
+        """Show exactly the sections that have something in them.
+
+        Repacks every section rather than toggling one, because pack() with no
+        reference appends — a section brought back on its own would jump to the
+        bottom of the window.
+        """
+        key = tuple(bool(box.winfo_children()) and self._wanted(box)
+                    for box, _opts in self._sections)
+        if key == self._laid_out:
+            return
+        self._laid_out = key
+        try:
+            for (box, _opts), _on in zip(self._sections, key):
+                box.pack_forget()
+            for (box, opts), on in zip(self._sections, key):
+                if on:
+                    box.pack(**opts)
+        except Exception:
+            pass
+
+    def _wanted(self, box):
+        if box is self._view_box:
+            return bool(self._lines)
+        if box is self._note_box:
+            return bool(self._note.cget("text"))
+        if box is self._q_box:
+            return bool(self._question.cget("text"))
+        return True
+
+    def _render(self, row):
+        """Draw the current state: question, choices and quick replies."""
+        self._set_subtitle(row)
+        try:
+            self._question.configure(text=row.get("question") or "")
+        except Exception:
+            pass
+        options = list(row.get("options") or [])
+        self._render_options(options, int(row.get("selected") or 0))
+        self._render_quick(row, options)
+        self._relayout()
+
+    def _render_options(self, options, selected):
+        # Rebuild only when the choices themselves change: redrawing every tick
+        # would make the buttons unclickable.
+        key = (options, selected, self.alive)
+        if key == self._options:
+            return
+        self._options = key
+        for child in self._opts.winfo_children():
+            child.destroy()
+        if not options:
+            return
+        T, fg = self.T, self.T["neutral"]
+        for index, label in enumerate(options, start=1):
+            here = index == selected        # what the session has highlighted
+            tk.Button(self._opts, text=f"{index}.  {label}",
+                      command=lambda n=index: self._pick(n),
+                      state="normal" if self.alive else "disabled",
+                      bg=T["accent_soft"] if here else T["track"], fg=fg,
+                      activebackground=T["accent"], activeforeground="#ffffff",
+                      disabledforeground=T["faint"], bd=0, relief="flat",
+                      font=("Segoe UI Semibold" if here else "Segoe UI", 10),
+                      anchor="w", padx=12, pady=5,
+                      cursor="hand2").pack(fill="x", pady=(0, 3))
+
+    def _render_quick(self, row, options):
+        """Yes / No, but only for a prompt that has no numbered menu of its own."""
+        kind = (bool(options), row.get("status"), self.alive)
+        if kind == self._quick_kind:
+            return
+        self._quick_kind = kind
+        for child in self._quick.winfo_children():
+            child.destroy()
+        if options or row.get("status") != sessions_core.WAITING or not self.alive:
+            return
+        T, fg = self.T, self.T["neutral"]
+        for label, text, primary in (("Yes", "yes", True), ("No", "no", False)):
+            tk.Button(self._quick, text=label,
+                      command=lambda t=text: self._send(t),
+                      bg=T["accent"] if primary else T["track"],
+                      fg="#ffffff" if primary else fg,
+                      activebackground=T["accent"] if primary else T["track"],
+                      bd=0, relief="flat", font=("Segoe UI Semibold", 10),
+                      padx=22 if primary else 18, pady=5,
+                      cursor="hand2").pack(side="left", padx=(0, 8),
+                                           pady=(10, 0))
+
+    def _show_screen(self, lines, upto=None):
+        """Mirror the session's screen, stopping where the menu begins.
+
+        The choices are already drawn as buttons below; showing them twice
+        would just push the buttons off the bottom.
+        """
+        try:
+            keep = sessions_core.screen_text(lines, upto, self.VIEW_LINES)
+            self._view.configure(state="normal")
+            self._view.delete("1.0", "end")
+            self._view.insert("1.0", "\n".join(keep))
+            # Fit the panel to what's in it. A fixed height leaves a slab of
+            # empty grey above a two-line exchange, and hides half a long one.
+            shown = len(keep)
+            try:
+                # Settle the layout first: until the panel has its real width
+                # every line "wraps" into dozens, and the count comes back as
+                # the maximum every time.
+                self._view.update_idletasks()
+                if self._view.winfo_width() > 1:
+                    shown = int(
+                        self._view.count("1.0", "end", "displaylines")[0])
+            except Exception:
+                pass
+            self._view.configure(
+                height=max(self.MIN_LINES, min(self.VIEW_LINES, shown)))
+            self._view.see("end")
+            self._view.configure(state="disabled")
+        except Exception:
+            pass
+
+    def _place(self, root=None):
+        """Sit the window in the bottom-right of the strip's monitor.
+
+        Anchored to its bottom edge, so growing a menu or a long reply pushes
+        the window UP and leaves the controls where the pointer already is.
+        """
+        try:
+            self.top.update_idletasks()
+            w = max(self.top.winfo_reqwidth(), self.W)
+            h = self.top.winfo_reqheight()
+            if (w, h) == self._size:
+                return
+            self._size = (w, h)
+            if self._corner is None:
+                anchor = root if root is not None else self.top.master
+                _wl, _wt, wr, wb = _monitor_workarea(
+                    anchor.winfo_rootx() + anchor.winfo_width() // 2,
+                    anchor.winfo_rooty() + anchor.winfo_height() // 2)
+                self._corner = (int(wr - 24), int(wb - 24))
+            right, bottom = self._corner
+            self.top.geometry(f"{w}x{h}+{right - w}+{bottom - h}")
+        except Exception:
+            pass
+
+    # -- live refresh ------------------------------------------------------ #
+    def _absorb(self, state):
+        """Take one poll of the session and reflect it."""
+        if not state:
+            return
+        was_alive = self.alive
+        self.alive = bool(state.get("alive"))
+        self.readable = bool(state.get("readable"))
+        row = dict(state.get("row") or self.row)
+        prompt = state.get("prompt")
+        if prompt:
+            row.update(question=prompt["question"],
+                       options=list(prompt["options"]),
+                       selected=prompt["selected"])
+        else:
+            row.update(question="", options=[], selected=0)
+        self.row = row
+        self._paint_dot(row.get("color", "grey") if self.alive else "grey")
+        if self.alive:
+            self._lines = state.get("lines")
+            self._upto = prompt["start"] if prompt else None
+            self._show_screen(self._lines, self._upto)
+        if not self.alive:
+            # Keep the last screen up — it is the only remaining record of what
+            # the session said — but nothing can be sent to it any more.
+            self._set_note("This session has ended.")
+            self._disable()
+        elif not self.readable:
+            self._set_note("Can't read this session's screen — it may not be "
+                           "running in a console this can attach to. Answers "
+                           "may still go through.")
+        elif row.get("status") == sessions_core.BUSY:
+            self._set_note("Working — anything you send now is queued.")
+        else:
+            self._set_note("")
+        self._render(row)
+        # The window is built before the first poll, so its real contents —
+        # the question, its choices, the reply — all arrive after it has been
+        # sized. Re-fit, or they hang off the bottom edge.
+        self._place()
+        if was_alive and not self.alive:
+            self._say("")
+
+    def _disable(self):
+        for widget in (self._entry, self._send_btn, self._enter_btn):
+            try:
+                widget.configure(state="disabled")
+            except Exception:
+                pass
+
+    def _tick(self):
+        if self._closed:
+            return
+        try:
+            if self._poll and self.alive:
+                self._absorb(self._poll(self.row))
+        except Exception:
+            _log_exc()
+        try:
+            self._after = self.top.after(self.POLL_MS, self._tick)
+        except Exception:
+            pass
+
+    # -- actions ----------------------------------------------------------- #
+    def _pick(self, number):
+        """Answer with a menu number, having checked the menu still says that.
+
+        Between the buttons being drawn and one being clicked the session may
+        have moved on, and "3" would then mean something else entirely.
+        """
+        expected = list(self.row.get("options") or [])
+        try:
+            state = self._poll(self.row) if self._poll else None
+        except Exception:
+            _log_exc()
+            state = None
+        if state is not None:
+            self._absorb(state)
+            if list(self.row.get("options") or []) != expected:
+                self._say("That choice has moved — take another look.")
+                return
+        self._send(str(number))
 
     def _send(self, text, submit=True):
         ok, error = self._on_send(self.row, text, submit)
         if ok:
-            self.close()
-            return
+            # Deliberately stays open: an answer often starts a conversation,
+            # and that conversation continues right here.
+            try:
+                self.var.set("")
+                self._entry.focus_set()
+            except Exception:
+                pass
+            self._say("sent")
+        else:
+            self._say(error or "Couldn't send that.")
+        return ok
+
+    def _say(self, text):
         try:
-            self.status.configure(text=error or "Couldn't send that.")
+            self.status.configure(text=text)
         except Exception:
             pass
 
     def _open_terminal(self):
+        row = self.row
         self.close()
         if self._on_open:
-            self._on_open(self.row)
+            self._on_open(row)
 
     def close(self):
         if self._closed:
             return
         self._closed = True
+        if self._after:
+            try:
+                self.top.after_cancel(self._after)
+            except Exception:
+                pass
         try:
             self.top.destroy()
         except Exception:
@@ -1726,27 +2020,79 @@ class BarWidget:
         and the row menu so they can't drift apart."""
         return self._focus_session({"pid": pid})
 
-    def _live_question(self, row):
-        """Refresh a row with what the session is asking *right now*.
+    #: What a waiting session looks like, for the tour. Run through the real
+    #: parser like everything else in the demo, so the window it produces is
+    #: the one a live session produces.
+    _DEMO_SCREEN = (
+        "✻ Wrangled for 1m 12s",
+        "> summarise the release notes for me",
+        "⏺ Read 4 files (312 lines)",
+        "⏺ Two of these read as breaking changes rather than features.",
+        "─────────────────────────────────────────────────",
+        " [ ] Release notes",
+        "How should I write up the breaking changes?",
+        "> 1. Call them out at the top",
+        "     Their own section, above everything else.",
+        "  2. Keep them in with the rest",
+        "     In order, flagged where they appear.",
+        "  3. Leave them out for now",
+        "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    )
 
-        Read at the moment the window opens rather than on every tick: it costs
-        a console attach, and it is only ever needed here.
+    def _poll_session(self, row):
+        """Everything the answer window needs about one session, in one look.
+
+        Liveness comes from the registry rather than the pid alone: a pid that
+        has been reused belongs to something else, and typing an answer into
+        that would be considerably worse than not answering at all.
         """
-        try:
-            screen = console_send.read_screen(row.get("pid"))
-            prompt = sessions_core.parse_console_prompt(screen)
-            if prompt and (prompt["question"] or prompt["options"]):
-                return dict(row,
-                            question=prompt["question"] or row.get("question"),
-                            options=list(prompt["options"]),
-                            selected=prompt["selected"])
-        except Exception:
-            _log_exc()
-        return row
+        pid = row.get("pid")
+        live = self._row_for_pid(pid)
+        if self._demo:
+            # Never touch a console during the tour. Its pids are invented, and
+            # a real process could genuinely be running under one of them —
+            # answering a stranger's prompt is not a demo.
+            screen = list(self._DEMO_SCREEN)
+            return {"alive": live is not None, "row": live or row,
+                    "lines": screen, "readable": True,
+                    "prompt": sessions_core.parse_console_prompt(screen)}
+        screen = None
+        if live is not None:
+            try:
+                screen = console_send.read_screen(pid)
+            except Exception:
+                _log_exc()
+        prompt = None
+        if screen:
+            try:
+                prompt = sessions_core.parse_console_prompt(screen)
+            except Exception:
+                _log_exc()
+        return {"alive": live is not None, "row": live or row,
+                "lines": screen, "readable": screen is not None,
+                "prompt": prompt}
 
     def _open_answer(self, row):
-        row = self._live_question(row)
+        if (self._answer_win is not None
+                and self._answer_win.pid == row.get("pid")):
+            # Already open on this session — raise it rather than rebuild it,
+            # which would throw away a half-typed message.
+            try:
+                self._answer_win.top.lift()
+                self._answer_win.top.focus_force()
+                return
+            except Exception:
+                self._answer_win = None
+        # Read the screen before the window is built so it opens showing the
+        # real question rather than flashing the registry's coarse summary.
+        state = self._poll_session(row)
+        prompt = state.get("prompt")
+        if prompt:
+            row = dict(row, question=prompt["question"],
+                       options=list(prompt["options"]),
+                       selected=prompt["selected"])
         if self._answer_win is not None:
+            # One window at a time: only one console can be attached at once.
             try:
                 self._answer_win.close()
             except Exception:
@@ -1754,7 +2100,8 @@ class BarWidget:
         try:
             self._answer_win = AnswerWindow(
                 self.root, self._theme, row, self._send_answer,
-                self._focus_session, on_close=self._clear_answer)
+                self._focus_session, poll=self._poll_session,
+                on_close=self._clear_answer)
         except Exception:
             _log_exc()
             self._focus_session(row)      # fall back to the old behaviour
@@ -1762,23 +2109,31 @@ class BarWidget:
     def _clear_answer(self):
         self._answer_win = None
 
+    def _close_answer(self):
+        if self._answer_win is not None:
+            try:
+                self._answer_win.close()
+            except Exception:
+                self._answer_win = None
+
     def _send_answer(self, row, text, submit=True):
         """Deliver an answer to that exact session. Returns (ok, error).
 
-        Re-checks that the session is still live and still waiting: the answer
-        was composed for a question that may have been dealt with in the
-        meantime, and typing it into whatever the pid became would be worse
-        than not sending it.
+        Only requires the session to still be live, not to still be waiting:
+        answering a question routinely starts a conversation, and the messages
+        that follow are sent to a session that is idle or already working.
+        Claude Code queues those, which is exactly what typing into its
+        terminal would do.
         """
         body = console_send.clean(text)
         if not body and not submit:
             return False, "Type something first."
         pid = row.get("pid")
-        current = self._row_for_pid(pid)
-        if current is None:
+        if self._row_for_pid(pid) is None:
             return False, "That session has gone."
-        if current.get("status") != sessions_core.WAITING:
-            return False, "It isn't waiting any more."
+        if self._demo:
+            self._sess_sticky_pid = 0
+            return True, None       # the tour answers nothing real
         ok, error = console_send.send_text(pid, body, submit=submit)
         if ok:
             self._sess_sticky_pid = 0
@@ -1806,6 +2161,11 @@ class BarWidget:
         it takes you to the right terminal and stops there rather than pretending
         to land on the exact session.
         """
+        if self._demo:
+            # The tour's pids are invented and a real process may hold one, so
+            # this must not go looking for a window to raise.
+            self._notify_session("Demo — this opens that session's terminal.")
+            return
         try:
             pid = row.get("pid")
             parents = focus.parent_map()
@@ -2582,8 +2942,10 @@ class BarWidget:
             self._sess_disp = {}
             # A "needs you" toast has no timeout, so switching the monitor off
             # would otherwise leave it on screen forever with nothing left
-            # running to take it down.
+            # running to take it down. Same for an open answer window, which
+            # polls a session list that is no longer being kept.
             self._retire_sticky_toast([])
+            self._close_answer()
             return
         try:
             self._drain_hook_events()
@@ -2763,6 +3125,13 @@ class BarWidget:
                 [s.pid for s in live], focus.parent_map())
             if quiet_pid is not None:
                 alerts = [a for a in alerts if a["pid"] != quiet_pid]
+        if self._answer_win is not None and not self._demo:
+            # That session's next question is already on screen, in a window
+            # open in front of you. Announcing it would be talking over itself.
+            open_pid = self._answer_win.pid
+            alerts = [a for a in alerts if a["pid"] != open_pid]
+        if not alerts:
+            return
         # One toast at a time: a second destroys the first before it paints, so
         # a batch has to be summarised rather than fired one by one.
         merged = sessions_core.coalesce_alerts(alerts)

@@ -951,6 +951,43 @@ def test_parse_console_prompt_marker_elsewhere():
     assert out["selected"] == 2 and len(out["options"]) == 3
 
 
+def test_screen_text_drops_the_furniture():
+    out = sc.screen_text(REAL_SCREEN)
+    assert "─────────────────────────────────────────────────" not in out, (
+        "a rule wraps onto two lines in a narrow panel and says nothing")
+    assert "> again" in out, "what the user typed is not furniture"
+
+
+def test_screen_text_stops_at_the_prompt():
+    start = sc.parse_console_prompt(REAL_SCREEN)["start"]
+    out = sc.screen_text(REAL_SCREEN, upto=start)
+    assert not any("Networking events" in line for line in out), (
+        "the caller is drawing those as buttons")
+    assert "> again" in out
+
+
+def test_screen_text_keeps_the_end_not_the_beginning():
+    out = sc.screen_text([f"line {n}" for n in range(40)], limit=3)
+    assert out == ["line 37", "line 38", "line 39"], (
+        "the newest output is the part worth showing")
+
+
+def test_screen_text_swaps_glyphs_a_mono_font_lacks():
+    out = sc.screen_text(["⏺ Read 4 files", "  ⎿  312 lines"])
+    assert out == ["• Read 4 files", "  └  312 lines"], (
+        "Consolas has no ⏺ or ⎿ — left alone they draw as empty boxes on "
+        "nearly every line, which reads as a broken panel")
+
+
+def test_screen_text_leaves_the_words_alone():
+    line = "  Networking events aren't useless — they're badly matched."
+    assert sc.screen_text([line]) == [line]
+
+
+def test_screen_text_survives_nothing():
+    assert sc.screen_text(None) == [] and sc.screen_text([]) == []
+
+
 def test_parse_console_prompt_needs_the_menu_hint():
     # Numbered prose is not a menu.
     screen = ["Here are three things:", "1. one", "2. two", "3. three"]

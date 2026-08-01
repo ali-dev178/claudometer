@@ -147,12 +147,24 @@ Blocked sessions sort to the top and each row shows how long it's held that stat
 **You don't have to open anything.** The strip carries one coloured dot per session — `Live ● ● ●` — so a glance tells you how many are running and what each is doing. The moment one needs you, the leading dot turns **red** and stays red until it's dealt with, and the strip pulses once to catch your eye.
 
 - **Alerts** — a toast when a session needs you, finishes, or stays blocked too long. A *"needs you"* toast has **no timeout**: it waits until you click it or the session unblocks. Several at once collapse into one summary rather than burying each other.
-- **Click the toast** to land in that terminal — one click from notice to answering.
-- **A global shortcut** (`Ctrl+Alt+J` by default) jumps to whichever session is waiting, from any application.
-- **Click a row** to bring that session's terminal forward. **Right‑click** for open project folder, open transcript, copy session ID / path — and, on a blocked session, **Reply and go**, which puts `yes` / `no` / your own text on the clipboard and takes you there ready to paste.
+- **Click the toast** to answer the session that raised it, without leaving what you're doing.
+- **A global shortcut** (`Ctrl+Alt+J` by default) goes to whichever session is waiting, from any application.
+- **Click a row** to answer a blocked session, or to bring any other session's terminal forward. **Right‑click** for open project folder, open transcript, copy session ID / path, and *Reply and go*.
 - **Recently finished** sessions and a **today‑by‑project** usage split (with `show_cost`) live in the tray / menu‑bar menus. In the tray, the icon itself turns red with a count while sessions are blocked.
 
-> **Why not answer from the widget?** Because it can't be done safely. A running session exposes no channel to send input into, and the only alternative — typing into the terminal — raises the *window*, not the tab. Several sessions routinely share one terminal, so a blind `y` could approve something in a different session. Claudometer gets you there instead, with the answer already on your clipboard.
+### Answer it from here (Windows)
+
+<p align="center"><img src="assets/answer.png" alt="Answering a blocked session from the widget" width="760"></p>
+
+Clicking a blocked session opens it in a small window showing **the question it is actually asking** and its choices as buttons. Pick one and it goes straight to that session.
+
+The question comes off the session's own screen, because that is the only place it exists — Claude Code's transcript records a tool call *after* it has been answered, so while a session is waiting the transcript doesn't know what it asked.
+
+The window **stays open** once you answer. Choosing *"chat about this"* starts a conversation, not an ending, so it keeps mirroring the session and keeps taking messages — you only go to the terminal if you want to.
+
+It handles the rest of what a session can do to you: it says when one is **working** (anything you send is queued, exactly as typing into the terminal would be), when a menu **moved** under your pointer (that choice is refused rather than sent to a question you never read), and when the session has **ended** (the last thing it said stays up; nothing more can be sent).
+
+> **Why this is safe.** Input is delivered to the session's *process*, not to a window — several sessions routinely share one terminal and nothing in the process tree tells their tabs apart, so anything window-based would be a coin flip. Every send re-checks the session is still live first, since a process id gets reused. Windows only: this uses `AttachConsole`, and neither macOS nor a modern Linux has an equivalent — there, clicking a blocked session takes you to its terminal instead. Turn it off with `sessions_answer = false`.
 
 It reads `~/.claude/sessions` locally — the same registry Claude Code maintains — about once a second. Nothing is sent anywhere.
 

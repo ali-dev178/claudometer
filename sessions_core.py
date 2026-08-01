@@ -1344,6 +1344,32 @@ def _is_noise(line: str) -> bool:
     return len(letters) / len(stripped) < 0.35
 
 
+#: Claude Code's TUI glyphs, and the nearest thing a monospace UI font has.
+#: Left as-is they draw as empty boxes on nearly every line of output, which
+#: reads as a broken panel rather than as a session talking.
+_SCREEN_GLYPHS = str.maketrans({
+    "⏺": "•", "⧉": "•", "✻": "*", "✽": "*", "✢": "*", "✶": "*",
+    "⎿": "└", "⏵": ">", "❯": ">", "·": "·",
+})
+
+
+def screen_text(lines, upto=None, limit: int = 14):
+    """A session's screen, tidied enough to read in a small panel.
+
+    Drops the rules, spinners and empty prompt lines a TUI draws to fill its
+    window: each of them wraps onto two lines in a panel this narrow, and none
+    of them says anything. What is left is what the session actually wrote.
+
+    *upto* trims at the start of a prompt, for callers that are already showing
+    that prompt's choices as buttons.
+    """
+    rows = list(lines or [])
+    if upto is not None and 0 < upto <= len(rows):
+        rows = rows[:upto]
+    return [row.translate(_SCREEN_GLYPHS)
+            for row in rows if not _is_noise(row)][-limit:]
+
+
 def parse_console_prompt(lines):
     """Pull the question and its choices off a session's visible screen.
 
@@ -1387,16 +1413,20 @@ def parse_console_prompt(lines):
         if marked:
             selected = position
 
-    question = ""
+    question, start = "", first_at
     for index in range(first_at - 1, max(-1, first_at - 8), -1):
         candidate = rows[index]
         if _is_noise(candidate) or _SCREEN_OPTION_RE.match(candidate):
             continue
         question = oneline(candidate, 400)
+        start = index
         break
+    # ``start`` is where the prompt begins, so a caller showing the screen can
+    # stop there instead of repeating the menu it is already drawing as buttons.
     return {"question": question,
             "options": tuple(label for _n, label, _m in options),
-            "selected": selected}
+            "selected": selected,
+            "start": start}
 
 
 def pending_prompt(path, max_bytes: int = TRANSCRIPT_TAIL_BYTES):
