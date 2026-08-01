@@ -216,8 +216,10 @@ def contrast_gallery():
     rows_sheet(items, "gallery-contrast.png",
                "Legible on whatever it lands on",
                "The palette is chosen by contrast, then each label is lifted to "
-               "the WCAG AA ratio. Severity colours keep their hue — red, amber "
-               "and green are the message — and take a hairline outline instead.",
+               "the WCAG AA ratio. Severity colours never change hue — red, "
+               "amber and green are the message: the numbers only go lighter or "
+               "darker, and the dots, too small to darken without becoming three "
+               "identical blobs, keep their colour and take a ring instead.",
                label_w=230)
 
 

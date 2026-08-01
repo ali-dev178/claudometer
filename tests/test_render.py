@@ -725,9 +725,33 @@ def test_readable_rescues_every_label_colour_on_every_background():
                     f"{key} on {bg} in the {theme} theme is {ratio:.2f}:1")
 
 
-def test_outline_picks_the_end_the_background_is_furthest_from():
-    assert render.outline_for("#000000") == "#ffffff"
-    assert render.outline_for("#ffffff") == "#000000"
+def test_keeping_hue_leaves_a_visible_colour_alone():
+    assert render.keeping_hue("#e5484d", "#ffffff") == "#e5484d"
+
+
+def test_keeping_hue_reaches_the_target_without_changing_the_hue():
+    import colorsys
+    for bg in HOSTILE:
+        for name in ("red", "amber", "green"):
+            before = render.THEMES["light"][name]
+            after = render.keeping_hue(before, bg)
+            ratio = render.contrast_ratio(render._rgb(after), render._rgb(bg))
+            assert ratio >= render.SHAPE_CONTRAST - 0.01, \
+                f"{name} on {bg} is only {ratio:.2f}:1"
+            hue_before = colorsys.rgb_to_hls(
+                *[c / 255 for c in render._rgb(before)])[0]
+            hue_after = colorsys.rgb_to_hls(
+                *[c / 255 for c in render._rgb(after)])[0]
+            assert abs(hue_before - hue_after) < 0.02, (
+                f"{name} changed hue on {bg} — red, amber and green ARE the "
+                f"message, so only their lightness may move")
+
+
+def test_severity_colours_do_not_converge_on_a_hostile_background():
+    seen = {render.keeping_hue(render.THEMES["light"][n], "#808080")
+            for n in ("red", "amber", "green")}
+    assert len(seen) == 3, (
+        "blocked, working and done must still look different from each other")
 
 
 def test_severity_colours_stay_distinct_on_a_hostile_background():

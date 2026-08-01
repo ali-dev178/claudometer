@@ -32,7 +32,7 @@ Claude's Pro / Max / Team plans enforce a rolling **5‑hour session** limit and
 > ### 🖱️ Put it anywhere
 > The strip is a **free‑floating, always‑on‑top** widget — not locked to the taskbar. Drag it to a screen edge, over a window, or onto a second monitor, and it **remembers the spot**.
 >
-> Wherever it lands, it stays **readable**: it picks the light or dark palette by contrast against what's behind it, then lifts each label the rest of the way to the WCAG AA ratio if that isn't enough — on a saturated wallpaper the theme greys alone measure about 1.2:1. The severity colours are exempt, because red, amber and green *are* the message: they keep their hue and get a hairline outline instead. The background is never touched — blending into the taskbar is the point.
+> Wherever it lands, it stays **readable**: it picks the light or dark palette by contrast against what's behind it, then lifts each label the rest of the way to the WCAG AA ratio if that isn't enough — on a saturated wallpaper the theme greys alone measure about 1.2:1. Severity colours never change **hue**, because red, amber and green *are* the message: the numbers only go lighter or darker, and the dots — too small to darken without becoming three identical blobs — keep their colour and take a thin ring instead. The background is never touched: blending into the taskbar is the point.
 > *(On **macOS** the native menu‑bar item is the default; the same floating widget is available with `app.py bar` — see [Platform support](#platform-support).)*
 
 <p align="center"><img src="assets/anywhere.png" alt="Drag the Windows strip anywhere on screen — not just the taskbar" width="780"></p>
@@ -96,7 +96,9 @@ Each meter combination, each severity, the live‑session dot row filling up and
 
 ### …on whatever it's sitting on
 
-The strip samples the colour behind it and paints itself in that, so it can end up on anything. It picks the palette by contrast, then lifts each label to the WCAG AA ratio — on a saturated wallpaper the theme greys alone measure about **1.2:1**, which isn't dim, it's absent. Severity colours are exempt and take a hairline outline instead, because red, amber and green *are* the message.
+The strip samples the colour behind it and paints itself in that, so it can end up on anything. It picks the palette by contrast, then lifts each label to the WCAG AA ratio — on a saturated wallpaper the theme greys alone measure about **1.2:1**, which isn't dim, it's absent.
+
+Severity colours are handled separately, because red, amber and green *are* the message. Recolouring them the way labels are recoloured turns all three into the same near-black on a grey taskbar, which destroys the meaning to fix the legibility. So the **numbers** move along lightness only — a deeper amber is still obviously amber — and the **dots**, at four pixels too small to darken without becoming three identical blobs, keep their colour at full strength and take a thin ring instead.
 
 <p align="center"><img src="assets/gallery-contrast.png" alt="The strip staying legible on eight different backgrounds" width="640"></p>
 

@@ -69,14 +69,46 @@ def _rgb(color):
     return ImageColor.getrgb(color)[:3] if isinstance(color, str) else tuple(color[:3])
 
 
-def outline_for(bg):
-    """Black or white — whichever separates a shape from *bg*.
+def keeping_hue(color, bg, target=SHAPE_CONTRAST):
+    """*color* made legible on *bg* by changing only how light it is.
 
-    Used instead of recolouring anything whose COLOUR is the message. Red,
-    amber and green mean blocked, working and done; pushing them until they
-    contrast turns all three into the same near-black on a grey taskbar and
-    the same white on a teal one, which is a worse failure than being hard to
-    see. A hairline outline makes the shape visible and leaves the fill alone.
+    For anything whose COLOUR is the message — red, amber and green mean
+    blocked, working and done. Blending toward black or white the way
+    readable() does would turn all three into the same near-black on a grey
+    taskbar, which destroys the meaning rather than the legibility.
+
+    Moving along lightness alone keeps the hue: amber on a pale taskbar
+    becomes a deeper amber, still obviously amber, and still obviously not
+    the green next to it.
+    """
+    import colorsys
+
+    rgb, back = _rgb(color), _rgb(bg)
+    if contrast_ratio(rgb, back) >= target:
+        return color
+    h, light, s = colorsys.rgb_to_hls(*[c / 255.0 for c in rgb])
+    up = contrast_ratio(back, (255, 255, 255)) >= contrast_ratio(back, (0, 0, 0))
+    best, best_ratio = rgb, contrast_ratio(rgb, back)
+    for step in range(1, 25):
+        t = step / 24.0
+        cand_l = light + (1.0 - light) * t if up else light * (1.0 - t)
+        cand = tuple(round(c * 255) for c in colorsys.hls_to_rgb(h, cand_l, s))
+        ratio = contrast_ratio(cand, back)
+        if ratio > best_ratio:
+            best, best_ratio = cand, ratio
+        if ratio >= target:
+            break
+    return "#%02x%02x%02x" % best
+
+
+def outline_for(bg):
+    """Black or white — whichever separates a small shape from *bg*.
+
+    The session dots are four pixels across, and at that size darkening them
+    to meet contrast turns red, amber and green into three dark blobs. They
+    keep their colour at full strength and get a ring instead, which costs
+    nothing at that size. The numbers do the opposite: a ring around a glyph
+    reads as an outline you notice rather than a number you read.
     """
     back = _rgb(bg)
     return "#ffffff" if contrast_ratio(back, (255, 255, 255)) >= \
@@ -348,27 +380,27 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
     groups = []
     if "session" in metrics and disp.get("session_pct") is not None:
         sp = disp["session_pct"]
-        g = [("Session ", f_lbl, T["dim"], False),
+        g = [("Session ", f_lbl, T["dim"], "label"),
              (f"{sp}%", f_num, sev_color(T, disp.get("session_color", "grey")),
-              True)]
+              "sev")]
         if sp >= 100:  # be explicit when you're actually blocked
-            g.append(("   limit reached", f_dim, sev_color(T, "red"), True))
+            g.append(("   limit reached", f_dim, sev_color(T, "red"), "sev"))
         else:
             left = _fmt_left(disp.get("session_resets_at"))
             if left:
-                g.append(("   " + left, f_dim, T["faint"], False))
+                g.append(("   " + left, f_dim, T["faint"], "label"))
         groups.append(g)
     if "weekly" in metrics and disp.get("weekly_pct") is not None:
         groups.append([
-            ("Weekly ", f_lbl, T["dim"], False),
+            ("Weekly ", f_lbl, T["dim"], "label"),
             (f"{disp['weekly_pct']}%", f_num,
-             sev_color(T, disp.get("weekly_color", "grey")), True)])
+             sev_color(T, disp.get("weekly_color", "grey")), "sev")])
     # NOTE: sessions_* (plural) are the LIVE CLI sessions; session_* (singular)
     # is the 5-hour usage meter. The two dicts are merged before rendering.
     if "sessions" in metrics and disp.get("sessions_count") is not None:
         # "Live", not "Sessions": the strip already says "Session 61%" for the
         # 5-hour usage window, and the two side by side read as the same thing.
-        g = [("Live ", f_lbl, T["dim"], False)]
+        g = [("Live ", f_lbl, T["dim"], "label")]
         dots = disp.get("sessions_dots") or []
         if dots:
             # One dot per session, coloured by its state — readable without
@@ -376,18 +408,18 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
             f_dot = _font("reg", 13 * S)
             for i, color in enumerate(dots):
                 g.append(("●" + (" " if i < len(dots) - 1 else ""),
-                          f_dot, sev_color(T, color), True))
+                          f_dot, sev_color(T, color), "dot"))
             over = disp.get("sessions_dots_overflow") or 0
             if over:
-                g.append((f" +{over}", f_dim, T["dim"], False))
+                g.append((f" +{over}", f_dim, T["dim"], "label"))
         else:
-            g.append(("0", f_num, T["dim"], False))
+            g.append(("0", f_num, T["dim"], "label"))
         groups.append(g)
     if not groups:
         groups.append([("Claude  " + (disp.get("session") or "—"), f_dim,
-                        T["dim"], False)])
+                        T["dim"], "label")])
     if disp.get("_demo"):  # unmistakable marker so simulated data isn't mistaken for real
-        groups.insert(0, [("DEMO", f_num, sev_color(T, "amber"), True)])
+        groups.insert(0, [("DEMO", f_num, sev_color(T, "amber"), "sev")])
 
     cand = []
     if disp.get("session_pct") is not None:
@@ -407,7 +439,7 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
     tmp = ImageDraw.Draw(Image.new("RGB", (4, 4)))
 
     def gw(g):
-        return sum(tmp.textlength(t, font=f) for (t, f, _c, _m) in g)
+        return sum(tmp.textlength(t, font=f) for (t, f, _c, _k) in g)
 
     total = PAD + (DOT_R * 2 + DOTGAP) + sum(gw(g) for g in groups) \
         + GGAP * (len(groups) - 1) + PAD
@@ -423,34 +455,27 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
     # wallpaper the theme's own greys all but vanish — measured at 1.2:1,
     # which is not dim, it is absent. Fixed on the TEXT, never the background:
     # blending into the taskbar is the point of the strip.
-    ring = outline_for(bg_hex)
-    faint_dot = contrast_ratio(_rgb(dot_color), _rgb(bg_hex)) < SHAPE_CONTRAST
     r = DOT_R * (1.7 if disp.get("_pulse") else 1.0)
-    d.ellipse([dx - r, cy - r, dx + r, cy + r], fill=dot_color,
-              outline=ring if faint_dot else None,
-              width=max(1, S // 2) if faint_dot else 0)
+    d.ellipse([dx - r, cy - r, dx + r, cy + r],
+              fill=keeping_hue(dot_color, bg_hex))
     x = PAD + DOT_R * 2 + DOTGAP
     for gi, g in enumerate(groups):
         if gi > 0:
             x += GGAP
-        for (t, f, c, means) in g:
+        for (t, f, c, kind) in g:
             # Every glyph passes through here, the one place that knows both
             # the colour and what it will sit on.
-            if not means:
+            if kind == "dot":
+                d.text((x, cy), t, font=f, fill=c, anchor="lm",
+                       stroke_width=max(1, round(S * 0.6)),
+                       stroke_fill=outline_for(bg_hex))
+            elif kind == "sev":
+                # Lighter or darker only: which colour it is IS the message.
+                d.text((x, cy), t, font=f, fill=keeping_hue(c, bg_hex),
+                       anchor="lm")
+            else:
                 d.text((x, cy), t, font=f, fill=readable(c, bg_hex),
                        anchor="lm")
-            elif contrast_ratio(_rgb(c), _rgb(bg_hex)) < SHAPE_CONTRAST:
-                # Keep the hue — it is what red, amber and green MEAN — and
-                # separate it from the background with a hairline instead.
-                # Scaled with S, because the strip is drawn at S× and then
-                # downsampled: a flat 1px stroke here would come out a third
-                # of a pixel and vanish in the resize. Kept under a full pixel
-                # once resolved — enough to separate the glyph, not so much
-                # that you read the outline instead of the number.
-                d.text((x, cy), t, font=f, fill=c, anchor="lm",
-                       stroke_width=max(1, round(S * 0.7)), stroke_fill=ring)
-            else:
-                d.text((x, cy), t, font=f, fill=c, anchor="lm")
             x += tmp.textlength(t, font=f)
 
     return img.resize((max(1, round(total / S)), round(H / S)), Image.LANCZOS)
