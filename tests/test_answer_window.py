@@ -35,25 +35,10 @@ CHAT = [
 ]
 
 
-@pytest.fixture(scope="module")
-def root():
-    """One root for the module.
-
-    Tearing a root down and building another repeatedly leaves Tcl unable to
-    find its own library on this platform, which showed up as tests skipping
-    at random. Toplevels are per-test; the root is not.
-    """
-    try:
-        import tkinter as tk
-        top = tk.Tk()
-    except Exception as exc:                       # headless CI has no display
-        pytest.skip(f"no Tk display: {exc}")
-    top.withdraw()
-    yield top
-    try:
-        top.destroy()
-    except Exception:
-        pass
+@pytest.fixture
+def root(tk_root):
+    """The run-wide Tk root (see conftest). Toplevels are per-test; it is not."""
+    return tk_root
 
 
 def _row(pid=4242, status=sc.WAITING, **kw):

@@ -137,37 +137,26 @@ def test_example_config_documents_every_key():
 # --------------------------------------------------------------------------- #
 # The Settings window has to fit the screen it configures
 # --------------------------------------------------------------------------- #
-def _tk_or_skip():
-    try:
-        import tkinter as tk
-        root = tk.Tk()
-    except Exception as exc:                       # headless CI has no display
-        pytest.skip(f"no Tk display: {exc}")
-    root.withdraw()
-    return tk, root
-
-
 @pytest.mark.skipif(sys.platform not in ("win32", "darwin"),
                     reason="needs a real display")
-def test_settings_window_fits_the_screen(monkeypatch, tmp_path):
+def test_settings_window_fits_the_screen(monkeypatch, tmp_path, tk_root):
     monkeypatch.setenv("CLAUDOMETER_CONFIG", str(tmp_path / "c.toml"))
-    tk, root = _tk_or_skip()
+    import widget_bar
+    win = widget_bar.SettingsWindow(tk_root, "light", settings.load(),
+                                    on_apply=lambda c: None)
     try:
-        import widget_bar
-        win = widget_bar.SettingsWindow(root, "light", settings.load(),
-                                        on_apply=lambda c: None)
-        screen_h = root.winfo_screenheight()
+        screen_h = tk_root.winfo_screenheight()
         for note, toggle in (("collapsed", None),
                              ("sessions expanded", win._toggle_sessions),
                              ("all expanded", win._toggle_advanced)):
             if toggle:
                 toggle()
-            root.update_idletasks()
+            tk_root.update_idletasks()
             win._resize_scroll()
-            root.update_idletasks()
+            tk_root.update_idletasks()
             h = win.top.winfo_reqheight()
             assert h + 64 <= screen_h, (
                 f"Settings window is {h}px tall ({note}) on a {screen_h}px "
                 f"screen — the Save button would be off-screen")
     finally:
-        root.destroy()
+        win.top.destroy()
