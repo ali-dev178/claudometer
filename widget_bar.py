@@ -1661,7 +1661,7 @@ class BarWidget:
         pulsing the strip itself is the equivalent that's actually visible,
         since the strip IS what sits on the taskbar.
         """
-        if self._hidden or self._demo:
+        if self._hidden:
             return
         self._flash = (step % 2 == 0)
         self._sig = None                 # force the next tick to repaint
@@ -1778,6 +1778,41 @@ class BarWidget:
     # A scripted, fully offline sequence that drives the REAL alert/resume/render
     # code paths through every state — so you (and new users) can verify each
     # feature in ~50s instead of waiting for real usage to reach those conditions.
+    #: Plausible work for the tour's session list. Enough of them to show the
+    #: dot row overflowing.
+    _DEMO_SESSIONS = [
+        ("Ship the release pipeline", "claude-widget"),
+        ("Refactor the payment retries", "checkout-api"),
+        ("Draft the migration plan", "docs-site"),
+        ("Explore the caching idea", "proxy-passer"),
+        ("Chase the flaky login test", "web-app"),
+        ("Port the parser to Rust", "tokenizer"),
+        ("Write the upgrade notes", "handbook"),
+        ("Trim the docker image", "infra"),
+        ("Add the retry budget", "gateway"),
+        ("Rename the metrics", "telemetry"),
+        ("Tidy the changelog", "release-notes"),
+    ]
+
+    def _demo_session_set(self, spec):
+        """Build synthetic Sessions for one scene.
+
+        *spec* is a list of ``(index, status, waiting_for)``. Real Session
+        objects rather than pre-baked dicts, so the tour runs through the same
+        tracker, formatter and alert path as live data — if that path breaks,
+        the demo breaks with it.
+        """
+        now = sessions_core.now_ms()
+        out = []
+        for slot, (index, status, reason) in enumerate(spec):
+            title, project = self._DEMO_SESSIONS[index % len(self._DEMO_SESSIONS)]
+            out.append(sessions_core.Session(
+                session_id=f"demo-{index}", pid=900000 + index,
+                cwd=f"/demo/{project}", name=f"{project}-{index}",
+                title=title, status=status, waiting_for=reason,
+                status_updated_at=now - (45 + slot * 173) * 1000))
+        return out
+
     def _demo_timeline(self):
         now = datetime.now(timezone.utc)
 
@@ -1791,25 +1826,56 @@ class BarWidget:
             d.update(extra)
             return d
 
-        def status(session, color):  # a non-usage state (offline / rate-limited)
-            return {"_demo": True, "plan": None, "session": session,
-                    "session_pct": None, "weekly_pct": None, "face_color": color,
-                    "session_color": color, "weekly_color": color, "model_rows": []}
+        def status(session, color, **extra):  # non-usage state (offline / 429)
+            d = {"_demo": True, "plan": None, "session": session,
+                 "session_pct": None, "weekly_pct": None, "face_color": color,
+                 "session_color": color, "weekly_color": color, "model_rows": []}
+            d.update(extra)
+            return d
+
+        W, B, S, I = (sessions_core.WAITING, sessions_core.BUSY,
+                      sessions_core.SHELL, sessions_core.IDLE)
+
+        def live(*spec):
+            return {"_sessions": self._demo_session_set(list(spec))}
+
+        # The scripted list only ever GROWS, apart from one deliberate ending.
+        # Shrinking it would report a mass exodus the viewer never caused —
+        # jumping from ten sessions back to two once produced a bewildering
+        # "9 session updates" instead of the "Needs you" the scene was for.
+        working = live((0, B, ""), (1, S, ""), (2, I, ""))
+        blocked = live((0, W, "input needed"), (1, B, ""), (2, I, ""))
+        answered = live((0, B, ""), (1, B, ""), (2, I, ""))
+        finished = live((0, I, ""), (1, I, ""), (2, I, ""))
+        ended = live((0, I, ""), (1, B, ""))          # session 2 has ended
+        crowd_spec = [(0, I, ""), (1, B, "")] + [(i, B, "") for i in range(3, 11)]
+        crowd = live(*crowd_spec)
+        crowd_blocked = live(*[(i, W, "permission needed") if i == 5 else (i, s, r)
+                               for i, s, r in crowd_spec])
+        crowd_answered = live(*[(i, S, "") if i == 5 else (i, s, r)
+                                for i, s, r in crowd_spec])
 
         return [
-            (step(20, "green", 8, "green", 180), 4.0),    # 1  comfortable — green
-            (step(62, "amber", 15, "green", 120), 4.0),   # 2  getting close — amber
-            (step(84, "red", 22, "green", 40), 4.5),      # 3  session crosses 80% → alert
-            (step(93, "red", 24, "green", 16), 4.5),      # 4  session crosses 90% → alert
-            (step(48, "amber", 88, "red", 90), 4.5),      # 5  WEEKLY crosses 80% → alert
-            (step(100, "red", 30, "amber", 6), 4.5),      # 6  100% → "limit reached"
-            (step(85, "red", 30, "amber", 300), 6.0),     # 7  drop ≤90 → resume (Tier 1 notify)
-            (step(40, "green", 30, "amber", 240,
-                  cost_tokens=2_450_000, cost_usd=8.74), 5.0),   # 8  cost line (click to see)
-            (status("usage limit reached", "red"), 4.5),  # 9  rate-limited (429) state
-            (step(100, "red", 30, "amber", 5), 4.5),      # 10 limit reached again (capped)
-            (step(88, "red", 30, "amber", 260), 6.0),     # 11 drop ≤90 → resume (Tier 2 auto)
-            (status("offline (demo)", "grey"), 4.0),      # 12 graceful offline state
+            # The scenes carry a session list as well as usage, so the dot row
+            # on the strip is live throughout the tour rather than a separate
+            # act tacked on the end.
+            # Session moments are deliberately placed on scenes where no usage
+            # threshold is crossed. Only one toast exists at a time, so pairing
+            # them buries the session alert under the usage one — which is
+            # exactly what happened the first time this was built.
+            (step(20, "green", 8, "green", 180, **working), 4.0),   # 1  comfortable — green
+            (step(62, "amber", 15, "green", 120, **blocked), 5.5),  # 2  a session BLOCKS (no usage alert)
+            (step(84, "red", 22, "green", 40, **answered), 4.5),    # 3  session crosses 80% → alert
+            (step(93, "red", 24, "green", 16, **answered), 4.5),    # 4  session crosses 90% → alert
+            (step(48, "amber", 88, "red", 90, **answered), 4.5),    # 5  WEEKLY crosses 80% → alert
+            (step(100, "red", 30, "amber", 6, **answered), 4.5),    # 6  100% → "limit reached"
+            (step(85, "red", 30, "amber", 300, **finished), 6.0),   # 7  resume (Tier 1) + two finish
+            (step(40, "green", 30, "amber", 240, cost_tokens=2_450_000,
+                  cost_usd=8.74, **ended), 5.0),                    # 8  cost line + one session ends
+            (status("usage limit reached", "red", **crowd), 4.5),   # 9  rate-limited; the list grows
+            (step(100, "red", 30, "amber", 5, **crowd), 4.5),       # 10 limit reached again (capped)
+            (step(88, "red", 30, "amber", 260, **crowd_blocked), 6.0),   # 11 resume (Tier 2) + one blocks
+            (status("offline (demo)", "grey", **crowd_answered), 4.0),   # 12 offline; the block is answered
         ]
 
     def _toggle_demo(self):
@@ -1824,6 +1890,7 @@ class BarWidget:
         self._demo = True
         self._demo_resume_n = 0
         self._reset_alert_resume_state()
+        self._reset_demo_sessions()
         self._demo_seq = self._demo_timeline()
         self._demo_i = 0
         self._demo_tick()
@@ -1846,8 +1913,23 @@ class BarWidget:
                     pass
         self._toast = self._resume_toast = None
         self._reset_alert_resume_state()
+        # Hand the session list back to real data, with no scripted history
+        # left to mistake for it.
+        self._reset_demo_sessions()
         self._sig = None    # force a redraw once real data arrives
         self._wake.set()    # wake the poll thread to fetch + publish now
+
+    def _reset_demo_sessions(self):
+        """Clear the session view on the way into and out of the tour."""
+        self._sess_tracker.reset()
+        self._sess_stuck.reset()
+        self._sess_disp = {}
+        self._sess_extra = {}
+        self._sess_known_ids = frozenset()
+        self._sess_sticky_pid = 0
+        self._flash = False
+        # The tour's first scene is a baseline, not news — same rule as startup.
+        self._sess_seeded = False
 
     def _reset_alert_resume_state(self):
         self._alerted = {"session": set(), "weekly": set()}
@@ -1860,13 +1942,38 @@ class BarWidget:
                 pass
             self._resume_retry_after = None
 
+    def _demo_sessions_tick(self, live):
+        """Run one scene's sessions through the real pipeline.
+
+        Deliberately the same tracker, formatter and alert path the live data
+        uses — so the tour shows the actual behaviour (blocked-first ordering,
+        a sticky toast, a coalesced summary, the strip pulse) rather than a
+        staged imitation that could drift away from it.
+        """
+        try:
+            events = self._sess_tracker.update(live)
+            self._sess_disp = sessions_core.format_sessions(
+                live, max_rows=self._sessions_max_rows)
+            self._sess_disp["sessions_recent"] = sessions_core.format_recent(
+                self._sess_tracker.recent)
+            self._retire_sticky_toast(live)
+            self._session_alerts(events, live)
+        except Exception:
+            _log_exc()
+
     def _demo_tick(self):
         if not self._demo:
             return  # exited — stop the loop
-        disp, hold = self._demo_seq[self._demo_i % len(self._demo_seq)]
+        scene, hold = self._demo_seq[self._demo_i % len(self._demo_seq)]
+        live = scene.get("_sessions")
+        disp = {k: v for k, v in scene.items() if k != "_sessions"}
         with self._lock:
             self._disp = dict(disp)
             self._poll_seq += 1
+        if live is not None:
+            self._demo_sessions_tick(live)
+        else:
+            self._sess_disp = {}      # scenes with no session list show none
         self._demo_i += 1
         try:
             self._demo_after = self.root.after(int(hold * 1000), self._demo_tick)
@@ -2116,7 +2223,9 @@ class BarWidget:
         Never raises: a failure here must not take down the usage widget, which
         is the app's actual job.
         """
-        if not self._sessions_on or self._demo:
+        if self._demo:
+            return          # the tour drives the session list itself
+        if not self._sessions_on:
             self._sess_disp = {}
             return
         try:
@@ -2265,7 +2374,10 @@ class BarWidget:
             # running looks brand new. That's startup, not news.
             self._sess_seeded = True
             return
-        if not self._sess_alerts_on or self._hidden:
+        # The tour alerts regardless of the user's settings — it exists to show
+        # what the feature does — and shows every kind, same as it overrides the
+        # usage thresholds.
+        if not (self._sess_alerts_on or self._demo) or self._hidden:
             # The stuck watcher is deliberately NOT run here. Consuming a
             # crossing while we're suppressed would mean a session that got
             # blocked during a fullscreen app is never nudged — not even once
@@ -2278,8 +2390,9 @@ class BarWidget:
         events = [sessions_core.Transition(
             e.kind, by_id.get(e.session.session_id, e.session), e.before, e.after)
             for e in events]
-        alerts = sessions_core.alerts_for(events, self._sess_alert_on)
-        if "stuck" in self._sess_alert_on:
+        kinds = sessions_core.ALERT_KINDS if self._demo else self._sess_alert_on
+        alerts = sessions_core.alerts_for(events, kinds)
+        if "stuck" in kinds:
             alerts += [sessions_core.alert_for_stuck(s)
                        for s in self._sess_stuck.check(live)]
         if not alerts:

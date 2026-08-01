@@ -221,6 +221,7 @@ Optional environment overrides:
 > - the **limit‑reached** and **rate‑limited** states
 > - resume‑on‑reset — both **Tier 1** (notify + one click) and **Tier 2** (auto‑resume countdown)
 > - the estimated **cost** line (click the strip to see it) and the graceful **offline** state
+> - **live sessions** end to end — the dot row filling up and overflowing, a session **blocking** (red dot, red strip dot, a pulse and a toast that waits for you), it being answered, two **finishing** at once as one summary, and one **ending**
 >
 > Pick **◼ Exit demo** to snap back to your real usage. No network, no credentials, nothing real touched.
 

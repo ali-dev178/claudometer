@@ -335,12 +335,106 @@ def test_tick_is_inert_with_sessions_off():
     assert w._sess_disp == {}
 
 
-def test_tick_is_inert_during_the_demo():
+def test_tick_leaves_the_demo_alone():
+    # The tour drives the list itself; the live tick must not clobber it.
     w = Widget()
     w._demo = True
+    w._sess_disp = {"sessions_count": 3}
     w._sessions_tick()
-    assert w._sess_disp == {}
-    assert w._with_sessions({"a": 1}) == {"a": 1}
+    assert w._sess_disp == {"sessions_count": 3}
+
+
+# --------------------------------------------------------------------------- #
+# The demo tour
+# --------------------------------------------------------------------------- #
+class DemoWidget(Widget):
+    _demo = True
+    _sess_alerts_on = False          # the tour must alert anyway
+    _sess_alert_on = ()              # ...and show every kind
+
+    _demo_session_set = widget_bar.BarWidget._demo_session_set
+    _demo_sessions_tick = widget_bar.BarWidget._demo_sessions_tick
+    _demo_timeline = widget_bar.BarWidget._demo_timeline
+    _reset_demo_sessions = widget_bar.BarWidget._reset_demo_sessions
+    _DEMO_SESSIONS = widget_bar.BarWidget._DEMO_SESSIONS
+
+
+def test_demo_timeline_scenes_carry_sessions():
+    w = DemoWidget()
+    scenes = w._demo_timeline()
+    with_sessions = [s for s, _hold in scenes if "_sessions" in s]
+    assert len(with_sessions) >= 8, "the dot row should be live for most of the tour"
+
+
+def test_demo_session_set_builds_real_sessions():
+    w = DemoWidget()
+    live = w._demo_session_set([(0, sc.WAITING, "input needed"),
+                                (1, sc.BUSY, "")])
+    assert all(isinstance(s, sc.Session) for s in live)
+    assert live[0].status == sc.WAITING and live[0].waiting_for == "input needed"
+    assert live[0].title and live[0].project
+
+
+def test_demo_alerts_even_when_the_user_turned_them_off():
+    w = DemoWidget()
+    w._sess_seeded = True
+    busy = w._demo_session_set([(0, sc.BUSY, "")])
+    w._sess_tracker.update(busy)
+    blocked = w._demo_session_set([(0, sc.WAITING, "input needed")])
+    events = w._sess_tracker.update(blocked)
+    w._sess_disp = sc.format_sessions(blocked)
+    w._session_alerts(events, blocked)
+    assert w.toasts and w.toasts[-1][0] == "Needs you"
+
+
+def test_demo_shows_every_alert_kind():
+    # The user's sessions_alert_on is empty above; the tour overrides it.
+    w = DemoWidget()
+    w._sess_seeded = True
+    live = w._demo_session_set([(0, sc.BUSY, "")])
+    w._sess_tracker.update(live)
+    events = w._sess_tracker.update([])          # it ended
+    w._sess_disp = {}
+    w._session_alerts(events, [])
+    assert w.toasts and "ended" in w.toasts[-1][0].lower()
+
+
+def test_demo_first_scene_is_silent():
+    w = DemoWidget()
+    w._reset_demo_sessions()
+    scenes = w._demo_timeline()
+    first = next(s for s, _h in scenes if "_sessions" in s)
+    w._demo_sessions_tick(first["_sessions"])
+    assert w.toasts == [], "the opening scene is a baseline, not news"
+
+
+def test_demo_run_produces_the_headline_moments():
+    """Walk the whole tour and check it actually demonstrates the feature."""
+    w = DemoWidget()
+    w._reset_demo_sessions()
+    for scene, _hold in w._demo_timeline():
+        live = scene.get("_sessions")
+        if live is None:
+            continue
+        w._demo_sessions_tick(live)
+    titles = [t[0] for t in w.toasts]
+    assert "Needs you" in titles, "a session blocking is the whole point"
+    assert any("finished" in t.lower() for t in titles)
+    assert w.pulses >= 1, "the strip should pulse when something blocks"
+    # A blocked scene must produce a sticky, clickable toast.
+    sticky = [t for t in w.toasts if t[0] == "Needs you"]
+    assert sticky and sticky[0][3] is None and callable(sticky[0][4])
+
+
+def test_demo_reset_clears_everything():
+    w = DemoWidget()
+    w._sess_disp = {"sessions_count": 3}
+    w._sess_sticky_pid = 42
+    w._flash = True
+    w._reset_demo_sessions()
+    assert w._sess_disp == {} and w._sess_sticky_pid == 0
+    assert w._flash is False and w._sess_seeded is False
+    assert w._sess_tracker.sessions == [] and w._sess_tracker.recent == []
 
 
 def test_with_sessions_leaves_the_usage_meter_alone():
