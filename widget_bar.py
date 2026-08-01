@@ -534,6 +534,7 @@ class AnswerWindow:
     POLL_MS = 900
     VIEW_LINES = 14
     MIN_LINES = 4
+    HISTORY = 40
 
     def __init__(self, root, theme, row, on_send, on_open_terminal,
                  poll=None, on_close=None):
@@ -549,6 +550,9 @@ class AnswerWindow:
         self._corner = None        # bottom-right it is pinned to
         self._lines = None         # last screen, so it can be re-fitted
         self._upto = None
+        self._set_geom = None      # the size WE asked for, to spot resizes
+        self._geom_settled = False  # …seen honoured, so deviations are theirs
+        self._user_sized = False   # …after which the size is theirs, not ours
         self.alive = True
         self.readable = True
         self.row = dict(row)
@@ -566,6 +570,9 @@ class AnswerWindow:
             pass
         self.top.protocol("WM_DELETE_WINDOW", self.close)
         self.top.bind("<Escape>", lambda e: self.close())
+        # Resizable on purpose — a long conversation deserves a taller panel.
+        self.top.bind("<Configure>", self._sized_by_user)
+        self.top.minsize(self.W, 160)
 
         pad = tk.Frame(self.top, bg=bg)
         pad.pack(fill="both", expand=True, padx=16, pady=12)
@@ -802,7 +809,10 @@ class AnswerWindow:
         would just push the buttons off the bottom.
         """
         try:
-            keep = sessions_core.screen_text(lines, upto, self.VIEW_LINES)
+            # Keep more than fits: the panel auto-sizes to VIEW_LINES, but a
+            # window the user has stretched should reward them with the
+            # history that was already there rather than more empty grey.
+            keep = sessions_core.screen_text(lines, upto, self.HISTORY)
             self._view.configure(state="normal")
             self._view.delete("1.0", "end")
             self._view.insert("1.0", "\n".join(keep))
@@ -826,12 +836,31 @@ class AnswerWindow:
         except Exception:
             pass
 
+    def _sized_by_user(self, event):
+        """Notice the window being resized by hand, and stop re-fitting it.
+
+        Someone who drags this bigger wants a longer view of the conversation.
+        Snapping it back to fit the next reply would be the window arguing
+        with them once a second.
+        """
+        if event.widget is not self.top or self._set_geom is None:
+            return
+        want_w, want_h = self._set_geom
+        if abs(event.width - want_w) <= 2 and abs(event.height - want_h) <= 2:
+            # The window manager has honoured what we asked for. Only from
+            # here can a difference mean somebody dragged it.
+            self._geom_settled = True
+        elif self._geom_settled:
+            self._user_sized = True
+
     def _place(self, root=None):
         """Sit the window in the bottom-right of the strip's monitor.
 
         Anchored to its bottom edge, so growing a menu or a long reply pushes
         the window UP and leaves the controls where the pointer already is.
         """
+        if self._user_sized:
+            return
         try:
             self.top.update_idletasks()
             w = max(self.top.winfo_reqwidth(), self.W)
@@ -846,6 +875,8 @@ class AnswerWindow:
                     anchor.winfo_rooty() + anchor.winfo_height() // 2)
                 self._corner = (int(wr - 24), int(wb - 24))
             right, bottom = self._corner
+            self._set_geom = (w, h)
+            self._geom_settled = False       # wait for the WM to catch up
             self.top.geometry(f"{w}x{h}+{right - w}+{bottom - h}")
         except Exception:
             pass

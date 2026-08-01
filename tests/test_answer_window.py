@@ -303,6 +303,66 @@ def test_the_buttons_survive_a_tick_that_changes_nothing(harness):
 
 
 # --------------------------------------------------------------------------- #
+# Size
+# --------------------------------------------------------------------------- #
+def test_the_window_fits_itself_to_its_contents(harness):
+    short = harness([_state(["  Do you want to proceed?", "  > "])])
+    tall = harness([_state()])
+    assert tall.win.top.winfo_reqheight() > short.win.top.winfo_reqheight(), (
+        "six choices need more room than none — a fixed height either wastes "
+        "it or hides them")
+
+
+class _Resize:
+    """A <Configure> for a window the test harness keeps withdrawn."""
+
+    def __init__(self, widget, width, height):
+        self.widget, self.width, self.height = widget, width, height
+
+
+def test_a_hand_resize_is_left_alone(harness):
+    h = harness([_state(MENU), _state(CHAT)])
+    asked = h.win._set_geom
+    h.win._sized_by_user(_Resize(h.win.top, *asked))          # the WM obeys
+    h.win._sized_by_user(_Resize(h.win.top, asked[0] + 230, asked[1] + 400))
+    assert h.win._user_sized is True
+    h.win._tick()                        # the reply arrives
+    h.pump()
+    assert h.win._set_geom == asked, (
+        "re-fitting the window every second would be it arguing with the "
+        "person who just dragged it bigger")
+
+
+def test_the_size_we_asked_for_is_not_a_resize(harness):
+    h = harness([_state(MENU)])
+    h.win._sized_by_user(_Resize(h.win.top, *h.win._set_geom))
+    assert h.win._user_sized is False, (
+        "every geometry call we make raises Configure — treating those as "
+        "the user resizing would switch auto-fit off immediately")
+
+
+def test_the_window_settling_into_place_is_not_a_resize(harness):
+    h = harness([_state(MENU)])
+    asked = h.win._set_geom
+    h.win._geom_settled = False        # as it is the moment geometry is set
+    # Configure fires while a window is being mapped, long before it is the
+    # size that was asked for. Counting those would kill auto-fit at birth.
+    for size in ((1, 1), (asked[0], 120), asked):
+        h.win._sized_by_user(_Resize(h.win.top, *size))
+    assert h.win._user_sized is False
+
+
+def test_more_history_is_kept_than_is_shown(harness):
+    long_run = [f"  line {n}" for n in range(60)]
+    h = harness([_state(long_run)])
+    text = h.mirror()
+    assert text.count("\n") + 1 > widget_bar.AnswerWindow.VIEW_LINES, (
+        "a stretched window should reveal history that was already there, "
+        "not more empty panel")
+    assert "line 59" in text and "line 0" not in text
+
+
+# --------------------------------------------------------------------------- #
 # Housekeeping
 # --------------------------------------------------------------------------- #
 def test_closing_reports_once_and_stops_polling(harness):
