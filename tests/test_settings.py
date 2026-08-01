@@ -53,6 +53,37 @@ def test_session_alert_defaults(monkeypatch, tmp_path):
     assert cfg["sessions_quiet_foreground"] is True
 
 
+def test_a_hand_written_table_survives_a_save(tmp_path, monkeypatch):
+    cfg_file = tmp_path / "c.toml"
+    cfg_file.write_text("theme = 'dark'\n\n[custom]\nkeep = 1\nname = 'mine'\n",
+                        encoding="utf-8")
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(cfg_file))
+    import importlib
+    importlib.reload(settings)
+    settings.save(settings.load())
+    text = cfg_file.read_text(encoding="utf-8")
+    assert "[custom]" in text and "keep = 1" in text, (
+        "this file is the user's as much as ours — stringifying their table "
+        "into custom = \"{'keep': 1}\" destroys it with no way back")
+    # load() exposes only keys it knows; extras survive via save()'s re-read,
+    # so the file is what has to still parse.
+    assert settings._parse(text)["custom"] == {"keep": 1, "name": "mine"}
+
+
+def test_a_table_is_written_after_every_setting(tmp_path, monkeypatch):
+    cfg_file = tmp_path / "c.toml"
+    cfg_file.write_text("[custom]\nkeep = 1\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(cfg_file))
+    import importlib
+    importlib.reload(settings)
+    settings.save(settings.load())
+    text = cfg_file.read_text(encoding="utf-8")
+    assert text.index("[custom]") > text.index("theme ="), (
+        "everything after a [header] belongs to that table — emitting one "
+        "early would swallow every setting below it")
+    assert settings.load()["theme"] == settings.DEFAULTS["theme"]
+
+
 def test_alert_kinds_mirror_sessions_core():
     import sessions_core
     assert settings._VALID_ALERT_KINDS == sessions_core.ALERT_KINDS

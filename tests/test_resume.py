@@ -380,10 +380,29 @@ def test_open_terminal_darwin_builds_osascript(monkeypatch, popen_rec,
     assert resume.open_terminal(str(cwd), "sid42") is True
     args = popen_rec.last["args"]
     assert args[0] == "osascript"
-    script = args[-1]
-    assert resume._sh(str(cwd)) in script
-    assert resume._sh("sid42") in script
+    script = " ".join(args[1:])
+    assert resume._as(resume._sh(str(cwd))) in script
+    assert resume._as(resume._sh("sid42")) in script
     assert 'tell application "Terminal"' in script
+
+
+def test_open_terminal_darwin_escapes_a_quote_in_the_path(monkeypatch,
+                                                          popen_rec,
+                                                          no_startfile,
+                                                          tmp_path):
+    # Legal on macOS, and it used to end the AppleScript string literal early.
+    # osascript then failed asynchronously, so this reported success.
+    # The path is never created: Windows, where this suite runs, cannot make
+    # one containing a quote — which is the whole reason the bug survived.
+    awkward = '/Users/me/a "quoted" proj'
+    monkeypatch.setattr(resume.sys, "platform", "darwin")
+    monkeypatch.setattr(resume.Path, "exists", lambda self: True)
+    assert resume.open_terminal(awkward, "sid42") is True
+    script = " ".join(popen_rec.last["args"][1:])
+    do_script = script.split("do script ", 1)[1]
+    body = do_script[1:do_script.index('"', 1)] if do_script.startswith('"') else ""
+    assert '\\"quoted\\"' in script, "the inner quotes must be escaped"
+    assert body != "", "the literal must not end at the path's first quote"
 
 
 def test_open_terminal_linux_uses_first_available_terminal(monkeypatch, popen_rec,

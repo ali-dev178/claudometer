@@ -407,12 +407,68 @@ def test_parse_proc_stat_start_rejects_bad_hz():
     assert sc.parse_proc_stat_start(" ".join(fields), btime=0, hz=0) is None
 
 
-def test_parse_ps_lstart_round_trip():
-    from datetime import datetime
+def test_the_cli_fallback_is_rate_limited_even_when_it_finds_nothing(monkeypatch):
+    calls = []
+    monkeypatch.setattr(sc, "sessions_from_cli",
+                        lambda **k: calls.append(1) or [])
+    sc.reset_cli_cache()
+    for tick in range(10):            # ten polls inside one interval
+        sc._cli_fallback(timeout=5, at=100.0 + tick)
+    assert len(calls) == 1, (
+        "'no sessions' is a real answer — rate-limiting only non-empty ones "
+        "spawns a subprocess on every tick for the quiet case, which is most "
+        "of the time")
 
-    stamp = datetime(2026, 8, 1, 10, 23, 45).astimezone()
+
+def test_the_cli_fallback_asks_again_once_the_interval_passes(monkeypatch):
+    calls = []
+    monkeypatch.setattr(sc, "sessions_from_cli",
+                        lambda **k: calls.append(1) or [])
+    sc.reset_cli_cache()
+    sc._cli_fallback(timeout=5, at=100.0)
+    sc._cli_fallback(timeout=5, at=100.0 + sc.CLI_MIN_INTERVAL_S + 1)
+    assert len(calls) == 2
+
+
+def test_a_stale_start_time_cache_does_not_hide_a_session_forever(monkeypatch):
+    # The pid's previous holder started long ago and was cached. The pid is
+    # now a NEW session; without invalidation the mismatch would be permanent.
+    sc.reset_proc_start_cache()
+    sc._proc_start_cache[4242] = 1_000_000
+    monkeypatch.setattr(sc, "_proc_start_posix", lambda pid: 9_000_000)
+    monkeypatch.setattr(sc, "proc_start_ms",
+                        lambda pid: sc._proc_start_cache.get(
+                            pid, sc._proc_start_posix(pid)))
+    assert sc.pid_matches_session(4242, 9_000_000) is True
+    assert 4242 not in sc._proc_start_cache or \
+        sc._proc_start_cache[4242] != 1_000_000
+
+
+def test_a_genuinely_recycled_pid_is_still_rejected(monkeypatch):
+    sc.reset_proc_start_cache()
+    monkeypatch.setattr(sc, "proc_start_ms", lambda pid: 9_000_000)
+    assert sc.pid_matches_session(4242, 1_000_000) is False, (
+        "self-correcting on a mismatch must not turn into never rejecting")
+
+
+def test_parse_ps_lstart_round_trip():
+    # Read as UTC: the caller runs ps with TZ=UTC precisely so this stamp is
+    # unambiguous. Local time repeats an hour every autumn, and resolving it
+    # the wrong way is indistinguishable from a recycled pid.
+    from datetime import datetime, timezone
+
+    stamp = datetime(2026, 8, 1, 10, 23, 45, tzinfo=timezone.utc)
     text = stamp.strftime("%a %b %d %H:%M:%S %Y")
     assert sc.parse_ps_lstart(text) == int(stamp.timestamp() * 1000)
+
+
+def test_parse_ps_lstart_is_not_affected_by_the_local_timezone(monkeypatch):
+    a = sc.parse_ps_lstart("Sun Oct 25 02:30:00 2026")   # inside the DST fold
+    b = sc.parse_ps_lstart("Sun Oct 25 02:30:00 2026")
+    assert a == b and a is not None
+    # Same wall clock, one hour apart in the stamp, must be one hour apart.
+    later = sc.parse_ps_lstart("Sun Oct 25 03:30:00 2026")
+    assert later - a == 3_600_000
 
 
 def test_parse_ps_lstart_handles_padded_single_digit_day():
@@ -731,26 +787,34 @@ def test_sessions_from_cli_falls_back_to_claude_cmd(monkeypatch):
     assert [c[0] for c in calls] == ["claude", "claude.cmd"]
 
 
-def test_sessions_from_cli_empty_on_nonzero_exit(monkeypatch):
+# None, not [] — "I couldn't ask" has to be distinguishable from "it said
+# none", or a CLI that fails looks exactly like a machine with no sessions.
+def test_sessions_from_cli_unknown_on_nonzero_exit(monkeypatch):
     monkeypatch.setattr(sc.subprocess, "run", _FakeRun(stdout=CLI_JSON, returncode=1))
-    assert sc.sessions_from_cli() == []
+    assert sc.sessions_from_cli() is None
 
 
-def test_sessions_from_cli_empty_on_bad_json(monkeypatch):
+def test_sessions_from_cli_unknown_on_bad_json(monkeypatch):
     monkeypatch.setattr(sc.subprocess, "run", _FakeRun(stdout="not json"))
-    assert sc.sessions_from_cli() == []
+    assert sc.sessions_from_cli() is None
 
 
-def test_sessions_from_cli_empty_on_non_list_json(monkeypatch):
+def test_sessions_from_cli_unknown_on_non_list_json(monkeypatch):
     monkeypatch.setattr(sc.subprocess, "run", _FakeRun(stdout='{"a": 1}'))
-    assert sc.sessions_from_cli() == []
+    assert sc.sessions_from_cli() is None
 
 
-def test_sessions_from_cli_empty_on_timeout(monkeypatch):
+def test_sessions_from_cli_unknown_on_timeout(monkeypatch):
     monkeypatch.setattr(
         sc.subprocess, "run",
         _FakeRun(raises=sc.subprocess.TimeoutExpired(cmd="claude", timeout=1)))
-    assert sc.sessions_from_cli() == []
+    assert sc.sessions_from_cli() is None
+
+
+def test_sessions_from_cli_reports_a_genuine_empty_list(monkeypatch):
+    monkeypatch.setattr(sc.subprocess, "run", _FakeRun(stdout="[]"))
+    assert sc.sessions_from_cli() == [], (
+        "the CLI ran and said none — that is an answer, not a failure")
 
 
 def test_sessions_from_cli_skips_unusable_entries(monkeypatch):
@@ -775,14 +839,42 @@ def test_cli_fallback_refreshes_after_the_interval(monkeypatch):
     assert len(fake.calls) == 2
 
 
-def test_cli_fallback_retries_while_empty(monkeypatch):
-    # An empty result must not be cached, or a transient failure would pin the
-    # UI to "no sessions" for the whole interval.
+def test_a_reported_empty_list_is_cached_like_any_other_answer(monkeypatch):
+    # "There are no sessions" is an ANSWER. Refusing to cache it meant the
+    # quiet case — most of the time — spawned `claude agents --json` on every
+    # tick of a one-second loop.
     fake = _FakeRun(stdout="[]")
     monkeypatch.setattr(sc.subprocess, "run", fake)
-    sc._cli_fallback(timeout=1, at=100.0)
-    sc._cli_fallback(timeout=1, at=100.5)
-    assert len(fake.calls) == 2
+    sc.reset_cli_cache()
+    for tick in range(6):
+        sc._cli_fallback(timeout=1, at=100.0 + tick * 0.2)
+    assert len(fake.calls) == 1
+
+
+def test_a_failed_call_does_not_empty_the_list(monkeypatch):
+    # The original worry, kept: a transient failure must not pin the UI to
+    # "no sessions". It is now handled by distinguishing "the CLI said none"
+    # from "the CLI didn't answer", rather than by never caching.
+    good = _FakeRun(stdout=CLI_JSON)
+    monkeypatch.setattr(sc.subprocess, "run", good)
+    sc.reset_cli_cache()
+    first = sc._cli_fallback(timeout=1, at=100.0)
+    assert first, "sanity: the good call returned sessions"
+
+    monkeypatch.setattr(sc.subprocess, "run", _FakeRun(stdout="not json"))
+    later = sc._cli_fallback(timeout=1, at=100.0 + sc.CLI_MIN_INTERVAL_S + 1)
+    assert [s.session_id for s in later] == [s.session_id for s in first], (
+        "a failed call means 'I don't know', not 'nothing is running'")
+
+
+def test_a_permanently_broken_cli_is_still_rate_limited(monkeypatch):
+    fake = _FakeRun(stdout="not json")
+    monkeypatch.setattr(sc.subprocess, "run", fake)
+    sc.reset_cli_cache()
+    for tick in range(6):
+        sc._cli_fallback(timeout=1, at=100.0 + tick * 0.2)
+    assert len(fake.calls) <= 2, (
+        "a CLI that never works must not cost a process on every tick")
 
 
 def test_reset_cli_cache_forces_a_fresh_call(monkeypatch):
@@ -962,9 +1054,9 @@ def test_parse_console_prompt_marker_elsewhere():
 # What a session has said since you last typed
 # --------------------------------------------------------------------------- #
 TALKING = [
-    "⏺ An older answer you have already read.",
+    "● An older answer you have already read.",
     "> put the breaking changes at the top",
-    "⏺ Right — they get their own section, above everything else.",
+    "● Right — they get their own section, above everything else.",
     "  Two of the four are only breaking if you were relying on the old",
     "  default, so I'll say which.",
     "",
@@ -990,7 +1082,7 @@ def test_latest_reply_rejoins_the_terminals_wrapping():
 
 def test_latest_reply_drops_the_bookkeeping():
     out = sc.latest_reply(["✻ Cogitated for 14s", "⎿  Read 4 files (312 lines)",
-                           " [ ] Bad advice", "⏺ Here's what I found.", "> "])
+                           " [ ] Bad advice", "● Here's what I found.", "> "])
     assert out == "Here's what I found.", (
         "how long it thought and what a tool returned is not it talking")
 
@@ -998,7 +1090,7 @@ def test_latest_reply_drops_the_bookkeeping():
 def test_latest_reply_keeps_a_quoted_prompt_in_the_reply():
     # A long reply that quotes a shell prompt, still being written, so the
     # input box is nowhere near the bottom of the screen.
-    screen = ["⏺ Run this:", "  > npm run build",
+    screen = ["● Run this:", "  > npm run build",
               "  Then check the output.", "  It writes to dist/.",
               "  Nothing else changes.", "  Let me know how it goes.",
               "  I'll wait.", "  Ready when you are.", "  Anything else?",
@@ -1017,7 +1109,7 @@ def test_latest_reply_is_empty_when_it_has_not_spoken():
 
 
 def test_latest_reply_does_not_mistake_a_menu_choice_for_your_input():
-    out = sc.latest_reply(["⏺ Which way round?", "> 1. First", "  2. Second"])
+    out = sc.latest_reply(["● Which way round?", "> 1. First", "  2. Second"])
     assert out.startswith("Which way round?"), (
         "'> 1.' is the menu's highlight marker, not something you typed")
 
@@ -1030,15 +1122,15 @@ def test_latest_reply_stops_at_the_prompt():
 #: Verbatim from a session that had just answered — including the input box
 #: and the status bar UNDER it, which is what the window wrongly showed.
 REAL_TALKING = [
-    "⏺ That came back as a clarify request again — what would you like to clarify?",
+    "● That came back as a clarify request again — what would you like to clarify?",
     "✻ Worked for 5s",
     "✻ recap: You're testing the multiple-choice question picker with random"
     " casual questions, not project work. (disable recaps in /config)",
     "  again please",
-    "⏺ User answered Claude's questions:",
+    "● User answered Claude's questions:",
     "  ⎿ · You get to permanently delete one everyday annoyance. Which goes?"
     " → Traffic",
-    "⏺ Traffic — the honest answer. It's the only one on that list you can't"
+    "● Traffic — the honest answer. It's the only one on that list you can't"
     " opt out of by changing a habit or a setting.",
     "",
     "  Ready for another whenever you are.",
@@ -1060,8 +1152,22 @@ def test_latest_reply_ignores_the_input_box_and_status_bar():
     assert "clarify request" not in out, "that is an older turn"
 
 
+def test_latest_reply_knows_the_bullet_a_real_session_prints():
+    # U+25CF, read off a live session — NOT U+23FA, which is what these
+    # fixtures used to say. Every test passed and the reply pane was empty for
+    # every real session, because the fixtures agreed with the guess instead
+    # of with Claude Code.
+    assert sc.latest_reply(["● Here's what I found.", "> "]) == \
+        "Here's what I found."
+    assert sc._SAID_RE.match("● x"), "U+25CF is THE bullet"
+    for lookalike in ("⏺", "•", "⧉"):
+        assert sc._SAID_RE.match(lookalike + " x"), (
+            f"{lookalike!r} still has to parse — it turns up in transcripts "
+            f"and docs, and a near-miss shows a blank pane with no clue why")
+
+
 def test_latest_reply_is_capped():
-    out = sc.latest_reply(["⏺ " + "word " * 400], max_chars=120)
+    out = sc.latest_reply(["● " + "word " * 400], max_chars=120)
     assert len(out) <= 120
 
 

@@ -334,6 +334,7 @@ class Answering(Widget):
         self.notes = []
 
     _row_for_pid = widget_bar.BarWidget._row_for_pid
+    _session_is_live = widget_bar.BarWidget._session_is_live
     _send_answer = widget_bar.BarWidget._send_answer
     _act_on_session = widget_bar.BarWidget._act_on_session
 
@@ -509,6 +510,30 @@ def test_a_poll_of_a_departed_session_reads_no_console(monkeypatch):
     assert not reads, (
         "that pid belongs to something else now — reading its console is at "
         "best useless and at worst somebody else's screen")
+
+
+def test_a_session_past_the_row_limit_is_still_live(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "read_screen",
+                        lambda pid, **k: _SCREEN)
+    monkeypatch.setattr(widget_bar.console_send, "send_text",
+                        lambda pid, text, **k: (True, None))
+    busy = [_session(pid=100 + n, status=sc.BUSY) for n in range(8)]
+    tail = _session(pid=999, status=sc.IDLE)
+    w = Polling()
+    w._sess_disp = sc.format_sessions(busy + [tail], max_rows=3)
+    assert w._row_for_pid(999) is None, "sanity: it did not fit in the rows"
+    assert w._session_is_live(999) is True, (
+        "how many rows the user chose to display says nothing about whether a "
+        "session is running")
+    assert w._poll_session({"pid": 999})["alive"] is True
+    assert w._send_answer({"pid": 999}, "carry on") == (True, None), (
+        "an answer to a session that scrolled off the list must still land")
+
+
+def test_a_session_that_really_ended_is_not_live():
+    w = Polling()
+    w._sess_disp = sc.format_sessions([_session(pid=7, status=sc.BUSY)])
+    assert w._session_is_live(999) is False
 
 
 def test_an_unreadable_screen_is_reported_not_guessed(monkeypatch):

@@ -109,3 +109,41 @@ def test_can_send_on_windows():
 def test_sends_are_serialised():
     # Only one console can be attached at a time, so the lock has to exist.
     assert console_send._LOCK is not None
+
+
+# --------------------------------------------------------------------------- #
+# Which rows get read when the window is taller than the cap
+# --------------------------------------------------------------------------- #
+def test_a_tall_window_is_trimmed_from_the_top():
+    top, bottom = console_send.visible_rows(0, 300, 300, max_rows=120)
+    assert (top, bottom) == (180, 300), (
+        "the question, its menu and the newest reply are all at the BOTTOM — "
+        "capping from the top reads 120 rows of scrollback and misses them")
+
+
+def test_a_short_window_is_left_alone():
+    assert console_send.visible_rows(0, 59, 59, max_rows=120) == (0, 59)
+
+
+def test_the_row_range_never_leaves_the_buffer():
+    assert console_send.visible_rows(-5, 999, 40, max_rows=120) == (0, 40)
+    top, bottom = console_send.visible_rows(30, 10, 40, max_rows=120)
+    assert top <= bottom, "an inverted range would read the whole buffer"
+
+
+# --------------------------------------------------------------------------- #
+# Characters a console record cannot hold
+# --------------------------------------------------------------------------- #
+@pytest.mark.skipif(sys.platform != "win32", reason="ctypes wchar is Windows")
+def test_an_emoji_does_not_abort_the_send():
+    # A console record holds ONE wchar_t. Handing it a non-BMP character
+    # raises, after the widget has already attached to the session's console.
+    console_send._records(console_send.clean("nice 🎉"))
+
+
+def test_a_non_bmp_character_becomes_a_surrogate_pair():
+    assert list(console_send._units("a🎉")) == ["a", "\ud83c", "\udf89"]
+
+
+def test_ordinary_text_is_one_unit_per_character():
+    assert list(console_send._units("café")) == ["c", "a", "f", "é"]

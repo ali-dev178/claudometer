@@ -17,7 +17,7 @@ import sessions_core as sc          # noqa: E402
 import widget_bar                   # noqa: E402
 
 MENU = [
-    "  ⏺ Reading the release notes.",
+    "  ● Reading the release notes.",
     "  ⎿  Read 4 files",
     "",
     "  How should I write up the breaking changes?",
@@ -28,8 +28,8 @@ MENU = [
 ]
 
 CHAT = [
-    "  ⏺ Reading the release notes.",
-    "  ⏺ Right — I'll put them at the top under their own heading.",
+    "  ● Reading the release notes.",
+    "  ● Right — I'll put them at the top under their own heading.",
     "",
     "  > ",
 ]
@@ -196,16 +196,16 @@ def test_the_menu_gives_way_to_the_conversation(harness):
 
 
 def test_only_what_it_said_since_you_last_typed(harness):
-    h = harness([_state(["⏺ An older answer nobody needs again.",
+    h = harness([_state(["● An older answer nobody needs again.",
                          "> put them at the top",
-                         "⏺ Done — they're in their own section now.",
+                         "● Done — they're in their own section now.",
                          "> "])])
     assert h.reply() == "Done — they're in their own section now."
 
 
 def test_the_transcript_is_prose_not_a_terminal(harness):
     h = harness([_state(CHAT)])
-    assert "\n" not in h.reply() and "⏺" not in h.reply(), (
+    assert "\n" not in h.reply() and "●" not in h.reply(), (
         "terminal lines are wrapped to the terminal's width and marked with "
         "glyphs a UI font lacks — the sentence is what matters")
 
@@ -397,6 +397,15 @@ def test_a_working_session_never_closes_itself(harness):
     _stale(h.win)
     h.win._tick()
     assert h.closed is False, "it is about to say something"
+
+
+def test_a_session_running_a_command_never_closes_itself(harness):
+    h = harness([_state(CHAT, row=_row(status=sc.SHELL))])
+    _stale(h.win)
+    h.win._tick()
+    assert h.closed is False, (
+        "approving a command puts the session into SHELL — closing then means "
+        "the window vanishes while the thing you just approved is running")
 
 
 def test_a_half_typed_message_keeps_it_open(harness):

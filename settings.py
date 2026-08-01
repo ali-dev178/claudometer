@@ -328,11 +328,25 @@ def to_toml(cfg: dict) -> str:
         "# terminal. Windows only; elsewhere it opens the terminal instead.",
         f"sessions_answer = {v('sessions_answer')}",
     ]
+    # Keys the user added by hand. Tables are written LAST and as real TOML —
+    # everything after a [header] belongs to that table, so one emitted early
+    # would swallow every setting below it. A table stringified into a scalar
+    # (which is what happened before) silently destroys whatever the user put
+    # there, and this file is theirs as much as ours.
     extras = [k for k in cfg if k not in DEFAULTS]
-    if extras:
+    scalars = [k for k in extras if not isinstance(cfg[k], dict)]
+    tables = [k for k in extras if isinstance(cfg[k], dict)]
+    if scalars:
         L.append("")
-        for k in extras:
+        for k in scalars:
             L.append(f"{k} = {_toml_val(cfg[k])}")
+    for k in tables:
+        L.append("")
+        L.append(f"[{k}]")
+        for sub, value in cfg[k].items():
+            if isinstance(value, dict):
+                continue        # nested tables are beyond what we round-trip
+            L.append(f"{sub} = {_toml_val(value)}")
     L.append("")
     return "\n".join(L)
 

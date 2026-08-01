@@ -102,6 +102,21 @@ if _IS_WIN:  # pragma: no cover - platform specific
                     ("dwMaximumWindowSize", _COORD)]
 
 
+def visible_rows(win_top: int, win_bottom: int, buffer_rows: int,
+                 max_rows: int):
+    """Which rows of the console buffer to read, as a half-open range.
+
+    Split out of read_screen purely so it can be tested: it needs a real
+    console otherwise, and the one thing worth getting right here is which
+    END gets dropped when the window is taller than the cap. Everything that
+    matters — the newest reply, the question, its menu — is at the BOTTOM, so
+    the cap takes rows off the top.
+    """
+    top = max(0, win_top)
+    bottom = max(top, min(buffer_rows, win_bottom))
+    return max(top, bottom - max(1, max_rows)), bottom
+
+
 def read_screen(pid, max_rows: int = 120):
     """What a session currently has on screen, as a list of lines.
 
@@ -147,9 +162,9 @@ def read_screen(pid, max_rows: int = 120):
                 if width <= 0:
                     return None
                 # Only the visible window, not the whole scrollback.
-                top = max(0, int(info.srWindow.Top))
-                bottom = min(int(info.dwSize.Y), int(info.srWindow.Bottom) + 1)
-                bottom = min(bottom, top + max_rows)
+                top, bottom = visible_rows(
+                    int(info.srWindow.Top), int(info.srWindow.Bottom) + 1,
+                    int(info.dwSize.Y), max_rows)
                 buf = ctypes.create_unicode_buffer(width)
                 got = wintypes.DWORD()
                 rows = []
@@ -171,9 +186,26 @@ def read_screen(pid, max_rows: int = 120):
                 pass
 
 
+def _units(text: str):
+    """Split into UTF-16 code units, which is what a console record holds.
+
+    A KEY_EVENT_RECORD carries a single ``wchar_t``. Anything outside the
+    basic plane — an emoji, most obviously — is two units, and handing the
+    whole character to ctypes raises before a single key is delivered. Split
+    into surrogates and the console reassembles them on the far side.
+    """
+    for ch in text:
+        if ord(ch) <= 0xFFFF:
+            yield ch
+        else:
+            point = ord(ch) - 0x10000
+            yield chr(0xD800 + (point >> 10))
+            yield chr(0xDC00 + (point & 0x3FF))
+
+
 def _records(text: str):
     recs = []
-    for ch in text:
+    for ch in _units(text):
         for down in (True, False):
             rec = _INPUT_RECORD()
             rec.EventType = _KEY_EVENT

@@ -886,6 +886,8 @@ class AnswerWindow:
             self._set_note("Can't read this session's screen — it may not be "
                            "running in a console this can attach to. Answers "
                            "may still go through.")
+        elif row.get("status") == sessions_core.SHELL:
+            self._set_note("Running a command — anything you send is queued.")
         elif row.get("status") == sessions_core.BUSY:
             self._set_note("Working — anything you send now is queued.")
         else:
@@ -920,8 +922,11 @@ class AnswerWindow:
         if self.var.get().strip():
             return self._touch()        # a half-typed message is still yours
         status = self.row.get("status")
-        if self.alive and status in (sessions_core.WAITING, sessions_core.BUSY):
+        if self.alive and status in (sessions_core.WAITING, sessions_core.BUSY,
+                                     sessions_core.SHELL):
             # Its turn, or about to be yours again. Not finished either way.
+            # SHELL belongs here: approving a command puts the session into it,
+            # and the window would otherwise close while that command runs.
             return self._touch()
         left = self.CLOSE_AFTER - (time.monotonic() - self._touched)
         if left <= 0:
@@ -2035,6 +2040,16 @@ class BarWidget:
                 return row
         return None
 
+    def _session_is_live(self, pid):
+        """Is this pid still one of ours?
+
+        Deliberately NOT "is it among the visible rows". The list is truncated
+        to sessions_max_rows, so a session that scrolls off the bottom would
+        otherwise read as ended — and an answer meant for it would be refused
+        with "that session has gone" while it sat there waiting.
+        """
+        return pid in set((self._sess_disp or {}).get("sessions_pids") or [])
+
     def _act_on_session(self, row):
         """The one thing to do about a session.
 
@@ -2059,8 +2074,8 @@ class BarWidget:
     _DEMO_SCREEN = (
         "✻ Wrangled for 1m 12s",
         "> summarise the release notes for me",
-        "⏺ Read 4 files (312 lines)",
-        "⏺ Two of these read as breaking changes rather than features.",
+        "● Read 4 files (312 lines)",
+        "● Two of these read as breaking changes rather than features.",
         "─────────────────────────────────────────────────",
         " [ ] Release notes",
         "How should I write up the breaking changes?",
@@ -2080,6 +2095,7 @@ class BarWidget:
         that would be considerably worse than not answering at all.
         """
         pid = row.get("pid")
+        alive = self._session_is_live(pid)
         live = self._row_for_pid(pid)
         if self._demo:
             # Never touch a console during the tour. Its pids are invented, and
@@ -2090,7 +2106,7 @@ class BarWidget:
                     "lines": screen, "readable": True,
                     "prompt": sessions_core.parse_console_prompt(screen)}
         screen = None
-        if live is not None:
+        if alive:
             try:
                 screen = console_send.read_screen(pid)
             except Exception:
@@ -2101,7 +2117,7 @@ class BarWidget:
                 prompt = sessions_core.parse_console_prompt(screen)
             except Exception:
                 _log_exc()
-        return {"alive": live is not None, "row": live or row,
+        return {"alive": alive, "row": live or row,
                 "lines": screen, "readable": screen is not None,
                 "prompt": prompt}
 
@@ -2162,7 +2178,7 @@ class BarWidget:
         if not body and not submit:
             return False, "Type something first."
         pid = row.get("pid")
-        if self._row_for_pid(pid) is None:
+        if not self._session_is_live(pid):
             return False, "That session has gone."
         if self._demo:
             self._sess_sticky_pid = 0

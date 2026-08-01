@@ -26,7 +26,12 @@ classifiers = [
 dependencies = [
     "requests>=2.31",
     'pystray>=0.19 ; sys_platform != "darwin"',
-    'Pillow>=10.1 ; sys_platform != "darwin"',
+    # NOT excluded on macOS. It was, back when macOS meant the menu bar and
+    # nothing else — but `app.py bar` now runs the same floating widget there,
+    # and widget_bar imports PIL at module scope. Excluding it made every
+    # documented macOS full-widget path exit with ModuleNotFoundError, silently
+    # when launched from the .app.
+    'Pillow>=10.1',
     'rumps>=0.4 ; sys_platform == "darwin"',
 ]
 

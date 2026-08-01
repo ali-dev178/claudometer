@@ -282,8 +282,20 @@ class MenuApp(rumps.App):
         subprocess.Popen(["open", path])
 
     def _save(self):
+        """Write back only what this menu owns.
+
+        Re-reads first: the menu holds the config as it was at launch, and
+        "Open config file…" invites the user to edit the very same file by
+        hand. Writing the launch snapshot back would quietly revert every edit
+        they made since, which is a poor reward for using the item we gave them.
+        """
         try:
-            settings.save(self._cfg)
+            cfg = settings.load()
+            for key in ("metrics", "poll"):      # the only two this menu sets
+                if key in self._cfg:
+                    cfg[key] = self._cfg[key]
+            self._cfg = cfg
+            settings.save(cfg)
         except Exception:
             pass
 

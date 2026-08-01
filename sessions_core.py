@@ -445,6 +445,12 @@ def format_sessions(sessions, at_ms: Optional[int] = None,
         "sessions_blocked_pid": blocked[0].pid if blocked else 0,
         "sessions_blocked_label": oneline(blocked[0].label) if blocked else "",
         "sessions_overflow": max(0, count - len(shown)),
+        # EVERY live pid, not just the ones that fitted. Liveness must not
+        # depend on how many rows the user chose to display: a session pushed
+        # past that limit is still running, and anything that reads "has this
+        # ended?" off the visible rows would answer yes and refuse to talk
+        # to it.
+        "sessions_pids": [s.pid for s in ordered],
         "sessions_summary": summary,
         "sessions_color": overall_color(ordered),
         "sessions_empty": "No Claude sessions running",
@@ -686,17 +692,23 @@ def parse_proc_stat_start(stat_text: str, btime: int,
 
 
 def parse_ps_lstart(text: str) -> Optional[int]:
-    """macOS: epoch ms from `ps -o lstart=` output ("Fri Aug  1 10:23:45 2026")."""
-    from datetime import datetime
+    """macOS: epoch ms from `ps -o lstart=` output ("Fri Aug  1 10:23:45 2026").
+
+    The stamp is read as UTC, because the caller runs ``ps`` with ``TZ=UTC``
+    for it. Local time would be ambiguous for one hour every autumn, and
+    resolving it the wrong way looks identical to a recycled pid — which would
+    hide a perfectly live session until the widget restarted.
+    """
+    from datetime import datetime, timezone
 
     cleaned = " ".join(str(text or "").split())
     if not cleaned:
         return None
     try:
-        naive = datetime.strptime(cleaned, "%a %b %d %H:%M:%S %Y")
+        stamp = datetime.strptime(cleaned, "%a %b %d %H:%M:%S %Y")
     except ValueError:
         return None
-    return int(naive.astimezone().timestamp() * 1000)
+    return int(stamp.replace(tzinfo=timezone.utc).timestamp() * 1000)
 
 
 _proc_start_cache = {}
@@ -721,8 +733,14 @@ def _proc_start_posix(pid: int) -> Optional[int]:
                     value = parse_proc_stat_start(
                         fh.read(), btime, os.sysconf("SC_CLK_TCK"))
         elif sys.platform == "darwin":
+            # LC_ALL=C so the day and month names are the ones strptime knows,
+            # and TZ=UTC so the stamp is unambiguous: local time repeats an
+            # hour every autumn, and guessing the wrong side of it looks
+            # exactly like a recycled pid — which hides a live session.
+            env = dict(os.environ, LC_ALL="C", LANG="C", TZ="UTC")
             out = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="],
-                                 capture_output=True, text=True, timeout=5)
+                                 capture_output=True, text=True, timeout=5,
+                                 env=env)
             if out.returncode == 0:
                 value = parse_ps_lstart(out.stdout)
     except Exception:
@@ -800,7 +818,17 @@ def pid_matches_session(pid, started_at,
     actual = proc_start_ms(pid)
     if actual is None:
         return True
-    return abs(actual - int(started_at)) <= tolerance_s * 1000
+    if abs(actual - int(started_at)) <= tolerance_s * 1000:
+        return True
+    # A mismatch is either a genuinely recycled pid or a stale cache entry
+    # from the PREVIOUS holder of this pid — and on POSIX the start time is
+    # cached for the life of the widget, so the second case would hide a real
+    # session forever. Drop the entry and ask again; a mismatch is rare, so
+    # this costs nothing in the normal case.
+    if _proc_start_cache.pop(pid, None) is None:
+        return False
+    fresh = proc_start_ms(pid)
+    return fresh is None or abs(fresh - int(started_at)) <= tolerance_s * 1000
 
 
 # --------------------------------------------------------------------------- #
@@ -988,7 +1016,12 @@ def _no_window_kwargs() -> dict:
 
 
 def sessions_from_cli(timeout: int = 10, include_done: bool = False):
-    """Ask the CLI for its session list. Returns [] on any failure.
+    """Ask the CLI for its session list.
+
+    Returns the list — possibly empty, which is a real answer — or None when
+    the CLI could not be run or understood at all. The caller needs to tell
+    those apart: "there are no sessions" can be cached like any other answer,
+    while "I couldn't ask" must not be mistaken for it.
 
     This is the documented scripting interface, but it collapses ``shell`` into
     ``busy`` and omits the dwell timestamps, so it is strictly a fallback.
@@ -1014,16 +1047,25 @@ def sessions_from_cli(timeout: int = 10, include_done: bool = False):
             if session is not None:
                 sessions.append(replace(session, source="cli"))
         return sessions
-    return []
+    return None         # no candidate ran and parsed — we simply don't know
 
 
 def _cli_fallback(timeout: int, at: Optional[float] = None):
     """Rate-limited wrapper so a watch loop can't spawn a process per tick."""
     at = time.monotonic() if at is None else at
-    if _cli_cache["sessions"] and (at - _cli_cache["at"]) < CLI_MIN_INTERVAL_S:
+    # Keyed on WHEN we last asked, not on whether the answer was non-empty.
+    # "No sessions" is a real answer and has to be rate-limited like any
+    # other — testing the list for truthiness meant the quiet case, which is
+    # most of the time, spawned `claude agents --json` on every single tick.
+    if _cli_cache["at"] and (at - _cli_cache["at"]) < CLI_MIN_INTERVAL_S:
         return list(_cli_cache["sessions"])
     sessions = sessions_from_cli(timeout=timeout)
     _cli_cache["at"] = at
+    if sessions is None:
+        # The CLI didn't answer. Keep whatever it last said rather than
+        # reporting nothing — a transient failure must not empty the list —
+        # but still back off, or a CLI that never works is a process per tick.
+        return list(_cli_cache["sessions"])
     _cli_cache["sessions"] = list(sessions)
     return sessions
 
@@ -1351,9 +1393,13 @@ _PROMPT_RE = re.compile(r"^\s*[>❯⏵]\s*")
 #: which topic a question belongs to. None of it is the session talking.
 _ASIDE_RE = re.compile(r"^\s*(?:[✻✽✢✶*]\s|[⎿└]|\[.?\]\s|\d+\s*(?:tokens|lines))")
 
-#: The bullet Claude Code puts in front of everything it says.
-_SAID_RE = re.compile(r"^\s*[⏺•⧉]\s*(\S.*)$")
-_SAID_CHARS = " ⏺•⧉\t"
+#: The bullet Claude Code puts in front of everything it says. It is BLACK
+#: CIRCLE (U+25CF) — read off a live session's screen, not guessed. The
+#: lookalikes are kept because ⏺ appears in transcripts and documentation, and
+#: a bullet that is nearly right leaves the reply blank with nothing to show
+#: for it.
+_SAID_RE = re.compile(r"^\s*[●⏺•⧉]\s*(\S.*)$")
+_SAID_CHARS = " ●⏺•⧉\t"
 
 #: How far up from the bottom the input box can be. It is the last thing on
 #: screen bar the status bar, which is one or two lines.

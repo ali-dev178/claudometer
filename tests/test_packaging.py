@@ -42,6 +42,99 @@ def _top_level_modules():
     return {p.stem for p in ROOT.glob("*.py") if not p.stem.startswith("_")}
 
 
+#: import name -> the distribution that provides it.
+_DISTS = {"PIL": "Pillow", "pystray": "pystray", "rumps": "rumps",
+          "requests": "requests", "win32api": "pywin32", "win32con": "pywin32",
+          "win32gui": "pywin32", "AppKit": "pyobjc", "objc": "pyobjc"}
+
+
+def _local_modules():
+    return {p.stem for p in ROOT.glob("*.py")}
+
+
+def _third_party_imports(module, seen=None):
+    """Every third-party package *module* needs, following local imports.
+
+    Only unconditional, module-scope imports count — an import inside a
+    function or a platform branch is the caller's problem, not the installer's.
+    """
+    seen = seen if seen is not None else set()
+    if module in seen:
+        return set()
+    seen.add(module)
+    path = ROOT / f"{module}.py"
+    if not path.exists():
+        return set()
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found = set()
+    for node in tree.body:                    # module scope only
+        names = []
+        if isinstance(node, ast.Import):
+            names = [a.name.split(".")[0] for a in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names = [node.module.split(".")[0]]
+        for name in names:
+            if name in _local_modules():
+                found |= _third_party_imports(name, seen)
+            elif name in _DISTS:
+                found.add(_DISTS[name])
+    return found
+
+
+def _requirement_lines():
+    """The dependency strings, one per line.
+
+    Parsed line by line rather than with one regex over the block: a
+    requirement is routinely quoted with ' while containing " (the platform
+    markers do exactly that), and a single findall splits those in half.
+    """
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    block = re.search(r"dependencies\s*=\s*\[(.*?)\n\]", text, re.S)
+    assert block, "dependencies list not found in pyproject.toml"
+    out = []
+    for raw in block.group(1).splitlines():
+        raw = raw.strip()
+        if not raw or raw.startswith("#"):
+            continue
+        quoted = re.match(r"""(['"])(.+?)\1\s*,?$""", raw)
+        if quoted:
+            out.append(quoted.group(2))
+    return out
+
+
+def test_the_cross_platform_widget_needs_no_platform_specific_install():
+    """widget_bar runs on every platform, so what it imports must install there.
+
+    Pillow was excluded on macOS from back when macOS meant the menu bar and
+    nothing else. `app.py bar` later started running this same widget there,
+    and nobody revisited the marker — so every documented macOS full-widget
+    path died on `import PIL`, silently when launched from the .app.
+    """
+    needed = _third_party_imports("widget_bar")
+    assert "Pillow" in needed, "sanity: widget_bar imports PIL"
+    lines = _requirement_lines()
+    for dist in sorted(needed):
+        matching = [ln for ln in lines
+                    if re.match(rf"{re.escape(dist)}\b", ln, re.I)]
+        assert matching, f"{dist} is imported by widget_bar but not required"
+        for line in matching:
+            assert "sys_platform" not in line, (
+                f"{dist} is required only on some platforms ({line!r}), but "
+                f"widget_bar imports it at module scope and app.py runs "
+                f"widget_bar on every platform — the excluded one gets a "
+                f"ModuleNotFoundError instead of a widget")
+
+
+def test_a_platform_only_dependency_is_only_imported_there():
+    """The flip side: pystray/rumps ARE correctly excluded, so nothing that
+    loads everywhere may import them."""
+    everywhere = _third_party_imports("widget_bar") | _third_party_imports("app")
+    for dist in ("pystray", "rumps"):
+        assert dist not in everywhere, (
+            f"{dist} is excluded on some platforms, so it must stay behind a "
+            f"platform branch rather than a module-scope import")
+
+
 # --------------------------------------------------------------------------- #
 # Wheel contents
 # --------------------------------------------------------------------------- #
