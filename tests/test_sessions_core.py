@@ -1039,6 +1039,16 @@ def test_parse_console_prompt_reports_where_the_prompt_begins():
         "without repeating the choices it is already drawing as buttons")
 
 
+def test_parse_console_prompt_strips_the_speech_bullet_from_the_question():
+    out = sc.parse_console_prompt([
+        "● Which heading should these go under?",
+        "> 1. Breaking changes", "  2. Upgrade notes",
+        "Enter to select · ↑/↓ to navigate · Esc to cancel"])
+    assert out["question"] == "Which heading should these go under?", (
+        "the bullet means 'Claude is talking'; in front of a question we are "
+        "already presenting as the question, it is litter")
+
+
 def test_parse_console_prompt_finds_the_highlighted_option():
     assert sc.parse_console_prompt(REAL_SCREEN)["selected"] == 1
 

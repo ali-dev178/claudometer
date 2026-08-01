@@ -337,26 +337,57 @@ def popover_gallery():
     one = sc.format_sessions(sessions(
         ("Ship the release pipeline", "claude-widget", W, 240, "input needed")))
 
+    import usage_core as uc
+
+    def status(state, **extra):
+        d = dict(uc.status_display(state), plan=None, model_rows=[])
+        d.update(extra)
+        return d
+
+    models = [{"label": "Opus", "pct": 71, "color": "amber"},
+              {"label": "Sonnet", "pct": 23, "color": "green"},
+              {"label": "Fable", "pct": 4, "color": "green"}]
+
     items = [
         ("Usage only", pop(usage)),
         ("With live sessions", pop(dict(usage, **full))),
         ("More than fit", pop(dict(usage, **crowd))),
         ("One session, blocked", pop(dict(usage, **one))),
+        ("Per-model breakdown", pop(dict(usage, model_rows=models))),
         ("Estimated cost (opt-in)",
          pop(dict(usage, cost_tokens=2_450_000, cost_usd=8.74))),
+        ("Cost and sessions together",
+         pop(dict(usage, cost_tokens=2_450_000, cost_usd=8.74, **full))),
+        ("Session limit reached",
+         pop(dict(usage, session_pct=100, session_color="red",
+                  session_resets_at=t + timedelta(minutes=6)))),
+        ("Weekly limit reached",
+         pop(dict(usage, weekly_pct=100, weekly_color="red"))),
+        ("A window that just reset",
+         pop(dict(usage, session_pct=0, session_color="green",
+                  weekly_pct=0, weekly_color="green"))),
         ("Nothing running", pop(dict(usage, **sc.format_sessions([])))),
+        ("Refreshing…",
+         pop(dict(usage, foot={"text": "Refreshing…", "dot": "amber"}, **full))),
+        ("Refreshed by hand",
+         pop(dict(usage, foot={"text": "Updated 12s ago · manual",
+                               "dot": "green"}, **full))),
+        ("Before the first poll",
+         pop(dict(usage, foot={"text": "Auto-updating", "dot": "green"}))),
+        ("Pro plan", pop(dict(usage, plan="Plan: Pro"))),
         ("Dark", pop(dict(usage, **full), "dark")),
-        ("Offline", pop({"plan": None, "session": "offline — last known",
-                         "session_pct": None, "weekly_pct": None,
-                         "model_rows": []})),
-        ("Rate limited", pop({"plan": None, "session": "usage limit reached",
-                              "session_pct": None, "weekly_pct": None,
-                              "face_color": "red", "model_rows": []}, "dark")),
+        ("Offline", pop(status(uc.Status.OFFLINE))),
+        ("Not logged in", pop(status(uc.Status.NO_CREDS))),
+        ("Rate limited", pop(status(uc.Status.RATE_LIMITED), "dark")),
+        ("Usage down, sessions still listed",
+         pop(status(uc.Status.OFFLINE, **full))),
     ]
     grid_sheet(items, "gallery-popover.png", "The details popover, end to end",
-               cols=3,
+               cols=4,
                note="Click the strip to open it. Blocked sessions sort to the "
-                    "top; each row shows how long it has held that state.")
+                    "top; each row shows how long it has held that state. The "
+                    "status cards come from usage_core, so their wording is "
+                    "the app's own.")
 
 
 # --------------------------------------------------------------------------- #

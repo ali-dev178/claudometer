@@ -1502,7 +1502,10 @@ def parse_console_prompt(lines):
         candidate = rows[index]
         if _is_noise(candidate) or _SCREEN_OPTION_RE.match(candidate):
             continue
-        question = oneline(candidate, 400)
+        # Strip the speech bullet if the question carries one: it is Claude
+        # Code's marker for "this is me talking", and repeating it in front of
+        # a question we are already presenting as the question is just litter.
+        question = oneline(candidate.strip().lstrip(_SAID_CHARS), 400)
         start = index
         break
     # ``start`` is where the prompt begins, so a caller showing the screen can

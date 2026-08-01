@@ -137,8 +137,33 @@ SHELL_RUNNING = [
 UNREADABLE = None
 
 
-def _grab_state(theme, lines, status, dwell_ms, alive=True, readable=True):
-    """One window in one state, captured."""
+TEN = ["● Which heading should these go under?"] + \
+      [f"{'>' if n == 1 else ' '} {n}. Option number {n}" for n in range(1, 11)] + \
+      ["Enter to select · ↑/↓ to navigate · Esc to cancel"]
+
+SECOND = [
+    "● How should I write up the breaking changes?",
+    "  1. Call them out at the top",
+    "> 2. Keep them in with the rest",
+    "  3. Leave them out for now",
+    "Enter to select · ↑/↓ to navigate · Esc to cancel",
+]
+
+LONG_REPLY = [
+    "> why not both?",
+    "● Because the two readings pull in opposite directions. Calling them out",
+    "  at the top serves the person upgrading in a hurry, who wants to know",
+    "  what will break before they read anything else. Keeping them inline",
+    "  serves the person reading the whole thing, for whom a separate section",
+    "  means reading the same change twice. Doing both means the notes",
+    "  contradict themselves about which list is authoritative.",
+    "> ",
+]
+
+
+def _grab_state(theme, lines, status, dwell_ms, alive=True, readable=True,
+                after=None):
+    """One window in one state, captured. *after* nudges it before the shot."""
     row = sc.format_sessions([sc.Session(
         session_id="s", pid=4242, cwd="/work/claude-widget",
         name="claude-widget-b8", title="Ship the release pipeline",
@@ -158,6 +183,11 @@ def _grab_state(theme, lines, status, dwell_ms, alive=True, readable=True):
     for _ in range(60):
         win.top.update_idletasks()
         win.top.update()
+    if after:
+        after(win)
+        for _ in range(30):
+            win.top.update_idletasks()
+            win.top.update()
     img = _capture(win.top.winfo_id())
     root.destroy()
     return img
@@ -182,6 +212,22 @@ def gallery():
          _grab_state("light", UNREADABLE, sc.WAITING, 60_000, readable=False)),
         ("The session ended",
          _grab_state("light", None, sc.IDLE, 60_000, alive=False)),
+        ("The highlight on option 2",
+         _grab_state("light", SECOND, sc.WAITING, 90_000)),
+        ("Ten options — the tall extreme",
+         _grab_state("light", TEN, sc.WAITING, 30_000)),
+        ("A long reply, rejoined as prose",
+         _grab_state("light", LONG_REPLY, sc.IDLE, 15_000)),
+        ("Sent — and still here",
+         _grab_state("light", ASKING, sc.WAITING, 4 * 60_000,
+                     after=lambda w: w._say("sent"))),
+        ("A send that failed",
+         _grab_state("light", ASKING, sc.WAITING, 4 * 60_000,
+                     after=lambda w: w._say("the session refused the input"))),
+        ("Nothing left to answer — closing",
+         _grab_state("light", LONG_REPLY, sc.IDLE, 30_000,
+                     after=lambda w: w._say(
+                         "nothing left to answer — closing in 7s"))),
         ("Dark",
          _grab_state("dark", ASKING, sc.WAITING, 4 * 60_000)),
     ]
