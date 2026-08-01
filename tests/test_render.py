@@ -183,6 +183,204 @@ def test_strip_custom_scale():
 
 
 # --------------------------------------------------------------------------- #
+# Live-sessions section (popover) and the "Live N" strip group
+# --------------------------------------------------------------------------- #
+def _row(label="a session", project="repo", color="amber",
+         detail="working · 4m", emoji="🟡", status="busy"):
+    return {"label": label, "project": project, "color": color,
+            "detail": detail, "emoji": emoji, "status": status}
+
+
+def _sess(rows, **extra):
+    out = {"session_pct": 50, "weekly_pct": 33, "sessions_rows": rows,
+           "sessions_count": len(rows), "sessions_overflow": 0,
+           "sessions_summary": "1 working", "sessions_color": "amber",
+           "sessions_empty": "No Claude sessions running", "sessions_blocked": 0}
+    out.update(extra)
+    return out
+
+
+@pytest.mark.parametrize("theme", ALL_THEMES)
+def test_popover_sessions_section_renders(theme):
+    out, _ = render.render_popover(_sess([_row()]), theme)
+    assert _is_image(out) and _positive_size(out)
+    assert out.size[0] == 344
+
+
+def test_popover_sessions_section_adds_height():
+    without = render.render_popover({"session_pct": 50, "weekly_pct": 33},
+                                    "light")[0].size[1]
+    with_ = render.render_popover(_sess([_row()]), "light")[0].size[1]
+    assert with_ > without
+
+
+def test_popover_grows_by_one_row_pitch_per_session():
+    one = render.render_popover(_sess([_row()]), "light")[0].size[1]
+    three = render.render_popover(_sess([_row(), _row(), _row()]),
+                                  "light")[0].size[1]
+    assert three - one == 2 * render.SESSION_ROW_H
+
+
+def test_popover_empty_session_list_still_renders_the_section():
+    # An empty list renders a "none running" line rather than vanishing, so the
+    # section doesn't blink in and out as sessions start and stop.
+    out, _ = render.render_popover(_sess([]), "light")
+    baseline = render.render_popover({"session_pct": 50, "weekly_pct": 33},
+                                     "light")[0].size[1]
+    assert out.size[1] > baseline
+
+
+def test_popover_absent_sessions_key_hides_the_section():
+    a = render.render_popover({"session_pct": 50, "weekly_pct": 33}, "light")[0]
+    b = render.render_popover({"session_pct": 50, "weekly_pct": 33,
+                               "sessions_rows": None}, "light")[0]
+    assert a.size == b.size
+
+
+def test_popover_overflow_line_adds_a_row():
+    plain = render.render_popover(_sess([_row()]), "light")[0].size[1]
+    over = render.render_popover(_sess([_row()], sessions_overflow=7),
+                                 "light")[0].size[1]
+    assert over - plain == render.SESSION_ROW_H
+
+
+def test_popover_returns_a_hit_rect_per_session_row():
+    _, hits = render.render_popover(_sess([_row(), _row(), _row()]), "light")
+    assert {"session:0", "session:1", "session:2"} <= set(hits)
+    assert {"settings", "refresh", "quit"} <= set(hits)
+
+
+def test_popover_session_hits_do_not_overlap_each_other():
+    _, hits = render.render_popover(_sess([_row(), _row(), _row()]), "light")
+    rects = [hits[f"session:{i}"] for i in range(3)]
+    for a, b in zip(rects, rects[1:]):
+        assert a[3] <= b[1] + 1, "consecutive row hit boxes overlap"
+
+
+def test_popover_session_hits_are_inside_the_card():
+    out, hits = render.render_popover(_sess([_row(), _row()]), "light")
+    w, h = out.size
+    for i in range(2):
+        x1, y1, x2, y2 = hits[f"session:{i}"]
+        assert 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h
+
+
+def test_popover_session_hits_clear_the_footer_controls():
+    _, hits = render.render_popover(_sess([_row(), _row()]), "light")
+    footer_top = min(hits[k][1] for k in ("settings", "refresh", "quit"))
+    for i in range(2):
+        assert hits[f"session:{i}"][3] <= footer_top, \
+            "a session row overlaps the footer buttons"
+
+
+def test_popover_no_session_hits_when_the_section_is_hidden():
+    _, hits = render.render_popover({"session_pct": 50, "weekly_pct": 33}, "light")
+    assert not [k for k in hits if k.startswith("session:")]
+
+
+def test_popover_no_session_hits_for_an_empty_list():
+    _, hits = render.render_popover(_sess([]), "light")
+    assert not [k for k in hits if k.startswith("session:")]
+
+
+def test_popover_sessions_footer_stays_below_the_rows():
+    rows = [_row() for _ in range(5)]
+    out, hits = render.render_popover(_sess(rows), "light")
+    # Every footer control must sit inside the card, below the last row.
+    for x1, y1, x2, y2 in hits.values():
+        assert 0 <= y1 < y2 <= out.size[1]
+
+
+def test_popover_long_label_and_project_do_not_raise():
+    out, _ = render.render_popover(
+        _sess([_row(label="z" * 300, project="y" * 200)]), "light")
+    assert _positive_size(out)
+
+
+def test_popover_session_row_missing_keys_does_not_raise():
+    out, _ = render.render_popover(_sess([{}]), "light")
+    assert _positive_size(out)
+
+
+def test_popover_sessions_with_cost_and_model_rows():
+    disp = _sess([_row(), _row()],
+                 model_rows=[{"label": "Fable", "pct": 4, "color": "green"}],
+                 cost_usd=1.23, cost_tokens=123456)
+    out, hits = render.render_popover(disp, "light")
+    assert _positive_size(out)
+    assert {"settings", "refresh", "quit"} <= set(hits)
+    assert {"session:0", "session:1"} <= set(hits)
+
+
+@pytest.mark.parametrize("n,expected_fits", [(1, True), (6, True), (12, True)])
+def test_popover_height_fits_a_1366x768_work_area(n, expected_fits):
+    # settings caps sessions_max_rows at 12 precisely so this holds; the
+    # placement math can move the card but never shrink it.
+    disp = _sess([_row() for _ in range(n)],
+                 model_rows=[{"label": "Fable", "pct": 4, "color": "green"}],
+                 cost_usd=1.23, cost_tokens=123456)
+    h = render.render_popover(disp, "light")[0].size[1]
+    assert (h + 16 <= 768 - 48) is expected_fits
+
+
+def test_strip_live_group_renders():
+    img = render.render_strip(
+        {"session_pct": 50, "session_color": "green", "sessions_count": 3,
+         "sessions_color": "amber", "sessions_blocked": 0},
+        "#ffffff", "light", metrics=("session", "sessions"))
+    assert _is_image(img) and _positive_size(img)
+
+
+def test_strip_draws_one_dot_per_session():
+    base = {"session_pct": 50, "session_color": "green", "sessions_color": "amber"}
+    one = render.render_strip(
+        dict(base, sessions_count=1, sessions_dots=["amber"]),
+        "#ffffff", "light", metrics=("session", "sessions"))
+    four = render.render_strip(
+        dict(base, sessions_count=4, sessions_dots=["red"] + ["amber"] * 3),
+        "#ffffff", "light", metrics=("session", "sessions"))
+    assert four.size[0] > one.size[0]
+
+
+def test_strip_dot_overflow_is_shown():
+    base = {"session_pct": 50, "session_color": "green", "sessions_color": "amber",
+            "sessions_count": 12, "sessions_dots": ["amber"] * 8}
+    plain = render.render_strip(dict(base, sessions_dots_overflow=0), "#ffffff",
+                                "light", metrics=("session", "sessions"))
+    over = render.render_strip(dict(base, sessions_dots_overflow=4), "#ffffff",
+                               "light", metrics=("session", "sessions"))
+    assert over.size[0] > plain.size[0]
+
+
+def test_strip_zero_sessions_still_renders():
+    img = render.render_strip(
+        {"session_pct": 50, "session_color": "green", "sessions_count": 0,
+         "sessions_dots": [], "sessions_color": "grey"},
+        "#ffffff", "light", metrics=("session", "sessions"))
+    assert _is_image(img) and _positive_size(img)
+
+
+def test_strip_omits_live_group_without_a_count():
+    with_ = render.render_strip(
+        {"session_pct": 50, "session_color": "green", "sessions_count": 2,
+         "sessions_color": "amber"}, "#ffffff", "light",
+        metrics=("session", "sessions"))
+    without = render.render_strip(
+        {"session_pct": 50, "session_color": "green"}, "#ffffff", "light",
+        metrics=("session", "sessions"))
+    assert with_.size[0] > without.size[0]
+
+
+def test_strip_live_group_not_drawn_unless_requested():
+    disp = {"session_pct": 50, "session_color": "green", "sessions_count": 3,
+            "sessions_color": "amber"}
+    off = render.render_strip(disp, "#ffffff", "light", metrics=("session",))
+    on = render.render_strip(disp, "#ffffff", "light",
+                             metrics=("session", "sessions"))
+    assert on.size[0] > off.size[0]
+
+
+# --------------------------------------------------------------------------- #
 # render_popover
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("theme", ALL_THEMES)
@@ -498,3 +696,136 @@ def test_sev_color_falls_back_to_dim_for_unknown():
     T = render.THEMES["light"]
     assert render.sev_color(T, "totally-unknown") == T["dim"]
     assert render.sev_color(T, "green") == T["green"]
+
+
+# --------------------------------------------------------------------------- #
+# Staying legible on whatever the strip is sitting on
+# --------------------------------------------------------------------------- #
+#: Real taskbar and wallpaper colours where the theme's own greys measured
+#: between 1.0:1 and 2.2:1 — not dim, absent.
+HOSTILE = ("#808080", "#008080", "#808000", "#e0409a", "#00a000", "#d97757",
+           "#0050c0", "#5aa9e6", "#e8a317", "#7b1f2b", "#c00000")
+
+
+def test_readable_leaves_a_legible_colour_alone():
+    assert render.readable("#161b22", "#ffffff") == "#161b22", (
+        "recolouring something already legible would drift the palette for "
+        "no reason")
+
+
+def test_readable_rescues_every_label_colour_on_every_background():
+    for bg in HOSTILE + ("#202020", "#f3f3f3"):
+        for theme in ALL_THEMES:
+            T = render.THEMES[theme]
+            for key in ("neutral", "dim", "faint"):
+                fixed = render.readable(T[key], bg)
+                ratio = render.contrast_ratio(render._rgb(fixed),
+                                              render._rgb(bg))
+                assert ratio >= render.TEXT_CONTRAST - 0.01, (
+                    f"{key} on {bg} in the {theme} theme is {ratio:.2f}:1")
+
+
+# --------------------------------------------------------------------------- #
+# A toast you can answer from
+# --------------------------------------------------------------------------- #
+def test_a_toast_without_choices_is_the_size_it_always_was():
+    plain = render.render_toast(None, "Needs you", "sub", "red", "light")
+    assert plain.size == (322, 70)
+
+
+def test_choices_make_the_toast_taller_not_wider():
+    tall = render.render_toast(None, "Needs you", "sub", "red", "light",
+                               choices=("Yes", "No"))
+    assert tall.size[0] == 322 and tall.size[1] > 70
+
+
+def test_the_hit_map_covers_the_buttons_and_nothing_else():
+    hit = []
+    img = render.render_toast(None, "Needs you", "sub", "red", "light",
+                              choices=("Yes", "No"), hit=hit)
+    assert [i for i, *_ in hit] == [0, 1]
+    for index, x0, y0, x1, y1 in hit:
+        assert 0 <= x0 < x1 <= img.width, f"button {index} is off the card"
+        assert 0 <= y0 < y1 <= img.height
+        assert y0 >= 70, "the buttons sit below the message, not over it"
+    (_i0, ax0, _ay0, ax1, _ay1), (_i1, bx0, *_rest) = hit
+    assert ax1 <= bx0, "the two buttons must not overlap"
+
+
+def test_three_choices_each_get_their_own_target():
+    hit = []
+    render.render_toast(None, "Needs you", "sub", "red", "light",
+                        choices=("Top", "Inline", "Skip"), hit=hit)
+    assert len(hit) == 3
+    centres = [(x0 + x1) // 2 for _i, x0, _y0, x1, _y1 in hit]
+    assert centres == sorted(centres) and len(set(centres)) == 3
+
+
+def test_a_long_choice_is_elided_rather_than_overflowing():
+    hit = []
+    img = render.render_toast(
+        None, "Needs you", "sub", "red", "light",
+        choices=("Call them out at the very top of the page", "No"), hit=hit)
+    assert _is_image(img) and len(hit) == 2
+
+
+def test_keeping_hue_leaves_a_visible_colour_alone():
+    assert render.keeping_hue("#e5484d", "#ffffff") == "#e5484d"
+
+
+def test_keeping_hue_reaches_the_target_without_changing_the_hue():
+    import colorsys
+    for bg in HOSTILE:
+        for name in ("red", "amber", "green"):
+            before = render.THEMES["light"][name]
+            after = render.keeping_hue(before, bg)
+            ratio = render.contrast_ratio(render._rgb(after), render._rgb(bg))
+            assert ratio >= render.SHAPE_CONTRAST - 0.01, \
+                f"{name} on {bg} is only {ratio:.2f}:1"
+            hue_before = colorsys.rgb_to_hls(
+                *[c / 255 for c in render._rgb(before)])[0]
+            hue_after = colorsys.rgb_to_hls(
+                *[c / 255 for c in render._rgb(after)])[0]
+            assert abs(hue_before - hue_after) < 0.02, (
+                f"{name} changed hue on {bg} — red, amber and green ARE the "
+                f"message, so only their lightness may move")
+
+
+def test_severity_colours_do_not_converge_on_a_hostile_background():
+    seen = {render.keeping_hue(render.THEMES["light"][n], "#808080")
+            for n in ("red", "amber", "green")}
+    assert len(seen) == 3, (
+        "blocked, working and done must still look different from each other")
+
+
+def test_severity_colours_stay_distinct_on_a_hostile_background():
+    """The point of the dot row is that the colours differ.
+
+    Forcing every colour to meet contrast turns red, amber and green into the
+    same near-black on a grey taskbar and the same white on a teal one — a
+    worse failure than being hard to see, because it destroys the meaning
+    rather than the legibility.
+    """
+    def strip(dots):
+        return render.render_strip(
+            {"sessions_count": len(dots), "sessions_blocked": 0,
+             "sessions_dots": list(dots), "sessions_dots_overflow": 0},
+            "#008080", "dark", metrics=("sessions",))
+
+    blocked = strip(["red", "green"]).tobytes()
+    calm = strip(["green", "green"]).tobytes()
+    assert blocked != calm, (
+        "a blocked session and a finished one must not render identically")
+
+
+def test_the_strip_still_renders_on_every_hostile_background():
+    for bg in HOSTILE:
+        for theme in ALL_THEMES:
+            img = render.render_strip(
+                {"session_pct": 92, "session_color": "amber",
+                 "session_resets_at": _in(3600), "weekly_pct": 39,
+                 "weekly_color": "green", "sessions_count": 2,
+                 "sessions_blocked": 1, "sessions_dots": ["red", "green"],
+                 "sessions_dots_overflow": 3},
+                bg, theme, metrics=("session", "weekly", "sessions"))
+            assert _is_image(img) and _positive_size(img)

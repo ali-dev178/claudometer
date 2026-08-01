@@ -75,6 +75,10 @@ def _ps(s):  # PowerShell single-quote
     return "'" + str(s).replace("'", "''") + "'"
 
 
+def _as(s):  # AppleScript double-quoted string literal
+    return str(s).replace("\\", "\\\\").replace('"', '\\"')
+
+
 def open_terminal(cwd, session_id):
     """Tier 1: open a visible terminal in *cwd* running `claude --resume <id>`."""
     if not session_id or not cwd or not Path(cwd).exists():
@@ -93,9 +97,16 @@ def open_terminal(cwd, session_id):
                 )
         elif sys.platform == "darwin":
             inner = f"{CLAUDE} --resume {_sh(session_id)}"
-            script = (f'tell application "Terminal" to do script "cd {_sh(cwd)} && {inner}"\n'
-                      'tell application "Terminal" to activate')
-            subprocess.Popen(["osascript", "-e", script])
+            # Two quoting layers, not one: the shell text is shell-quoted, and
+            # THEN escaped again for the AppleScript string literal it sits
+            # inside. A project path containing a quote or a backslash — legal
+            # on macOS — otherwise ends the literal early, and osascript fails
+            # asynchronously, so the caller cheerfully reports success.
+            subprocess.Popen(
+                ["osascript",
+                 "-e", f'tell application "Terminal" to do script '
+                       f'"cd {_as(_sh(cwd))} && {_as(inner)}"',
+                 "-e", 'tell application "Terminal" to activate'])
         else:
             inner = f"{CLAUDE} --resume {_sh(session_id)}"
             for term in (["x-terminal-emulator", "-e"], ["gnome-terminal", "--"],

@@ -42,6 +42,112 @@ def sev_color(T, name):
 
 
 # --------------------------------------------------------------------------- #
+# Keeping the strip legible on whatever it is sitting on
+# --------------------------------------------------------------------------- #
+#: WCAG AA for text this size. The dots are shapes, not text, and take 3.0.
+TEXT_CONTRAST = 4.5
+SHAPE_CONTRAST = 3.0
+
+
+def relative_luminance(rgb):
+    """WCAG relative luminance, for judging contrast."""
+    out = []
+    for channel in rgb[:3]:
+        c = min(max(channel, 0), 255) / 255.0
+        out.append(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2]
+
+
+def contrast_ratio(rgb_a, rgb_b):
+    """WCAG contrast ratio between two colours (1.0 … 21.0)."""
+    a, b = relative_luminance(rgb_a), relative_luminance(rgb_b)
+    lo, hi = sorted((a, b))
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _rgb(color):
+    return ImageColor.getrgb(color)[:3] if isinstance(color, str) else tuple(color[:3])
+
+
+def keeping_hue(color, bg, target=SHAPE_CONTRAST):
+    """*color* made legible on *bg* by changing only how light it is.
+
+    For anything whose COLOUR is the message — red, amber and green mean
+    blocked, working and done. Blending toward black or white the way
+    readable() does would turn all three into the same near-black on a grey
+    taskbar, which destroys the meaning rather than the legibility.
+
+    Moving along lightness alone keeps the hue: amber on a pale taskbar
+    becomes a deeper amber, still obviously amber, and still obviously not
+    the green next to it.
+    """
+    import colorsys
+
+    rgb, back = _rgb(color), _rgb(bg)
+    if contrast_ratio(rgb, back) >= target:
+        return color
+    h, light, s = colorsys.rgb_to_hls(*[c / 255.0 for c in rgb])
+    up = contrast_ratio(back, (255, 255, 255)) >= contrast_ratio(back, (0, 0, 0))
+    best, best_ratio = rgb, contrast_ratio(rgb, back)
+    for step in range(1, 25):
+        t = step / 24.0
+        cand_l = light + (1.0 - light) * t if up else light * (1.0 - t)
+        cand = tuple(round(c * 255) for c in colorsys.hls_to_rgb(h, cand_l, s))
+        ratio = contrast_ratio(cand, back)
+        if ratio > best_ratio:
+            best, best_ratio = cand, ratio
+        if ratio >= target:
+            break
+    return "#%02x%02x%02x" % best
+
+
+def outline_for(bg):
+    """Black or white — whichever separates a small shape from *bg*.
+
+    The session dots are four pixels across, and at that size darkening them
+    to meet contrast turns red, amber and green into three dark blobs. They
+    keep their colour at full strength and get a ring instead, which costs
+    nothing at that size. The numbers do the opposite: a ring around a glyph
+    reads as an outline you notice rather than a number you read.
+    """
+    back = _rgb(bg)
+    return "#ffffff" if contrast_ratio(back, (255, 255, 255)) >= \
+        contrast_ratio(back, (0, 0, 0)) else "#000000"
+
+
+def readable(color, bg, target=TEXT_CONTRAST):
+    """*color*, lightened or darkened just enough to be legible on *bg*.
+
+    The strip paints itself in the colour of whatever it sits on, so it can
+    end up on a saturated wallpaper where the theme's own greys all but
+    vanish — the labels measured 1.2:1 on mid grey, which is not dim, it is
+    absent. Picking the better of the two themes is not enough on its own.
+
+    The fix is applied to the TEXT, never the background: the strip blends
+    into the taskbar on purpose, and a plate behind the words would undo the
+    one thing it is trying to do.
+
+    Hue is preserved by moving straight toward white or black, so a red still
+    reads as red — which matters, because the severity colours carry meaning.
+    """
+    rgb, back = _rgb(color), _rgb(bg)
+    if contrast_ratio(rgb, back) >= target:
+        return color
+    # Toward whichever end the background is furthest from; on a mid grey both
+    # are poor, so take the better one and go as far as it allows.
+    end = (255, 255, 255) if contrast_ratio(back, (255, 255, 255)) >= \
+        contrast_ratio(back, (0, 0, 0)) else (0, 0, 0)
+    best = rgb
+    for step in range(1, 21):
+        t = step / 20.0
+        cand = tuple(round(rgb[i] + (end[i] - rgb[i]) * t) for i in range(3))
+        best = cand
+        if contrast_ratio(cand, back) >= target:
+            break
+    return "#%02x%02x%02x" % best
+
+
+# --------------------------------------------------------------------------- #
 # Fonts
 # --------------------------------------------------------------------------- #
 _FCACHE = {}
@@ -56,6 +162,36 @@ _MAC_FONTS = {  # macOS system fonts (Helvetica Neue is reliably present)
     "bold": "/System/Library/Fonts/HelveticaNeue.ttc",
     "light": "/System/Library/Fonts/HelveticaNeue.ttc",
 }
+
+#: HelveticaNeue.ttc is a COLLECTION: every weight is one file, and asking for
+#: it gives you face 0 — Regular — whichever weight you wanted. Semibold
+#: headings, bold numbers and light captions all came out identical on macOS.
+#: Faces are chosen by name rather than index because the order inside the
+#: collection is not guaranteed across macOS versions.
+_MAC_FACES = {
+    "sb": ("HelveticaNeue-Medium", "HelveticaNeue-Bold"),
+    "bold": ("HelveticaNeue-Bold",),
+    "light": ("HelveticaNeue-Light", "HelveticaNeue-Thin"),
+}
+
+
+def _mac_face(path, kind, size):
+    """Pick the right face out of a .ttc, or None to fall through."""
+    wanted = _MAC_FACES.get(kind)
+    if not wanted or not path.endswith(".ttc"):
+        return None
+    for index in range(12):          # collections are small; 12 is generous
+        try:
+            face = ImageFont.truetype(path, size, index=index)
+        except Exception:
+            break
+        try:
+            name = "-".join(p for p in face.getname() if p).replace(" ", "")
+        except Exception:
+            continue
+        if any(w.replace(" ", "") in name for w in wanted):
+            return face
+    return None
 
 
 def _font(kind, size):
@@ -75,7 +211,7 @@ def _font(kind, size):
     f = None
     for path in candidates:
         try:
-            f = ImageFont.truetype(path, size)
+            f = _mac_face(path, kind, size) or ImageFont.truetype(path, size)
             break
         except OSError:
             continue
@@ -238,25 +374,52 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
     f_num = _font("sb", 13 * S)
     f_dim = _font("reg", 11 * S)
 
+    # Each item is (text, font, colour, carries_meaning). The flag decides how
+    # an illegible colour is rescued: a label can simply be recoloured, but a
+    # severity colour has to keep its hue and gets an outline instead.
     groups = []
     if "session" in metrics and disp.get("session_pct") is not None:
         sp = disp["session_pct"]
-        g = [("Session ", f_lbl, T["dim"]),
-             (f"{sp}%", f_num, sev_color(T, disp.get("session_color", "grey")))]
+        g = [("Session ", f_lbl, T["dim"], "label"),
+             (f"{sp}%", f_num, sev_color(T, disp.get("session_color", "grey")),
+              "sev")]
         if sp >= 100:  # be explicit when you're actually blocked
-            g.append(("   limit reached", f_dim, sev_color(T, "red")))
+            g.append(("   limit reached", f_dim, sev_color(T, "red"), "sev"))
         else:
             left = _fmt_left(disp.get("session_resets_at"))
             if left:
-                g.append(("   " + left, f_dim, T["faint"]))
+                g.append(("   " + left, f_dim, T["faint"], "label"))
         groups.append(g)
     if "weekly" in metrics and disp.get("weekly_pct") is not None:
-        groups.append([("Weekly ", f_lbl, T["dim"]),
-                       (f"{disp['weekly_pct']}%", f_num, sev_color(T, disp.get("weekly_color", "grey")))])
+        groups.append([
+            ("Weekly ", f_lbl, T["dim"], "label"),
+            (f"{disp['weekly_pct']}%", f_num,
+             sev_color(T, disp.get("weekly_color", "grey")), "sev")])
+    # NOTE: sessions_* (plural) are the LIVE CLI sessions; session_* (singular)
+    # is the 5-hour usage meter. The two dicts are merged before rendering.
+    if "sessions" in metrics and disp.get("sessions_count") is not None:
+        # "Live", not "Sessions": the strip already says "Session 61%" for the
+        # 5-hour usage window, and the two side by side read as the same thing.
+        g = [("Live ", f_lbl, T["dim"], "label")]
+        dots = disp.get("sessions_dots") or []
+        if dots:
+            # One dot per session, coloured by its state — readable without
+            # reading. Blocked sessions sort first, so red leads.
+            f_dot = _font("reg", 15 * S)     # a touch larger than the labels
+            for i, color in enumerate(dots):
+                g.append(("●" + (" " if i < len(dots) - 1 else ""),
+                          f_dot, sev_color(T, color), "dot"))
+            over = disp.get("sessions_dots_overflow") or 0
+            if over:
+                g.append((f" +{over}", f_dim, T["dim"], "label"))
+        else:
+            g.append(("0", f_num, T["dim"], "label"))
+        groups.append(g)
     if not groups:
-        groups.append([("Claude  " + (disp.get("session") or "—"), f_dim, T["dim"])])
+        groups.append([("Claude  " + (disp.get("session") or "—"), f_dim,
+                        T["dim"], "label")])
     if disp.get("_demo"):  # unmistakable marker so simulated data isn't mistaken for real
-        groups.insert(0, [("DEMO", f_num, sev_color(T, "amber"))])
+        groups.insert(0, [("DEMO", f_num, sev_color(T, "amber"), "sev")])
 
     cand = []
     if disp.get("session_pct") is not None:
@@ -267,12 +430,16 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
         dot_color = sev_color(T, max(cand, key=lambda c: c[0])[1])
     else:  # status state (no percentages) — key the dot off face_color so a
         dot_color = sev_color(T, disp.get("face_color", "grey"))  # 429 shows red, not grey
+    # A session blocked on you outranks usage severity: usage is something to
+    # pace, a blocked session is something to go and do.
+    if "sessions" in metrics and (disp.get("sessions_blocked") or 0):
+        dot_color = sev_color(T, "red")
 
 
     tmp = ImageDraw.Draw(Image.new("RGB", (4, 4)))
 
     def gw(g):
-        return sum(tmp.textlength(t, font=f) for (t, f, _) in g)
+        return sum(tmp.textlength(t, font=f) for (t, f, _c, _k) in g)
 
     total = PAD + (DOT_R * 2 + DOTGAP) + sum(gw(g) for g in groups) \
         + GGAP * (len(groups) - 1) + PAD
@@ -281,13 +448,40 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
     cy = H / 2
 
     dx = PAD + DOT_R
-    d.ellipse([dx - DOT_R, cy - DOT_R, dx + DOT_R, cy + DOT_R], fill=dot_color)
+    # The attention pulse swells the status dot only. The strip's background is
+    # sampled from whatever sits behind it so the widget blends in — repainting
+    # that would flash the entire strip, which is not what this is for.
+    # The strip paints itself in whatever it sits on, so on a saturated
+    # wallpaper the theme's own greys all but vanish — measured at 1.2:1,
+    # which is not dim, it is absent. Fixed on the TEXT, never the background:
+    # blending into the taskbar is the point of the strip.
+    r = DOT_R * (1.7 if disp.get("_pulse") else 1.0)
+    d.ellipse([dx - r, cy - r, dx + r, cy + r],
+              fill=keeping_hue(dot_color, bg_hex))
     x = PAD + DOT_R * 2 + DOTGAP
     for gi, g in enumerate(groups):
         if gi > 0:
             x += GGAP
-        for (t, f, c) in g:
-            d.text((x, cy), t, font=f, fill=c, anchor="lm")
+        for (t, f, c, kind) in g:
+            # Every glyph passes through here, the one place that knows both
+            # the colour and what it will sit on.
+            if kind == "dot":
+                # The ring is the dot's OWN colour, darkened or lightened
+                # until it separates from the background. Black or white
+                # reads as a hard outline drawn around the dot; this reads as
+                # the edge of the dot itself, and keeps the row's palette.
+                # When the fill already contrasts, the two match and there is
+                # no visible ring at all.
+                d.text((x, cy), t, font=f, fill=c, anchor="lm",
+                       stroke_width=max(1, round(S * 0.5)),
+                       stroke_fill=keeping_hue(c, bg_hex))
+            elif kind == "sev":
+                # Lighter or darker only: which colour it is IS the message.
+                d.text((x, cy), t, font=f, fill=keeping_hue(c, bg_hex),
+                       anchor="lm")
+            else:
+                d.text((x, cy), t, font=f, fill=readable(c, bg_hex),
+                       anchor="lm")
             x += tmp.textlength(t, font=f)
 
     return img.resize((max(1, round(total / S)), round(H / S)), Image.LANCZOS)
@@ -296,6 +490,10 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
 # --------------------------------------------------------------------------- #
 # Details popover — horizontal usage meters
 # --------------------------------------------------------------------------- #
+#: Vertical pitch of one live-session row in the popover.
+SESSION_ROW_H = 24
+
+
 def render_popover(disp, theme, scale=3):
     T = THEMES.get(theme, THEMES["light"])
     S = scale
@@ -316,10 +514,28 @@ def render_popover(disp, theme, scale=3):
         base_gap = 14
     if has_cost:
         cost_y = content_bottom + 20
-        foot_div = cost_y + 13
+        content_bottom = cost_y
+        base_gap = 14
     else:
         cost_y = None
-        foot_div = content_bottom + base_gap
+
+    # Live Claude Code sessions. Present only when the feature is on; an empty
+    # list still renders (as a single "none running" line) so the section
+    # doesn't blink in and out as sessions start and stop.
+    sess_rows = disp.get("sessions_rows")
+    show_sessions = sess_rows is not None
+    sess_overflow = int(disp.get("sessions_overflow") or 0)
+    if show_sessions:
+        sess_div = content_bottom + base_gap
+        sess_hdr = sess_div + 20
+        sess_top = sess_hdr + 22
+        n_lines = max(1, len(sess_rows)) + (1 if sess_overflow else 0)
+        content_bottom = sess_top + (n_lines - 1) * SESSION_ROW_H
+        base_gap = 16
+    else:
+        sess_div = sess_hdr = sess_top = None
+
+    foot_div = content_bottom + (13 if has_cost and not show_sessions else base_gap)
     foot_y = foot_div + 20
     H = foot_y + 24
 
@@ -402,6 +618,55 @@ def render_popover(disp, theme, scale=3):
         d.text((Ws - P, cost_y * S), _elide(d, f"{tok} tokens   ·   ~{usd}", f_rownum, cw),
                font=f_rownum, fill=T["neutral"], anchor="rm")
 
+    # live Claude Code sessions
+    if show_sessions:
+        d.line([P, sess_div * S, Ws - P, sess_div * S], fill=T["hair"],
+               width=max(1, S))
+        d.text((P, sess_hdr * S), "Live sessions", font=f_lbl, fill=T["dim"],
+               anchor="lm")
+        summary = disp.get("sessions_summary") or ""
+        if summary:
+            sum_max = ((Ws - P) - (P + d.textlength("Live sessions", font=f_lbl))
+                       - 16 * S)
+            d.text((Ws - P, sess_hdr * S), _elide(d, summary, f_reset, sum_max),
+                   font=f_reset, fill=T["faint"], anchor="rm")
+
+        dot_r = 3.5 * S
+        label_x = P + dot_r * 2 + 9 * S
+        y = sess_top * S
+        sess_hits = []      # one clickable rect per row, in display pixels
+        if not sess_rows:
+            d.text((P, y), disp.get("sessions_empty") or "No sessions running",
+                   font=f_row, fill=T["faint"], anchor="lm")
+        for row in sess_rows:
+            col = sev(row.get("color", "grey"))
+            d.ellipse([P, y - dot_r, P + dot_r * 2, y + dot_r], fill=col)
+            detail = row.get("detail", "")
+            detail_w = d.textlength(detail, font=f_reset)
+            avail = (Ws - P) - label_x - detail_w - 14 * S
+            proj = row.get("project") or ""
+            proj_txt = f"  {proj}" if proj else ""
+            # The project is context, not the headline. Show it only when it
+            # fits WHOLE — a stub like "medborgarpr…" costs the title width and
+            # tells you nothing, so in that case drop it and let the title,
+            # which is what you actually scan for, use the space.
+            proj_w = d.textlength(proj_txt, font=f_reset) if proj_txt else 0
+            if proj_w > avail * 0.40:
+                proj_txt, proj_w = "", 0
+            lbl = _elide(d, row.get("label", ""), f_row,
+                         max(avail - proj_w, 30 * S))
+            d.text((label_x, y), lbl, font=f_row, fill=T["neutral"], anchor="lm")
+            if proj_txt:
+                d.text((label_x + d.textlength(lbl, font=f_row), y), proj_txt,
+                       font=f_reset, fill=T["faint"], anchor="lm")
+            d.text((Ws - P, y), detail, font=f_reset, fill=col, anchor="rm")
+            half = (SESSION_ROW_H * S) / 2
+            sess_hits.append((P / S, (y - half) / S, (Ws - P) / S, (y + half) / S))
+            y += SESSION_ROW_H * S
+        if sess_overflow:
+            d.text((label_x, y), f"+{sess_overflow} more", font=f_reset,
+                   fill=T["faint"], anchor="lm")
+
     # footer
     d.line([P, foot_div * S, Ws - P, foot_div * S], fill=T["hair"], width=max(1, S))
     fy = foot_y * S
@@ -436,16 +701,32 @@ def render_popover(disp, theme, scale=3):
         "refresh": ((rx1 - 4 * S) / S, (fy - 12 * S) / S, (rx2 + 4 * S) / S, (fy + 12 * S) / S),
         "quit": (qx1 / S, (fy - 12 * S) / S, qx2 / S, (fy + 12 * S) / S),
     }
+    if show_sessions:
+        # "session:<row index>" — the caller maps the index back to the row it
+        # passed in, so the renderer never has to know what a session is.
+        for index, rect in enumerate(sess_hits):
+            hits["session:%d" % index] = rect
     return out, hits
 
 
 # --------------------------------------------------------------------------- #
 # Threshold alert toast
 # --------------------------------------------------------------------------- #
-def render_toast(pct, title, subtitle, color_name, theme, scale=3):
+def render_toast(pct, title, subtitle, color_name, theme, scale=3,
+                 choices=(), hit=None):
+    """The alert card. With *choices*, it also answers.
+
+    A blocked session's toast is the first thing you see and, for a short
+    prompt, everything you need: "run the tests?" wants a yes, not a window.
+    Passing two or three choices adds a row of buttons and fills *hit* with
+    ``(index, x0, y0, x1, y1)`` rectangles in FINAL pixels for the caller to
+    hit-test. Longer menus are deliberately not offered here — three words on
+    a toast is not enough to choose between six options, and the window is one
+    click away.
+    """
     T = THEMES.get(theme, THEMES["light"])
     S = scale
-    W, H = 322, 70
+    W, H = 322, (70 + 34 if choices else 70)
     Ws, Hs = W * S, H * S
     base = Image.new("RGB", (Ws, Hs), T["key"])
     grad = _vgrad(Ws, Hs, T["panel_top"], T["panel_bot"])
@@ -458,14 +739,39 @@ def render_toast(pct, title, subtitle, color_name, theme, scale=3):
     col = sev_color(T, color_name)
     cx1, cy1, chip = 14 * S, 13 * S, 44 * S
     d.rounded_rectangle([cx1, cy1, cx1 + chip, cy1 + chip], radius=12 * S, fill=col)
-    d.text((cx1 + chip / 2, cy1 + chip / 2), f"{pct}%", font=_font("sb", 15 * S),
-           fill="#ffffff", anchor="mm")
+    ccx, ccy = cx1 + chip / 2, cy1 + chip / 2
+    if pct is None:
+        # Live-session alerts have no percentage; a white status dot reads as a
+        # light and keeps the toast geometry identical to the usage alerts.
+        dr = 7 * S
+        d.ellipse([ccx - dr, ccy - dr, ccx + dr, ccy + dr], fill="#ffffff")
+    else:
+        d.text((ccx, ccy), f"{pct}%", font=_font("sb", 15 * S),
+               fill="#ffffff", anchor="mm")
 
     tx = cx1 + chip + 16 * S
     avail = max(0, W * S - tx - 14 * S)
     ft, fs = _font("sb", 13 * S), _font("reg", 11 * S)
     d.text((tx, 26 * S), _elide(d, title, ft, avail), font=ft, fill=T["neutral"], anchor="lm")
     d.text((tx, 45 * S), _elide(d, subtitle, fs, avail), font=fs, fill=T["dim"], anchor="lm")
+
+    if choices:
+        fb = _font("sb", 11 * S)
+        pad_x, gap = 14 * S, 8 * S
+        top, height = 70 * S, 26 * S
+        span = (W * S - pad_x * 2 - gap * (len(choices) - 1)) / len(choices)
+        for index, label in enumerate(choices):
+            x0 = pad_x + index * (span + gap)
+            primary = index == 0
+            d.rounded_rectangle([x0, top, x0 + span, top + height],
+                                radius=7 * S,
+                                fill=T["accent"] if primary else T["track"])
+            d.text((x0 + span / 2, top + height / 2),
+                   _elide(d, label, fb, span - 12 * S), font=fb,
+                   fill="#ffffff" if primary else T["neutral"], anchor="mm")
+            if hit is not None:
+                hit.append((index, int(x0 / S), int(top / S),
+                            int((x0 + span) / S), int((top + height) / S)))
     return base.resize((W, H), Image.LANCZOS)
 
 

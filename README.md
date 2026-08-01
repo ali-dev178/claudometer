@@ -31,6 +31,8 @@ Claude's Pro / Max / Team plans enforce a rolling **5‑hour session** limit and
 
 > ### 🖱️ Put it anywhere
 > The strip is a **free‑floating, always‑on‑top** widget — not locked to the taskbar. Drag it to a screen edge, over a window, or onto a second monitor, and it **remembers the spot**.
+>
+> Wherever it lands, it stays **readable**: it picks the light or dark palette by contrast against what's behind it, then lifts each label the rest of the way to the WCAG AA ratio if that isn't enough — on a saturated wallpaper the theme greys alone measure about 1.2:1. Severity colours never change **hue**, because red, amber and green *are* the message: the numbers only go lighter or darker, and the dots keep their colour outright. The background is never touched: blending into the taskbar is the point.
 > *(On **macOS** the native menu‑bar item is the default; the same floating widget is available with `app.py bar` — see [Platform support](#platform-support).)*
 
 <p align="center"><img src="assets/anywhere.png" alt="Drag the Windows strip anywhere on screen — not just the taskbar" width="780"></p>
@@ -51,6 +53,7 @@ Claude's Pro / Max / Team plans enforce a rolling **5‑hour session** limit and
 - 🔒 **Zero setup** — reuses your existing Claude login. Nothing to configure.
 - 🪶 **Featherweight** — ~0.03% CPU idle, ~50 MB RAM. You won't notice it.
 - 🔔 **Alerts** — optional desktop toast when you cross 80% / 90%.
+- 🟢 **Live sessions** — a coloured dot per running `claude` session, right on the taskbar: which is working, which finished, and which is **blocked waiting on you**. One click — or a global shortcut — lands you in that terminal.
 - ⏭️ **Resume** — one click picks up interrupted work when your limit resets (auto‑resume optional).
 - 🖥️ **Out of the way** — auto‑hides over fullscreen movies/games (or set it to always show).
 - ⚙️ **Tunable** — a built‑in **settings panel** (no file editing) for theme, meters, alerts, accent, cost view, and more.
@@ -68,11 +71,60 @@ Claude's Pro / Max / Team plans enforce a rolling **5‑hour session** limit and
 **Threshold alerts** — a desktop toast the moment you cross a limit you set:
 <p align="center"><img src="assets/alerts.png" alt="Alert toasts" width="720"></p>
 
+**Live sessions** — every running `claude` session, blocked ones first:
+<p align="center"><img src="assets/sessions.png" alt="Live sessions" width="720"></p>
+
 **Estimated cost** *(opt‑in)* — today's tokens + a rough dollar figure in the popover (a local estimate, not a bill):
 <p align="center"><img src="assets/popover-cost.png" alt="Cost line in the popover" width="420"></p>
 
 **Always‑visible mode** — keep it readable even over a fullscreen movie or game:
 <p align="center"><img src="assets/fullscreen.png" alt="Visible over fullscreen" width="720"></p>
+
+---
+
+## Every state, in pictures
+
+The shots above are the app at its best. These are the app at *every* setting — each state it can be in, including the quiet ones you only meet once: nothing running, more sessions than fit, the screen it can't read, the session that ended while you were reading it.
+
+Every image here is a **real render from the app's own code**, built through the same formatters the widget uses. None of it is mocked, so a state that stops working stops generating. Rebuild them with `py assets/make_gallery.py` (the Tk windows come from `capture_answer.py` and `capture_settings.py`, which need a display).
+
+### The strip
+
+Each meter combination, each severity, the live‑session dot row filling up and overflowing, and the states where there's nothing to report at all.
+
+<p align="center"><img src="assets/gallery-strip.png" alt="Every state the taskbar strip can be in" width="700"></p>
+
+### …on whatever it's sitting on
+
+The strip samples the colour behind it and paints itself in that, so it can end up on anything. It picks the palette by contrast, then lifts each label to the WCAG AA ratio — on a saturated wallpaper the theme greys alone measure about **1.2:1**, which isn't dim, it's absent.
+
+Severity colours are handled separately, because red, amber and green *are* the message. Recolouring them the way labels are recoloured turns all three into the same near-black on a grey taskbar, which destroys the meaning to fix the legibility. So the **numbers** move along lightness only — a deeper amber is still obviously amber — and the **dots**, too small to darken without becoming three identical blobs, keep their colour and gain an edge in that same colour when they'd otherwise disappear.
+
+<p align="center"><img src="assets/gallery-contrast.png" alt="The strip staying legible on eight different backgrounds" width="640"></p>
+
+### The details popover
+
+<p align="center"><img src="assets/gallery-popover.png" alt="Every popover state" width="860"></p>
+
+### A session row
+
+Each row carries what the session is doing and how long it's been doing it; a blocked one also carries why.
+
+<p align="center"><img src="assets/gallery-rows.png" alt="Every session row state" width="680"></p>
+
+### Alerts
+
+<p align="center"><img src="assets/gallery-toasts.png" alt="Every alert toast" width="760"></p>
+
+### The tray icon *(Windows)*
+
+The number itself is the icon. A blocked session outranks the usage figure — usage is something to pace against, a blocked session is something to go and do — so the disc turns red and counts them instead.
+
+<p align="center"><img src="assets/gallery-tray.png" alt="Every tray icon state" width="650"></p>
+
+### Answering a session *(Windows)*
+
+<p align="center"><img src="assets/gallery-answer.png" alt="Every state of the answer window" width="960"></p>
 
 ---
 
@@ -125,6 +177,59 @@ Hit the session limit mid‑task and everything stalls? Claudometer watches your
 
 ---
 
+## Live Claude sessions
+
+Running Claude in three terminals and losing track of which one is waiting on you? Claudometer lists every live `claude` session and what it's actually doing.
+
+<p align="center"><img src="assets/sessions.png" alt="Live sessions in the popover, with alerts" width="820"></p>
+
+| Dot | State | Meaning |
+|---|---|---|
+| 🔴 | **needs you** | blocked on a permission prompt or a question — with the reason |
+| 🟡 | **working** | the model is generating, or a tool is running |
+| 🟠 | **running a command** | a shell command specifically |
+| 🟢 | **done** | it replied; waiting for your next prompt |
+
+Blocked sessions sort to the top and each row shows how long it's held that state.
+
+**You don't have to open anything.** The strip carries one coloured dot per session — `Live ● ● ●` — so a glance tells you how many are running and what each is doing. The moment one needs you, the leading dot turns **red** and stays red until it's dealt with, and the strip pulses once to catch your eye.
+
+- **Alerts** — a toast when a session needs you, finishes, or stays blocked too long. A *"needs you"* toast has **no timeout**: it waits until you click it or the session unblocks. Several at once collapse into one summary rather than burying each other.
+- **Answer from the toast.** When the prompt is short enough to decide from — *"run the test suite?"* — its choices appear on the toast itself, so a yes costs one click and opens nothing. Longer menus deliberately don't: three words on a card isn't enough to choose between six options, and that's exactly what the window is for.
+- **Click the toast** to answer the session that raised it, without leaving what you're doing.
+- **A global shortcut** (`Ctrl+Alt+J` by default) goes to whichever session is waiting, from any application.
+- **Click a row** to answer a blocked session, or to bring any other session's terminal forward. **Right‑click** for open project folder, open transcript, copy session ID / path, and *Reply and go*.
+- **Recently finished** sessions and a **today‑by‑project** usage split (with `show_cost`) live in the tray / menu‑bar menus. In the tray, the icon itself turns red with a count while sessions are blocked.
+
+### Answer it from here (Windows)
+
+<p align="center"><img src="assets/answer.png" alt="Answering a blocked session from the widget" width="760"></p>
+
+Clicking a blocked session opens it in a small window showing **the question it is actually asking** and its choices as buttons. Pick one and it goes straight to that session — with the mouse, or by pressing its **number**. The global shortcut opens the window and `1`–`9` answers it, so a blocked session can be dealt with without touching the mouse at all. (Digits go into the message box instead once you click into it, since at that point you're writing rather than choosing.)
+
+The question comes off the session's own screen, because that is the only place it exists — Claude Code's transcript records a tool call *after* it has been answered, so while a session is waiting the transcript doesn't know what it asked.
+
+The window **stays open** once you answer. Choosing *"chat about this"* starts a conversation, not an ending, so it shows what the session says back and keeps taking messages — you only go to the terminal if you want to. What it says is shown as prose rather than as a copy of the terminal: output is wrapped to the terminal's width and studded with glyphs, and the sentence is the part that matters.
+
+It handles the rest of what a session can do to you: it says when one is **working** (anything you send is queued, exactly as typing into the terminal would be), when a menu **moved** under your pointer (that choice is refused rather than sent to a question you never read), and when the session has **ended** (the last thing it said stays up; nothing more can be sent).
+
+**It closes itself.** The window opened because something needed answering; once nothing does — the session has replied, or ended — it counts down and goes, telling you before it does. Typing, clicking or sending resets that, and a half-written message keeps it up indefinitely, so it can't take anything from you. A session that is still asking, or still working, is never retired. `Esc` closes it now.
+
+> **Why this is safe.** Input is delivered to the session's *process*, not to a window — several sessions routinely share one terminal and nothing in the process tree tells their tabs apart, so anything window-based would be a coin flip. Every send re-checks the session is still live first, since a process id gets reused. Windows only: this uses `AttachConsole`, and neither macOS nor a modern Linux has an equivalent — there, clicking a blocked session takes you to its terminal instead. Turn it off with `sessions_answer = false`.
+
+It reads `~/.claude/sessions` locally — the same registry Claude Code maintains — about once a second. Nothing is sent anywhere.
+
+<details><summary><b>Instant alerts via hooks</b> (optional — it edits Claude Code's settings)</summary>
+
+By default sessions update within about a second, which needs no setup at all. Turning on **Instant alerts** additionally registers four hooks (`Notification`, `Stop`, `SessionStart`, `SessionEnd`) in `~/.claude/settings.json` so changes land the moment they happen — and carry the real prompt text a session is blocked on, instead of a generic category.
+
+Because that's *another app's* config file, it's handled carefully: you see the exact JSON and confirm before anything is written, the original is backed up, your other settings and anyone else's hooks are preserved, and switching it off removes exactly those entries. `Pre/PostToolUse` are deliberately **not** registered — they fire constantly and each one costs a process spawn inside your session.
+
+The hook runs a small relay copied to `~/.claudometer`, not from the app folder, so updating or uninstalling Claudometer can't leave Claude Code invoking a path that no longer exists. If Claudometer stops running entirely, the relay notices after a week and removes the hooks, the queue and itself — so an uninstall tidies up even if you forget to switch it off first.
+</details>
+
+---
+
 ## Configure
 
 **In‑app (recommended):** click **⚙ Settings** in the popover (or right‑click the strip → *Settings…*). Adjust theme, meters, accent, poll interval, alerts, cost view, fullscreen behavior, and resume — changes apply **instantly** and save to `~/.claudometer.toml` for you.
@@ -147,6 +252,16 @@ resume_auto = false              # Tier 2: unattended auto-resume (opt-in, risky
 resume_prompt = "Continue where you left off."
 resume_max_turns = 30            # Tier 2: cap agentic turns
 # resume_skip_permissions = false  # Tier 2: --dangerously-skip-permissions (else acceptEdits)
+
+sessions = true                  # show live Claude Code sessions
+sessions_on_strip = true         # "Live N" count on the taskbar strip
+sessions_max_rows = 6            # rows before the rest collapse to "+N more" (1-12)
+sessions_alerts = true           # toast on session changes
+sessions_alert_on = ["waiting", "idle", "stuck"]   # + "gone"
+sessions_stuck_minutes = 10      # nudge if still blocked after this (0 = never)
+sessions_quiet_foreground = true # stay quiet for the terminal you're using
+sessions_hooks = false           # instant alerts (edits ~/.claude/settings.json; asks first)
+sessions_hotkey = "ctrl+alt+j"   # global shortcut to the waiting session ("" = off)
 ```
 
 Optional environment overrides:
@@ -169,6 +284,8 @@ Optional environment overrides:
 > - the **limit‑reached** and **rate‑limited** states
 > - resume‑on‑reset — both **Tier 1** (notify + one click) and **Tier 2** (auto‑resume countdown)
 > - the estimated **cost** line (click the strip to see it) and the graceful **offline** state
+> - **live sessions** end to end — the dot row filling up and overflowing, a session **blocking** (red dot, red strip dot, a pulse and a toast that waits for you), it being answered, two **finishing** at once as one summary, and one **ending**
+> - **answering a blocked session in place** — the real window opens on the tour's blocked session, showing its question and choices as buttons. It reads a canned screen and sends nothing: the tour's process ids are invented, and one could belong to something real
 >
 > Pick **◼ Exit demo** to snap back to your real usage. No network, no credentials, nothing real touched.
 
@@ -233,7 +350,7 @@ The floating widget is **one cross‑platform codebase** — the same strip, dra
 
 ## Roadmap
 
-**Shipped:** desktop alerts · config file + in‑app settings panel · estimated‑cost view · standalone binaries + release CI · pipx / Scoop / Homebrew installs · cross‑platform floating widget (macOS/Linux) · one‑click **Check for Updates** · **Start on login** toggle.
+**Shipped:** desktop alerts · config file + in‑app settings panel · estimated‑cost view · standalone binaries + release CI · pipx / Scoop / Homebrew installs · cross‑platform floating widget (macOS/Linux) · one‑click **Check for Updates** · **Start on login** toggle · **live Claude session monitor** (statuses, alerts, click‑to‑focus, per‑project usage).
 
 **Next:** usage sparkline over the session · per‑model cost breakdown · published winget listing.
 

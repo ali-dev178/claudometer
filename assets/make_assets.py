@@ -5,10 +5,13 @@ macOS desktops with soft drop shadows. Run:  py assets/make_assets.py
 
 This covers every rendered surface: the strip (+ severity/offline states), the
 popover (light/dark, per-model, cost), threshold alert toasts, resume toasts,
-the fullscreen overlay, the mac menu bar and the app icon. The one surface it
-can't draw is the native Settings window (real Tk widgets) — regenerate that
-with  py assets/capture_settings.py  (Windows, needs a display).
-Keep these in sync: whenever the UI changes, re-run both scripts.
+the fullscreen overlay, the mac menu bar and the app icon.
+
+Three companions, all of which must be re-run whenever the UI changes:
+
+    py assets/make_gallery.py      the reference sheets — every state, labelled
+    py assets/capture_answer.py    the answer window (real Tk, needs a display)
+    py assets/capture_settings.py  the Settings panel (ditto)
 """
 
 import os
@@ -19,13 +22,43 @@ from PIL import Image, ImageDraw, ImageFilter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import render  # noqa: E402
+import sessions_core  # noqa: E402
 
 OUT = os.path.dirname(os.path.abspath(__file__))
+
+#: Strip groups for the marketing shots — the usage meters plus the live
+#: session count, so the screenshots show what the app actually ships with.
+STRIP_METRICS = ("session", "weekly", "sessions")
+
+
+def sample_sessions():
+    """Plausible live sessions, built through the real Session/format path so
+    the screenshots can't drift from what the app actually produces."""
+    now = sessions_core.now_ms()
+    # "input needed" is one of the reasons Claude Code actually reports; three
+    # status groups keep the one-line summary from eliding.
+    spec = [
+        ("Ship the release pipeline", "claude-widget",
+         sessions_core.WAITING, 4 * 60, "input needed"),
+        ("Refactor the payment retries", "checkout-api",
+         sessions_core.BUSY, 12 * 60, ""),
+        ("Draft the migration plan", "docs-site",
+         sessions_core.BUSY, 45, ""),
+        ("Explore the caching idea", "proxy-passer",
+         sessions_core.IDLE, 26 * 60, ""),
+    ]
+    return [
+        sessions_core.Session(
+            session_id=f"sample-{i}", pid=4000 + i, cwd=f"/work/{project}",
+            name=f"{project}-{i}", title=title, status=status,
+            waiting_for=reason, status_updated_at=now - age * 1000)
+        for i, (title, project, status, age, reason) in enumerate(spec)
+    ]
 
 
 def sample_disp():
     now = datetime.now(timezone.utc)
-    return {
+    disp = {
         "plan": "Plan: Max (5x)",
         "session_pct": 61, "session_color": "amber",
         "session_resets_at": now + timedelta(minutes=82),
@@ -35,6 +68,8 @@ def sample_disp():
         "session": None, "weekly": None, "face_pct": "61%",
         "foot": {"text": "Updated just now · auto", "dot": "green"},
     }
+    disp.update(sessions_core.format_sessions(sample_sessions()))
+    return disp
 
 
 # --------------------------------------------------------------------------- #
@@ -91,7 +126,8 @@ def hero_windows(disp):
     d.text((W - 20, H - tb_h + 19), "10:24 AM", font=fc, fill="#1f242b", anchor="rm")
     d.text((W - 20, H - tb_h + 37), "Mon, Jul 13", font=fd, fill="#6b7480", anchor="rm")
 
-    strip = render.render_strip(disp, "#f2f4f7", "light", scale=3).convert("RGBA")
+    strip = render.render_strip(disp, "#f2f4f7", "light", scale=3,
+                                metrics=STRIP_METRICS).convert("RGBA")
     bg.alpha_composite(strip, (18, H - tb_h + (tb_h - strip.height) // 2))
 
     pop = popover_rgba(disp, "light")
@@ -135,11 +171,18 @@ def hero_mac(disp):
             ("row", f"Session   {disp['session_pct']}%   ·   resets in 1h 22m"),
             ("row", f"Weekly (all)   {disp['weekly_pct']}%   ·   resets Thu Jul 16, 11:00 AM"),
             ("row", f"     Fable   {disp['model_rows'][0]['pct']}%"),
-            ("sep", ""), ("info", "Updated 10:24 AM · auto"),
+            ("sep", ""),
+            ("head", f"Live sessions — {disp['sessions_summary']}")]
+    # A drawn dot, not the emoji: the real macOS menu renders emoji natively,
+    # but the font Pillow has here would put a tofu box in the mock.
+    rows += [("srow", (r["color"], f"{r['label']}   ·   {r['detail']}"))
+             for r in disp["sessions_rows"][:3]]
+    rows += [("sep", ""), ("info", "Updated 10:24 AM · auto"),
             ("act", "Settings"), ("act", "Refresh now"),
             ("act", "Check for Updates…"), ("act", "Quit")]
-    mw = 288
-    heights = {"head": 30, "sep": 11, "row": 28, "act": 28, "info": 24}
+    mw = 340   # wider: the live-session rows carry a title and a status
+    heights = {"head": 30, "sep": 11, "row": 28, "act": 28, "info": 24,
+               "srow": 28}
     mh = sum(heights[k] for k, _ in rows) + 12
     mx, my = min(item_left, W - mw - 14), mb_h + 6
     menu = Image.new("RGBA", (mw, mh), (0, 0, 0, 0))
@@ -157,6 +200,13 @@ def hero_mac(disp):
         elif kind == "info":
             md.ellipse([16, yy + hgt / 2 - 3, 22, yy + hgt / 2 + 3], fill=T["green"])
             md.text((29, yy + hgt / 2), text, font=fr2, fill=T["faint"], anchor="lm")
+        elif kind == "srow":
+            color_name, label = text
+            cy = yy + hgt / 2
+            md.ellipse([26, cy - 3, 32, cy + 3],
+                       fill=render.sev_color(T, color_name))
+            md.text((41, cy), render._elide(md, label, fr2, mw - 41 - 14),
+                    font=fr2, fill=T["neutral"], anchor="lm")
         else:
             col = T["neutral"] if kind == "row" else T["accent"]
             md.text((16, yy + hgt / 2), text, font=fr2, fill=col, anchor="lm")
@@ -197,7 +247,8 @@ def themes_side_by_side(disp):
 
 
 def strip_closeup(disp):
-    strip = render.render_strip(disp, "#e8edf3", "light", scale=3)
+    strip = render.render_strip(disp, "#e8edf3", "light", scale=3,
+                                metrics=STRIP_METRICS)
     pad = 26
     W, H = strip.width + pad * 2, strip.height + pad * 2
     bg = Image.new("RGB", (W, H), "#e8edf3")
@@ -316,6 +367,36 @@ def cost_showcase():
     d.text((pad + pop.width / 2, pad + pop.height + 13), "Estimated cost today (opt-in)",
            font=f, fill="#6b7480", anchor="mm")
     bg.convert("RGB").save(os.path.join(OUT, "popover-cost.png"))
+
+
+def sessions_showcase(disp):
+    """The live-session list beside the two alerts it produces."""
+    pop = popover_rgba(disp, "light")
+    waiting = _toast_rgba(None, "Needs you",
+                          "Ship the release pipeline · input needed",
+                          "red", "light")
+    done = _toast_rgba(None, "Finished",
+                       "Explore the caching idea · proxy-passer", "green",
+                       "light")
+    pad, gap = 46, 44
+    col_w = max(waiting.width, done.width)
+    W = pad * 2 + pop.width + gap + col_w
+    H = pad * 2 + max(pop.height, waiting.height + done.height + 26) + 26
+    bg = render._vgrad(W, H, "#eef1f6", "#dbe1ea").convert("RGBA")
+    place_card(bg, pop, pad, pad, blur=22, alpha=55)
+    tx = pad + pop.width + gap
+    ty = pad + 40
+    place_card(bg, waiting, tx, ty, blur=18, alpha=45, dy=12)
+    place_card(bg, done, tx, ty + waiting.height + 26, blur=18, alpha=45, dy=12)
+    d = ImageDraw.Draw(bg)
+    f = render._font("sb", 12)
+    d.text((pad + pop.width / 2, pad + pop.height + 13),
+           "Every running session, and what it's waiting on",
+           font=f, fill="#6b7480", anchor="mm")
+    d.text((tx + col_w / 2, ty + waiting.height + done.height + 39),
+           "Toasts when one needs you, or finishes",
+           font=f, fill="#6b7480", anchor="mm")
+    bg.convert("RGB").save(os.path.join(OUT, "sessions.png"))
 
 
 def _dashed(d, p1, p2, color, width, dash=15, gap=11):
@@ -463,6 +544,7 @@ if __name__ == "__main__":
     hero_windows(disp)
     hero_mac(disp)
     themes_side_by_side(disp)
+    sessions_showcase(disp)
     strip_closeup(disp)
     strip_states()
     anywhere_showcase()

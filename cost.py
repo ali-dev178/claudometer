@@ -56,22 +56,21 @@ def _line_cost(usage: dict, key: str) -> float:
             + _n(usage, "cache_read_input_tokens") * p["cache_read"]) / 1_000_000.0
 
 
-def compute_today(config_dir=None):
-    """Return {"tokens": int, "cost": float} for usage since local midnight,
-    or None if there's nothing to read."""
+def _projects_dir(config_dir=None):
     base = Path(config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
     proj = base / "projects"
-    if not proj.exists():
-        return None
+    return proj if proj.exists() else None
 
+
+def _scan_today(proj):
+    """Yield (project_dir, cwd, message_id, usage, price_key) for today's
+    assistant messages.
+
+    Shared by the totals and the per-project split so the awkward part — the
+    streaming-snapshot dedup below — has exactly one implementation.
+    """
     start = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
     cutoff = start.timestamp()
-    # Claude Code writes one line per content block for an assistant message,
-    # all sharing the message id. Input/cache tokens are identical across them
-    # but output_tokens GROW (streaming snapshots), so keep the LAST occurrence
-    # per id (the complete cumulative usage) rather than summing or keeping first.
-    by_id = {}                          # message id -> (usage, key), last wins
-    extra_tokens, extra_cost = 0, 0.0   # lines without an id (counted as-is)
 
     for f in proj.rglob("*.jsonl"):
         try:
@@ -79,6 +78,12 @@ def compute_today(config_dir=None):
                 continue
         except OSError:
             continue
+        # The project directory is the one directly under projects/; a session's
+        # subagent transcripts live deeper but belong to the same project.
+        try:
+            project_dir = f.relative_to(proj).parts[0]
+        except ValueError:
+            project_dir = f.parent.name
         try:
             with f.open("r", encoding="utf-8") as fh:
                 for line in fh:
@@ -98,23 +103,73 @@ def compute_today(config_dir=None):
                         else:
                             continue  # no valid timestamp -> not counted as "today"
                         msg = obj.get("message", {})
-                        key = _key_for(msg.get("model", ""))  # may be None (unpriced)
-                        u = msg.get("usage", {})
-                        mid = msg.get("id")
-                        if mid is not None:
-                            by_id[mid] = (u, key)  # tokens still count; cost only if key
-                        else:
-                            extra_tokens += _tok(u)
-                            if key:
-                                extra_cost += _line_cost(u, key)
+                        yield (project_dir, obj.get("cwd"), msg.get("id"),
+                               msg.get("usage", {}),
+                               _key_for(msg.get("model", "")))
                     except Exception:
                         continue
         except OSError:
             continue
 
-    total_tokens = extra_tokens + sum(_tok(u) for u, _ in by_id.values())
-    total_cost = extra_cost + sum(_line_cost(u, key) for u, key in by_id.values() if key)
-    return {"tokens": int(total_tokens), "cost": total_cost}
+
+def _totals(rows):
+    """Sum (tokens, cost) over scan rows.
+
+    Claude Code writes one line per content block for an assistant message, all
+    sharing the message id. Input/cache tokens are identical across them but
+    output_tokens GROW (streaming snapshots), so keep the LAST occurrence per id
+    (the complete cumulative usage) rather than summing or keeping first.
+    """
+    by_id = {}                          # message id -> (usage, key), last wins
+    extra_tokens, extra_cost = 0, 0.0   # lines without an id (counted as-is)
+    for _project, _cwd, mid, usage, key in rows:
+        if mid is not None:
+            by_id[mid] = (usage, key)   # tokens still count; cost only if key
+        else:
+            extra_tokens += _tok(usage)
+            if key:
+                extra_cost += _line_cost(usage, key)
+    tokens = extra_tokens + sum(_tok(u) for u, _ in by_id.values())
+    cost = extra_cost + sum(_line_cost(u, k) for u, k in by_id.values() if k)
+    return int(tokens), cost
+
+
+def compute_today(config_dir=None):
+    """Return {"tokens": int, "cost": float} for usage since local midnight,
+    or None if there's nothing to read."""
+    proj = _projects_dir(config_dir)
+    if proj is None:
+        return None
+    tokens, cost = _totals(_scan_today(proj))
+    return {"tokens": tokens, "cost": cost}
+
+
+def compute_today_by_project(config_dir=None, limit=None):
+    """Today's usage split per project, biggest first.
+
+    Returns a list of {"project", "tokens", "cost"}, or None if there's nothing
+    to read. The label comes from each transcript's own ``cwd`` rather than the
+    directory name, because the directory is a flattened slug
+    (``C--Personal-Space-claude-widget``) that can't be reversed reliably.
+    """
+    proj = _projects_dir(config_dir)
+    if proj is None:
+        return None
+    grouped, labels = {}, {}
+    for row in _scan_today(proj):
+        project_dir, cwd = row[0], row[1]
+        grouped.setdefault(project_dir, []).append(row)
+        if cwd and project_dir not in labels:
+            labels[project_dir] = os.path.basename(str(cwd).rstrip("\\/")) or str(cwd)
+    out = []
+    for project_dir, rows in grouped.items():
+        tokens, cost = _totals(rows)
+        if not tokens:
+            continue
+        out.append({"project": labels.get(project_dir, project_dir),
+                    "tokens": tokens, "cost": cost})
+    out.sort(key=lambda r: (-r["cost"], -r["tokens"], r["project"]))
+    return out[:limit] if limit else out
 
 
 if __name__ == "__main__":

@@ -14,17 +14,25 @@ else. All of it reads/writes the same ~/.claudometer.toml via settings.load/save
 
 import os
 import subprocess
+import time
 from datetime import datetime
 
 import rumps
 
 import usage_core as core
+import sessions_core
 import settings
 import config
 import updates
 import autostart
 
 DOT = {"green": "🟢", "amber": "🟡", "red": "🔴", "grey": "⚪"}
+
+#: Live sessions tick far faster than the usage poll. A FULL menu rebuild leaks
+#: rumps callback registrations, so this fast timer only rewrites the titles of
+#: existing items in place — the same trick the freshness line already uses.
+#: A rebuild happens only when the SET of sessions changes.
+SESS_TICK = 2.0
 
 
 class MenuApp(rumps.App):
@@ -39,10 +47,22 @@ class MenuApp(rumps.App):
         # Windows/floating-widget popover footer).
         self._pending_source = "auto"
         self._updated_item = None
+        self._updated_text = None   # stamped by the poll, not by a repaint
+        self._last_poll_at = 0.0
+        self._sessions_on = self._cfg["sessions"]
+        self._sessions_max_rows = self._cfg["sessions_max_rows"]
+        self._sess_tracker = sessions_core.SessionTracker()
+        self._sess_disp = {}
+        self._sess_items = []      # MenuItems whose titles are rewritten in place
+        self._sess_shape = None    # ids + statuses; a change here forces a rebuild
+        self._last_disp = None
         self.menu = ["Loading…"]
         self._timer = rumps.Timer(self._tick, self._cfg["poll"])
         self._timer.start()
         self._tick(None)  # immediate first render
+        if self._sessions_on:
+            self._sess_timer = rumps.Timer(self._sess_tick, SESS_TICK)
+            self._sess_timer.start()
 
     def _title(self, disp):
         """Menu-bar title: dot (most-critical severity) + the enabled meters,
@@ -58,7 +78,18 @@ class MenuApp(rumps.App):
             return "%s %s" % (dot, disp.get("face_pct", "—"))
         return "%s %s" % (dot, " · ".join(parts))
 
-    def _tick(self, _):
+    def _tick(self, _, force: bool = False):
+        # rumps starts its NSTimer with a fire date of "now", so the timer
+        # fires the moment the run loop starts — right after the explicit
+        # first render in __init__. Two usage requests within a few hundred
+        # milliseconds, every launch. Skip the duplicate rather than drop the
+        # explicit render, which is what guarantees a menu before the first
+        # interval elapses. "Refresh now" forces through: a click that quietly
+        # did nothing would be worse than a spare request.
+        now = time.monotonic()
+        if not force and self._last_poll_at and now - self._last_poll_at < 2.0:
+            return
+        self._last_poll_at = now
         try:
             result = core.poll_once(self._state)
             if isinstance(result, core.Usage):
@@ -70,6 +101,9 @@ class MenuApp(rumps.App):
         except Exception:
             disp = core.status_display(core.Status.ERROR)
         self.title = self._title(disp)
+        self._last_disp = disp   # so _sess_tick can rebuild without re-polling
+        if self._sessions_on and not self._sess_disp:
+            self._sess_tick()    # first paint shouldn't wait for the fast timer
         # Rebuild only when the menu content changes — rebuilding every tick
         # leaks rumps callback registrations (they're never pruned).
         sig = (disp.get("plan"), disp.get("session"), disp.get("weekly"),
@@ -79,12 +113,108 @@ class MenuApp(rumps.App):
             self._rebuild(disp)
         # Always refresh the freshness line (kept out of `sig` so it doesn't
         # force a full menu rebuild every tick — that leaks rumps callbacks).
+        # Stamped HERE, by the poll, and remembered: _rebuild also runs when
+        # only the session list changed, and recomputing the time there would
+        # claim the usage numbers were refreshed when nothing was fetched.
         source, self._pending_source = self._pending_source, "auto"
+        self._updated_text = self._updated_label(source)
         if self._updated_item is not None:
-            self._updated_item.title = self._updated_label(source)
+            self._updated_item.title = self._updated_text
 
     def _updated_label(self, source: str) -> str:
         return f"Updated {datetime.now().strftime('%-I:%M %p')} · {source}"
+
+    # -- live sessions ---------------------------------------------------- #
+    @staticmethod
+    def _row_title(row) -> str:
+        return f"    {row['emoji']} {row['label']}  ·  {row['detail']}"
+
+    def _sess_tick(self, _=None) -> None:
+        """Refresh live sessions without rebuilding the menu when we can."""
+        try:
+            self._sess_tracker.update(sessions_core.snapshot())
+            live = sessions_core.enrich_all(self._sess_tracker.sessions)
+            self._sess_disp = sessions_core.format_sessions(
+                live, max_rows=self._sessions_max_rows)
+            self._sess_disp["sessions_recent"] = sessions_core.format_recent(
+                self._sess_tracker.recent)
+        except Exception:
+            return
+
+        rows = self._sess_disp.get("sessions_rows") or []
+        recent = self._sess_disp.get("sessions_recent") or []
+        # Recent rows change the row COUNT, so they belong in the shape too, or
+        # a session ending would never add its line.
+        # The header summary and the "+N more" line are rebuilt-only, so they
+        # belong in the shape: with more sessions than fit, one OUTSIDE the
+        # visible rows changing status leaves the rows byte-identical and the
+        # header would go on claiming "2 working · 4 done" indefinitely.
+        # Deliberately NOT the dwell text, which ticks every second and would
+        # rebuild the menu that often — rumps never prunes callbacks.
+        shape = (tuple((r["session_id"], r["status"]) for r in rows),
+                 tuple(r["session_id"] for r in recent),
+                 self._sess_disp.get("sessions_summary"),
+                 self._sess_disp.get("sessions_overflow"))
+        if shape != self._sess_shape:
+            # The set of sessions changed, so the row COUNT changed — only a
+            # rebuild can add or remove items.
+            self._sess_shape = shape
+            # Not before the first paint: _tick is about to rebuild anyway and
+            # would pick these rows up, and a rumps rebuild leaks callbacks —
+            # doing it twice at startup is pure waste.
+            if self._last_disp is not None and self._last_sig is not None:
+                self._rebuild(self._last_disp)
+            return
+        # Same rows, newer dwell text: rewrite titles in place (no rebuild, so
+        # no leaked callbacks).
+        for item, row in zip(self._sess_items, rows):
+            try:
+                item.title = self._row_title(row)
+            except Exception:
+                pass
+
+    def _session_rows(self):
+        """Menu rows for the live sessions, or [] if anything goes wrong.
+
+        Wrapped because this is the one part of the macOS adapter that cannot
+        be exercised on the development machine. The usage meters are the app's
+        actual job, so a fault in the session rows degrades to hiding them
+        rather than taking the whole menu bar down with it.
+        """
+        self._sess_items = []
+        try:
+            sess_rows = self._sess_disp.get("sessions_rows")
+            if not self._sessions_on or sess_rows is None:
+                return []
+            out = [None]
+            summary = self._sess_disp.get("sessions_summary")
+            out.append(rumps.MenuItem(
+                f"Live sessions — {summary}" if summary else "Live sessions"))
+            if not sess_rows:
+                out.append(rumps.MenuItem(
+                    "    " + (self._sess_disp.get("sessions_empty")
+                              or "No sessions running")))
+            seen = {}
+            for row in sess_rows:
+                title = self._row_title(row)
+                if title in seen:        # rumps dedupes by title — pad so two
+                    seen[title] += 1     # identically-named sessions both show
+                    title += " " * seen[title]
+                else:
+                    seen[title] = 0
+                item = rumps.MenuItem(title)
+                self._sess_items.append(item)
+                out.append(item)
+            if self._sess_disp.get("sessions_overflow"):
+                out.append(rumps.MenuItem(
+                    f"    +{self._sess_disp['sessions_overflow']} more"))
+            for row in self._sess_disp.get("sessions_recent") or []:
+                out.append(rumps.MenuItem(
+                    f"    ⚪ {row['label']}  ·  {row['detail']}"))
+            return out
+        except Exception:
+            self._sess_items = []
+            return []
 
     def _rebuild(self, disp) -> None:
         rows = []
@@ -106,9 +236,12 @@ class MenuApp(rumps.App):
             else:
                 seen[row] = 0
             rows.append(row)
+        rows.extend(self._session_rows())
+
         rows.append(None)
         # A disabled (callback-less) info line showing data freshness + source.
-        self._updated_item = rumps.MenuItem(self._updated_label(self._pending_source))
+        self._updated_item = rumps.MenuItem(
+            self._updated_text or self._updated_label(self._pending_source))
         rows.append(self._updated_item)
         rows.append(self._settings_menu())
         rows.append(rumps.MenuItem("Refresh now", callback=self._refresh))
@@ -176,8 +309,20 @@ class MenuApp(rumps.App):
         subprocess.Popen(["open", path])
 
     def _save(self):
+        """Write back only what this menu owns.
+
+        Re-reads first: the menu holds the config as it was at launch, and
+        "Open config file…" invites the user to edit the very same file by
+        hand. Writing the launch snapshot back would quietly revert every edit
+        they made since, which is a poor reward for using the item we gave them.
+        """
         try:
-            settings.save(self._cfg)
+            cfg = settings.load()
+            for key in ("metrics", "poll"):      # the only two this menu sets
+                if key in self._cfg:
+                    cfg[key] = self._cfg[key]
+            self._cfg = cfg
+            settings.save(cfg)
         except Exception:
             pass
 
@@ -204,7 +349,7 @@ class MenuApp(rumps.App):
 
     def _refresh(self, _):
         self._pending_source = "manual"  # this tick's data came from a click
-        self._tick(None)
+        self._tick(None, force=True)
 
     def run(self) -> None:
         super().run()

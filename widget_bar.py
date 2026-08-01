@@ -10,8 +10,11 @@ Interactions: left-click = open/close popover · left-drag = move (remembered)
 """
 
 import ctypes
+import dataclasses
 from ctypes import wintypes
 import json
+import os
+import subprocess
 import sys
 import threading
 import time
@@ -26,6 +29,11 @@ from PIL import Image, ImageDraw, ImageTk
 import usage_core as core
 import render
 import settings
+import sessions_core
+import focus
+import hooks as claude_hooks
+import hotkey as hotkeys
+import console_send
 import cost
 import resume
 import config
@@ -91,6 +99,29 @@ def _screen_size():
     return 1920, 1080
 
 
+#: MonitorFromPoint: return NULL rather than the nearest monitor.
+_MONITOR_DEFAULTTONULL = 0
+
+
+def _on_a_monitor(x, y):
+    """True if (x, y) actually lands on a display.
+
+    A remembered position outlives the display it was chosen on — unplug a
+    second monitor, or let a drag fling the strip past an edge, and restoring
+    it verbatim leaves the widget running somewhere nobody can see, with no way
+    to get it back but deleting a file.
+    """
+    if not _IS_WIN:
+        sw, sh = _screen_size()
+        return -40 <= x <= sw - 20 and -40 <= y <= sh - 10
+    try:
+        pt = wintypes.POINT(int(x) + 8, int(y) + 8)   # just inside the strip
+        return bool(ctypes.windll.user32.MonitorFromPoint(
+            pt, _MONITOR_DEFAULTTONULL))
+    except Exception:
+        return True      # can't tell — trust what was saved
+
+
 def _monitor_workarea(x, y):
     """(left, top, right, bottom) work area of the monitor under screen point
     (x, y) — used to place the popover/toasts on the widget's own display.
@@ -147,6 +178,30 @@ def _get_pixel(x, y):
 def _lum(rgb):
     r, g, b = rgb[:3]
     return 0.299 * r + 0.587 * g + 0.114 * b
+
+
+# The strip and the theme picker have to agree about what "readable" means, so
+# both use render's definition rather than keeping a second copy here.
+_rel_luminance = render.relative_luminance
+_contrast = render.contrast_ratio
+
+
+def _theme_for_bg(rgb):
+    """Pick the theme whose text is actually readable on *rgb*.
+
+    A plain luminance threshold gets this wrong on saturated colours: a mid
+    blue sits above the cutoff, so the light theme's near-black text is chosen
+    and the strip becomes hard to read. The strip samples whatever sits behind
+    it — which is sometimes a window, not the taskbar — so the choice is made
+    on measured contrast instead.
+    """
+    best, winner = 0.0, "light"
+    for name, theme in render.THEMES.items():
+        text = theme["neutral"].lstrip("#")
+        ratio = _contrast(rgb, tuple(int(text[i:i + 2], 16) for i in (0, 2, 4)))
+        if ratio > best:
+            best, winner = ratio, name
+    return winner
 
 
 _SHELL_CLASSES = {"Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"}
@@ -248,13 +303,17 @@ def _round_alpha(img, radius):
 # --------------------------------------------------------------------------- #
 class Popover:
     def __init__(self, root, theme, get_disp, anchor_x, anchor_top, anchor_bottom, work,
-                 on_refresh, on_quit, on_settings, on_close):
+                 on_refresh, on_quit, on_settings, on_close, on_session=None,
+                 on_session_menu=None):
         self.theme = theme
         self.get_disp = get_disp
         self.on_refresh = on_refresh
         self.on_quit = on_quit
         self.on_settings = on_settings
         self.on_close = on_close
+        self.on_session = on_session            # left click a session row
+        self.on_session_menu = on_session_menu  # right click a session row
+        self._rows = []                         # rows as last rendered
         self._closed = False
         self._after = None
         self._sig = None
@@ -281,6 +340,7 @@ class Popover:
         self.canvas = tk.Canvas(self.top, bg=key, highlightthickness=0, bd=0)
         self.canvas.pack()
         self.canvas.bind("<Button-1>", self._click)
+        self.canvas.bind("<Button-3>", self._right_click)
         self.canvas.bind("<Motion>", self._motion)
         self.top.bind("<Escape>", lambda e: self.close())
 
@@ -304,6 +364,12 @@ class Popover:
             tuple((r["label"], r["pct"], r["color"]) for r in disp.get("model_rows") or []),
             disp.get("plan"),
             round(disp.get("cost_usd") or 0, 2),
+            # Live sessions: the dwell text is part of the signature, so a row
+            # that only ages ("4m" -> "5m") still triggers a redraw.
+            tuple((r["label"], r["project"], r["color"], r["detail"])
+                  for r in disp.get("sessions_rows") or []),
+            disp.get("sessions_overflow"), disp.get("sessions_summary"),
+            disp.get("sessions_rows") is not None,
         )
 
     @staticmethod
@@ -350,6 +416,7 @@ class Popover:
         self._sig = sig
         if foot:
             disp = dict(disp, foot=foot)
+        self._rows = list(disp.get("sessions_rows") or [])
         img, hits = render.render_popover(disp, self.theme)
         img = _round_alpha(img, 16)
         self._photo = ImageTk.PhotoImage(img)
@@ -377,7 +444,27 @@ class Popover:
         except Exception:
             pass
 
+    def _row_at(self, x, y):
+        """The session row under a point, or None."""
+        name = self._hit_at(x, y)
+        if not name or not name.startswith("session:"):
+            return None
+        try:
+            return self._rows[int(name.split(":", 1)[1])]
+        except (ValueError, IndexError):
+            return None      # the list changed between render and click
+
+    def _right_click(self, e):
+        row = self._row_at(e.x, e.y)
+        if row is not None and self.on_session_menu:
+            self.on_session_menu(row, e.x_root, e.y_root)
+
     def _click(self, e):
+        row = self._row_at(e.x, e.y)
+        if row is not None:
+            if self.on_session:
+                self.on_session(row)
+            return
         for name, (x1, y1, x2, y2) in self._hits.items():
             if x1 <= e.x <= x2 and y1 <= e.y <= y2:
                 if name == "refresh":
@@ -420,12 +507,556 @@ class Popover:
 # --------------------------------------------------------------------------- #
 # Threshold alert toast
 # --------------------------------------------------------------------------- #
+class AnswerWindow:
+    """Talk to one session without leaving what you're doing.
+
+    Opens on a blocked session showing what it is asking, but does NOT close
+    when you answer — picking "Chat about this" is the start of a conversation,
+    not the end of one, and a window that vanished would send you to the
+    terminal for the very thing it exists to save you.
+
+    So it stays, shows what the session says back, and keeps taking input.
+    Reading and writing both go by process id, so it follows that session
+    whichever terminal tab it lives in.
+    """
+
+    W = 470
+    POLL_MS = 900
+    #: How long a finished session's window hangs about before retiring. It
+    #: opened because something needed answering; once nothing does, and you
+    #: are plainly not using it, it should get out of the way on its own.
+    CLOSE_AFTER = 30.0
+    #: …but never without saying so first. A window that vanished mid-sentence
+    #: while you were reading would be worse than one that overstayed.
+    WARN_AT = 10.0
+
+    def __init__(self, root, theme, row, on_send, on_open_terminal,
+                 poll=None, on_close=None):
+        self._on_send = on_send
+        self._on_open = on_open_terminal
+        self._poll = poll
+        self._on_close = on_close
+        self._closed = False
+        self._after = None
+        self._options = None       # last option set, so buttons only rebuild
+        self._quick_kind = None    # ditto for the Yes/No row
+        self._size = None          # ditto for the geometry
+        self._corner = None        # bottom-right it is pinned to
+        self._lines = None         # last screen, so it can be re-fitted
+        self._upto = None
+        self._set_geom = None      # the size WE asked for, to spot resizes
+        self._geom_settled = False  # …seen honoured, so deviations are theirs
+        self._user_sized = False   # …after which the size is theirs, not ours
+        self._touched = time.monotonic()   # last sign of life from the user
+        self._typing = False       # is the caret in the box? see <FocusIn>
+        self.alive = True
+        self.readable = True
+        self.row = dict(row)
+        self.pid = row.get("pid")
+        T = render.THEMES.get(theme, render.THEMES["light"])
+        self.T = T
+        bg, fg, dim = T["panel_bot"], T["neutral"], T["dim"]
+
+        self.top = tk.Toplevel(root)
+        self.top.title(f"{(row.get('label') or 'Session')[:40]} — Claudometer")
+        self.top.configure(bg=bg)
+        try:
+            self.top.attributes("-topmost", True)
+        except Exception:
+            pass
+        self.top.protocol("WM_DELETE_WINDOW", self.close)
+        self.top.bind("<Escape>", lambda e: self.close())
+        # Resizable on purpose — a long conversation deserves a taller panel.
+        self.top.bind("<Configure>", self._sized_by_user)
+        self.top.minsize(self.W, 160)
+        # Bindings on a Toplevel see its children's events too, so this is
+        # every keystroke and click anywhere in the window.
+        self.top.bind("<Key>", self._touch, add="+")
+        self.top.bind("<Button-1>", self._touch, add="+")
+        # 1–9 pick an option, so the whole thing can be done from the keyboard:
+        # the global shortcut opens this window, and the number answers it.
+        for digit in range(1, 10):
+            self.top.bind(str(digit), self._pick_by_key, add="+")
+
+        pad = tk.Frame(self.top, bg=bg)
+        pad.pack(fill="both", expand=True, padx=16, pady=12)
+
+        head = tk.Frame(pad, bg=bg)
+        head.pack(fill="x")
+        self._dot = tk.Canvas(head, width=10, height=10, bg=bg,
+                              highlightthickness=0)
+        self._dot.pack(side="left", padx=(0, 8))
+        self._paint_dot(row.get("color", "red"))
+        tk.Label(head, text=(row.get("label") or "session")[:46], bg=bg, fg=fg,
+                 font=("Segoe UI Semibold", 11), anchor="w").pack(side="left")
+        self._sub = tk.Label(pad, text="", bg=bg, fg=dim, font=("Segoe UI", 9),
+                             anchor="w")
+        self._sub.pack(fill="x", pady=(2, 8))
+
+        # Each section below is a container that is packed or unpacked whole.
+        # Emptying one and leaving it in place does NOT work: Tk keeps the
+        # height the frame last asked for, which leaves a band of dead space
+        # where a question used to be.
+        # What the session has said since you last typed — and only that. It
+        # carries the window while a conversation is going, and stays away
+        # entirely when there is a question, which says the same thing better
+        # in the lines right below.
+        self._reply_box = tk.Frame(pad, bg=bg)
+        self._reply = tk.Message(self._reply_box, text="", bg=bg, fg=dim,
+                                 font=("Segoe UI", 10), width=self.W - 44,
+                                 anchor="w", justify="left")
+        self._reply.pack(fill="x")
+
+        self._note_box = tk.Frame(pad, bg=bg)
+        self._note = tk.Label(self._note_box, text="", bg=bg, fg=dim,
+                              font=("Segoe UI", 9), anchor="w", justify="left",
+                              wraplength=self.W - 44)
+        self._note.pack(fill="x")
+
+        self._q_box = tk.Frame(pad, bg=bg)
+        self._question = tk.Message(self._q_box, text="", bg=bg, fg=fg,
+                                    font=("Segoe UI", 10), width=self.W - 44,
+                                    anchor="w", justify="left")
+        self._question.pack(fill="x")
+
+        self._opts = tk.Frame(pad, bg=bg)
+        self._quick = tk.Frame(pad, bg=bg)
+
+        entry_row = tk.Frame(pad, bg=bg)
+        self.var = tk.StringVar()
+        self._entry = tk.Entry(entry_row, textvariable=self.var, bg=T["track"],
+                               fg=fg, insertbackground=fg, bd=0, relief="flat",
+                               font=("Segoe UI", 10))
+        self._entry.pack(side="left", fill="x", expand=True, ipady=5)
+        self._entry.bind("<Return>", lambda e: self._send(self.var.get()))
+        # Tracked rather than asked for: focus_get() reports nothing while the
+        # window is unmapped, and "is the caret in the box" decides whether a
+        # digit is a choice or a character.
+        self._entry.bind("<FocusIn>", lambda e: setattr(self, "_typing", True))
+        self._entry.bind("<FocusOut>", lambda e: setattr(self, "_typing", False))
+        self._send_btn = tk.Button(
+            entry_row, text="Send", command=lambda: self._send(self.var.get()),
+            bg=T["accent"], fg="#ffffff", activebackground=T["accent"],
+            bd=0, relief="flat", font=("Segoe UI Semibold", 10), padx=16,
+            pady=4, cursor="hand2")
+        self._send_btn.pack(side="right", padx=(8, 0))
+        # Enter on its own accepts whatever a menu has highlighted, and is how
+        # a multiple-choice prompt is confirmed once the picks are made.
+        self._enter_btn = tk.Button(
+            entry_row, text="↵", command=lambda: self._send("", submit=True),
+            bg=T["track"], fg=fg, activebackground=T["track"], bd=0,
+            relief="flat", font=("Segoe UI", 10), padx=10, pady=4,
+            cursor="hand2")
+        self._enter_btn.pack(side="right", padx=(8, 0))
+
+        foot = tk.Frame(pad, bg=bg)
+        self.status = tk.Label(foot, text="", bg=bg, fg=dim,
+                               font=("Segoe UI", 9), anchor="w")
+        self.status.pack(side="left")
+        link = tk.Label(foot, text="Open the terminal  →", bg=bg,
+                        fg=T["accent"], font=("Segoe UI", 9), cursor="hand2")
+        link.pack(side="right")
+        link.bind("<Button-1>", lambda e: self._open_terminal())
+
+        # Top to bottom. Sections not currently in use are left out entirely
+        # rather than packed empty.
+        self._sections = (
+            (self._reply_box, {"fill": "x", "pady": (0, 4)}),
+            (self._note_box, {"fill": "x", "pady": (8, 0)}),
+            (self._q_box, {"fill": "x", "pady": (10, 4)}),
+            (self._opts, {"fill": "x", "pady": (6, 0)}),
+            (self._quick, {"fill": "x", "pady": (10, 0)}),
+            (entry_row, {"fill": "x", "pady": (10, 0)}),
+            (foot, {"fill": "x", "pady": (8, 0)}),
+        )
+        self._laid_out = None
+        self._render(self.row)
+        self._place(root)
+        self._tick()
+        try:
+            self.top.lift()
+            self.top.focus_force()
+            self._focus_where_it_is_useful()
+        except Exception:
+            pass
+
+    # -- rendering --------------------------------------------------------- #
+    def _paint_dot(self, color):
+        try:
+            self._dot.delete("all")
+            self._dot.create_oval(1, 1, 9, 9,
+                                  fill=render.sev_color(self.T, color),
+                                  outline="")
+        except Exception:
+            pass
+
+    def _set_subtitle(self, row):
+        if not self.alive:
+            text = f"{row.get('project') or ''}  ·  ended"
+        else:
+            dwell = row.get("dwell") or ""
+            parts = [row.get("project") or "", row.get("status_text") or ""]
+            if dwell:
+                parts.append(dwell)
+            text = "  ·  ".join(p for p in parts if p)
+        try:
+            self._sub.configure(text=text.strip(" ·"))
+        except Exception:
+            pass
+
+    def _set_note(self, text):
+        try:
+            self._note.configure(text=text)
+        except Exception:
+            pass
+
+    def _relayout(self):
+        """Show exactly the sections that have something in them.
+
+        Repacks every section rather than toggling one, because pack() with no
+        reference appends — a section brought back on its own would jump to the
+        bottom of the window.
+        """
+        key = tuple(bool(box.winfo_children()) and self._wanted(box)
+                    for box, _opts in self._sections)
+        if key == self._laid_out:
+            return
+        self._laid_out = key
+        try:
+            for (box, _opts), _on in zip(self._sections, key):
+                box.pack_forget()
+            for (box, opts), on in zip(self._sections, key):
+                if on:
+                    box.pack(**opts)
+        except Exception:
+            pass
+
+    def _wanted(self, box):
+        if box is self._reply_box:
+            return bool(self._reply.cget("text"))
+        if box is self._note_box:
+            return bool(self._note.cget("text"))
+        if box is self._q_box:
+            return bool(self._question.cget("text"))
+        return True
+
+    def _render(self, row):
+        """Draw the current state: question, choices and quick replies."""
+        self._set_subtitle(row)
+        try:
+            self._question.configure(text=row.get("question") or "")
+        except Exception:
+            pass
+        options = list(row.get("options") or [])
+        self._render_options(options, int(row.get("selected") or 0))
+        self._render_quick(row, options)
+        self._relayout()
+
+    def _render_options(self, options, selected):
+        # Rebuild only when the choices themselves change: redrawing every tick
+        # would make the buttons unclickable.
+        key = (options, selected, self.alive)
+        if key == self._options:
+            return
+        self._options = key
+        for child in self._opts.winfo_children():
+            child.destroy()
+        if not options:
+            return
+        T, fg = self.T, self.T["neutral"]
+        for index, label in enumerate(options, start=1):
+            here = index == selected        # what the session has highlighted
+            tk.Button(self._opts, text=f"{index}.  {label}",
+                      command=lambda n=index: self._pick(n),
+                      state="normal" if self.alive else "disabled",
+                      bg=T["accent_soft"] if here else T["track"], fg=fg,
+                      activebackground=T["accent"], activeforeground="#ffffff",
+                      disabledforeground=T["faint"], bd=0, relief="flat",
+                      font=("Segoe UI Semibold" if here else "Segoe UI", 10),
+                      anchor="w", padx=12, pady=5,
+                      cursor="hand2").pack(fill="x", pady=(0, 3))
+
+    def _render_quick(self, row, options):
+        """Yes / No, but only for a prompt that has no numbered menu of its own."""
+        kind = (bool(options), row.get("status"), self.alive)
+        if kind == self._quick_kind:
+            return
+        self._quick_kind = kind
+        for child in self._quick.winfo_children():
+            child.destroy()
+        if options or row.get("status") != sessions_core.WAITING or not self.alive:
+            return
+        T, fg = self.T, self.T["neutral"]
+        for label, text, primary in (("Yes", "yes", True), ("No", "no", False)):
+            tk.Button(self._quick, text=label,
+                      command=lambda t=text: self._send(t),
+                      bg=T["accent"] if primary else T["track"],
+                      fg="#ffffff" if primary else fg,
+                      activebackground=T["accent"] if primary else T["track"],
+                      bd=0, relief="flat", font=("Segoe UI Semibold", 10),
+                      padx=22 if primary else 18, pady=5,
+                      cursor="hand2").pack(side="left", padx=(0, 8),
+                                           pady=(10, 0))
+
+    def _show_reply(self, lines, upto=None, question=""):
+        """Show what the session said, unless it is about to ask it anyway.
+
+        With a question on screen this would be the same words twice — the
+        transcript of it above, the point of it below.
+        """
+        try:
+            text = "" if question else sessions_core.latest_reply(lines, upto)
+            self._reply.configure(text=text)
+        except Exception:
+            pass
+
+    def _sized_by_user(self, event):
+        """Notice the window being resized by hand, and stop re-fitting it.
+
+        Someone who drags this bigger wants a longer view of the conversation.
+        Snapping it back to fit the next reply would be the window arguing
+        with them once a second.
+        """
+        if event.widget is not self.top or self._set_geom is None:
+            return
+        want_w, want_h = self._set_geom
+        if abs(event.width - want_w) <= 2 and abs(event.height - want_h) <= 2:
+            # The window manager has honoured what we asked for. Only from
+            # here can a difference mean somebody dragged it.
+            self._geom_settled = True
+        elif self._geom_settled:
+            self._user_sized = True
+
+    def _place(self, root=None):
+        """Sit the window in the bottom-right of the strip's monitor.
+
+        Anchored to its bottom edge, so growing a menu or a long reply pushes
+        the window UP and leaves the controls where the pointer already is.
+        """
+        if self._user_sized:
+            return
+        try:
+            self.top.update_idletasks()
+            w = max(self.top.winfo_reqwidth(), self.W)
+            h = self.top.winfo_reqheight()
+            if (w, h) == self._size:
+                return
+            self._size = (w, h)
+            if self._corner is None:
+                anchor = root if root is not None else self.top.master
+                _wl, _wt, wr, wb = _monitor_workarea(
+                    anchor.winfo_rootx() + anchor.winfo_width() // 2,
+                    anchor.winfo_rooty() + anchor.winfo_height() // 2)
+                self._corner = (int(wr - 24), int(wb - 24))
+            right, bottom = self._corner
+            self._set_geom = (w, h)
+            self._geom_settled = False       # wait for the WM to catch up
+            self.top.geometry(f"{w}x{h}+{right - w}+{bottom - h}")
+        except Exception:
+            pass
+
+    # -- live refresh ------------------------------------------------------ #
+    def _absorb(self, state):
+        """Take one poll of the session and reflect it."""
+        if not state:
+            return
+        was_alive = self.alive
+        self.alive = bool(state.get("alive"))
+        self.readable = bool(state.get("readable"))
+        row = dict(state.get("row") or self.row)
+        prompt = state.get("prompt")
+        if prompt:
+            row.update(question=prompt["question"],
+                       options=list(prompt["options"]),
+                       selected=prompt["selected"])
+        else:
+            row.update(question="", options=[], selected=0)
+        self.row = row
+        self._paint_dot(row.get("color", "grey") if self.alive else "grey")
+        if self.alive:
+            self._lines = state.get("lines")
+            self._upto = prompt["start"] if prompt else None
+            self._show_reply(self._lines, self._upto, row.get("question"))
+        if not self.alive:
+            # The last thing it said stays up — it is the only remaining
+            # record of it — but nothing can be sent to it any more.
+            self._set_note("This session has ended.")
+            self._disable()
+        elif not self.readable:
+            self._set_note("Can't read this session's screen — it may not be "
+                           "running in a console this can attach to. Answers "
+                           "may still go through.")
+        elif row.get("status") == sessions_core.SHELL:
+            self._set_note("Running a command — anything you send is queued.")
+        elif row.get("status") == sessions_core.BUSY:
+            self._set_note("Working — anything you send now is queued.")
+        else:
+            self._set_note("")
+        self._render(row)
+        # The window is built before the first poll, so its real contents —
+        # the question, its choices, the reply — all arrive after it has been
+        # sized. Re-fit, or they hang off the bottom edge.
+        self._place()
+        if was_alive and not self.alive:
+            self._say("")
+
+    def _disable(self):
+        for widget in (self._entry, self._send_btn, self._enter_btn):
+            try:
+                widget.configure(state="disabled")
+            except Exception:
+                pass
+
+    def _touch(self, _event=None):
+        """Anything you do in here means you are still using it."""
+        self._touched = time.monotonic()
+
+    def _retire(self):
+        """Close once there is nothing left to answer and nobody using it.
+
+        The window is a request: a session needed you. When it no longer does
+        — it has replied, or ended — leaving the window up means you close it
+        by hand every single time. So it retires itself, but only while the
+        box is empty and nothing has been touched, and never silently.
+        """
+        if self.var.get().strip():
+            return self._touch()        # a half-typed message is still yours
+        status = self.row.get("status")
+        if self.alive and status in (sessions_core.WAITING, sessions_core.BUSY,
+                                     sessions_core.SHELL):
+            # Its turn, or about to be yours again. Not finished either way.
+            # SHELL belongs here: approving a command puts the session into it,
+            # and the window would otherwise close while that command runs.
+            return self._touch()
+        left = self.CLOSE_AFTER - (time.monotonic() - self._touched)
+        if left <= 0:
+            self.close()
+        elif left <= self.WARN_AT:
+            self._say(f"nothing left to answer — closing in {int(left) + 1}s")
+
+    def _tick(self):
+        if self._closed:
+            return
+        try:
+            if self._poll and self.alive:
+                self._absorb(self._poll(self.row))
+            self._retire()
+        except Exception:
+            _log_exc()
+        if self._closed:
+            return
+        try:
+            self._after = self.top.after(self.POLL_MS, self._tick)
+        except Exception:
+            pass
+
+    # -- actions ----------------------------------------------------------- #
+    def _focus_where_it_is_useful(self):
+        """Focus the box when you'd type, the window when you'd press a number.
+
+        Putting the caret in the entry unconditionally means every digit you
+        press goes into the box, so the number keys — the fastest way to
+        answer a menu — would never once fire.
+        """
+        try:
+            if self.row.get("options"):
+                self.top.focus_set()
+            else:
+                self._entry.focus_set()
+        except Exception:
+            pass
+
+    def _pick_by_key(self, event):
+        """1–9 answers the menu, unless you're typing a message."""
+        if self._typing:
+            return                          # they're writing, not choosing
+        options = list(self.row.get("options") or [])
+        try:
+            number = int(event.char)
+        except (TypeError, ValueError):
+            return
+        if 1 <= number <= len(options):
+            self._pick(number)
+            return "break"
+
+    def _pick(self, number):
+        """Answer with a menu number, having checked the menu still says that.
+
+        Between the buttons being drawn and one being clicked the session may
+        have moved on, and "3" would then mean something else entirely.
+        """
+        expected = list(self.row.get("options") or [])
+        try:
+            state = self._poll(self.row) if self._poll else None
+        except Exception:
+            _log_exc()
+            state = None
+        if state is not None:
+            self._absorb(state)
+            if list(self.row.get("options") or []) != expected:
+                self._say("That choice has moved — take another look.")
+                return
+        self._send(str(number))
+
+    def _send(self, text, submit=True):
+        self._touch()
+        ok, error = self._on_send(self.row, text, submit)
+        if ok:
+            # Deliberately stays open: an answer often starts a conversation,
+            # and that conversation continues right here.
+            try:
+                self.var.set("")
+                self._entry.focus_set()
+            except Exception:
+                pass
+            self._say("sent")
+        else:
+            self._say(error or "Couldn't send that.")
+        return ok
+
+    def _say(self, text):
+        try:
+            self.status.configure(text=text)
+        except Exception:
+            pass
+
+    def _open_terminal(self):
+        row = self.row
+        self.close()
+        if self._on_open:
+            self._on_open(row)
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        if self._after:
+            try:
+                self.top.after_cancel(self._after)
+            except Exception:
+                pass
+        try:
+            self.top.destroy()
+        except Exception:
+            pass
+        if self._on_close:
+            try:
+                self._on_close()
+            except Exception:
+                pass
+
+
 class Toast:
     """A small auto-dismissing alert card near the tray."""
 
     def __init__(self, root, theme, pct, title, subtitle, color_name, duration=6500,
-                 on_close=None):
+                 on_close=None, on_click=None, choices=(), on_choice=None):
         self._on_close = on_close
+        # A blocked session is a request, not an announcement — its toast stays
+        # until it's dealt with (duration=None) instead of timing out.
+        self._on_click = on_click
+        self._on_choice = on_choice
+        self._hit = []
         self.top = tk.Toplevel(root)
         self.top.overrideredirect(True)
         try:
@@ -433,25 +1064,53 @@ class Toast:
         except Exception:
             pass
         key = _make_transparent(self.top, theme)
-        img = _round_alpha(render.render_toast(pct, title, subtitle, color_name, theme), 14)
+        img = _round_alpha(render.render_toast(pct, title, subtitle, color_name,
+                                               theme, choices=tuple(choices),
+                                               hit=self._hit), 14)
         self._photo = ImageTk.PhotoImage(img)
         w, h = img.size
         c = tk.Canvas(self.top, width=w, height=h, bg=key, highlightthickness=0, bd=0)
         c.pack()
         c.create_image(0, 0, anchor="nw", image=self._photo)
-        c.bind("<Button-1>", lambda e: self.close())
+        c.bind("<Button-1>", self._clicked)
+        try:
+            c.configure(cursor="hand2" if on_click else "")
+        except Exception:
+            pass
         wl, wt, wr, wb = _monitor_workarea(root.winfo_rootx() + root.winfo_width() // 2,
                                            root.winfo_rooty() + root.winfo_height() // 2)
         self.top.geometry(f"{w}x{h}+{wr - w - 20}+{wb - h - 16}")
         self._closed = False
-        self._after = self.top.after(duration, self.close)
+        self._after = self.top.after(duration, self.close) if duration else None
+
+    def _clicked(self, event=None):
+        # A click on one of the answer buttons answers; anywhere else on the
+        # card still does what the whole toast has always done.
+        if event is not None and self._on_choice:
+            for index, x0, y0, x1, y1 in self._hit:
+                if x0 <= event.x <= x1 and y0 <= event.y <= y1:
+                    action, self._on_choice = self._on_choice, None
+                    self.close()
+                    try:
+                        action(index)
+                    except Exception:
+                        _log_exc()
+                    return
+        action = self._on_click
+        self.close()
+        if action:
+            try:
+                action()
+            except Exception:
+                _log_exc()
 
     def close(self):
         if self._closed:
             return
         self._closed = True
         try:
-            self.top.after_cancel(self._after)
+            if self._after:
+                self.top.after_cancel(self._after)
         except Exception:
             pass
         try:
@@ -708,18 +1367,58 @@ class SettingsWindow:
         self.v_skip = tk.BooleanVar(value=cfg.get("resume_skip_permissions", False))
         self.v_prompt = tk.StringVar(value=cfg.get("resume_prompt", ""))
         self.v_maxturns = tk.IntVar(value=cfg.get("resume_max_turns", 30))
+        self.v_sessions = tk.BooleanVar(value=cfg.get("sessions", True))
+        self.v_sess_strip = tk.BooleanVar(value=cfg.get("sessions_on_strip", True))
+        self.v_sess_rows = tk.IntVar(value=cfg.get("sessions_max_rows", 6))
+        alert_on = cfg.get("sessions_alert_on") or []
+        self.v_sess_alerts = tk.BooleanVar(value=cfg.get("sessions_alerts", True))
+        self.v_a_waiting = tk.BooleanVar(value="waiting" in alert_on)
+        self.v_a_idle = tk.BooleanVar(value="idle" in alert_on)
+        self.v_a_stuck = tk.BooleanVar(value="stuck" in alert_on)
+        self.v_a_gone = tk.BooleanVar(value="gone" in alert_on)
+        self.v_sess_stuck_min = tk.IntVar(value=cfg.get("sessions_stuck_minutes", 10))
+        self.v_sess_quiet = tk.BooleanVar(
+            value=cfg.get("sessions_quiet_foreground", True))
+        self.v_sess_hooks = tk.BooleanVar(value=cfg.get("sessions_hooks", False))
+        self.v_sess_hotkey = tk.StringVar(value=cfg.get("sessions_hotkey", ""))
+        self.v_sess_answer = tk.BooleanVar(value=cfg.get("sessions_answer", True))
 
         # rendered header banner (sparkle + title + subtitle)
         self._hdr = ImageTk.PhotoImage(render.render_settings_header(theme, self.WIN_W))
         tk.Label(self.top, image=self._hdr, bd=0, bg=bg).pack()
 
-        body = tk.Frame(self.top, bg=bg)
+        # The panel grew past the height of the screen it configures, so the
+        # content scrolls when it doesn't fit. The canvas sizes itself to the
+        # content and only starts scrolling — and only then shows a scrollbar —
+        # once that would run off the display.
+        self._scroll_wrap = tk.Frame(self.top, bg=bg)
+        self._scroll_wrap.pack(fill="both", expand=True)
+        self._canvas = tk.Canvas(self._scroll_wrap, bg=bg, highlightthickness=0,
+                                 bd=0, width=self.WIN_W)
+        self._vsb = tk.Scrollbar(self._scroll_wrap, orient="vertical",
+                                 command=self._canvas.yview)
+        self._canvas.pack(side="left", fill="both", expand=True)
+        self._canvas.configure(yscrollcommand=self._vsb.set)
+
+        # An outer frame carries the canvas window (so it spans the full width);
+        # `body` sits inside it and keeps the original 20px gutter.
+        self._body_outer = tk.Frame(self._canvas, bg=bg)
+        self._canvas.create_window((0, 0), window=self._body_outer, anchor="nw",
+                                   width=self.WIN_W)
+        body = tk.Frame(self._body_outer, bg=bg)
         body.pack(fill="x", padx=20)
+        self._body_outer.bind("<Configure>", lambda _e: self._resize_scroll())
+        self._canvas.bind("<Enter>", lambda _e: self._canvas.bind_all(
+            "<MouseWheel>", self._on_wheel))
+        self._canvas.bind("<Leave>", lambda _e: self._canvas.unbind_all(
+            "<MouseWheel>"))
         LBL = ("Segoe UI", 9)
 
         def section(title, first=False):
-            tk.Label(body, text=title.upper(), bg=bg, fg=T["accent"],
-                     font=("Segoe UI Semibold", 8)).pack(anchor="w", pady=(10 if first else 15, 5))
+            lbl = tk.Label(body, text=title.upper(), bg=bg, fg=T["accent"],
+                           font=("Segoe UI Semibold", 8))
+            lbl.pack(anchor="w", pady=(10 if first else 15, 5))
+            return lbl   # an anchor for pack(before=...) on collapsible groups
 
         def row(parent=None):
             f = tk.Frame(parent or body, bg=bg)
@@ -767,8 +1466,52 @@ class SettingsWindow:
         self.v_poll.trace_add("write", lambda *a: self._poll_lbl.configure(
             text=f"{self._safe_int(self.v_poll, 90)}s"))
 
+        # ----- Live sessions -----
+        section("Live sessions")
+        toggle_row("Show running Claude sessions", self.v_sessions)
+        # Rows are capped at 12 below: beyond that the popover is taller than a
+        # small laptop screen (see settings.load).
+        toggle_row("Alert me about sessions", self.v_sess_alerts)
+        # The rest lives behind a disclosure. Shown inline these rows push the
+        # window past 1080px tall — it has to fit the screen it configures.
+        self._sess_open = False
+        self._sess_btn = tk.Label(body, text="▸  Which alerts, and how many rows",
+                                  bg=bg, fg=T["accent"], font=LBL, cursor="hand2")
+        self._sess_btn.pack(anchor="w", pady=(8, 0))
+        self._sess_btn.bind("<Button-1>", lambda e: self._toggle_sessions())
+        self._sess_more = tk.Frame(body, bg=bg)
+        toggle_row("When one needs me", self.v_a_waiting, parent=self._sess_more)
+        toggle_row("When one finishes", self.v_a_idle, parent=self._sess_more)
+        toggle_row("When one stays blocked", self.v_a_stuck, parent=self._sess_more)
+        toggle_row("When one ends", self.v_a_gone, parent=self._sess_more)
+        rs = row(self._sess_more)
+        label(rs, "Blocked for").pack(side="left")
+        tk.Label(rs, text="min", bg=bg, fg=dim, font=LBL).pack(side="right",
+                                                               padx=(6, 0))
+        _StepperW(rs, self.v_sess_stuck_min, 0, 600, theme, bg,
+                  width=86).pack(side="right")
+        toggle_row("Stay quiet for the terminal I'm using", self.v_sess_quiet,
+                   parent=self._sess_more)
+        toggle_row("Show count on the strip", self.v_sess_strip,
+                   parent=self._sess_more)
+        toggle_row("Answer blocked sessions from here", self.v_sess_answer,
+                   parent=self._sess_more)
+        toggle_row("Instant alerts (edits Claude's settings)", self.v_sess_hooks,
+                   parent=self._sess_more, cmd=self._confirm_hooks)
+        rk = row(self._sess_more)
+        label(rk, "Jump shortcut").pack(side="left")
+        tk.Entry(rk, textvariable=self.v_sess_hotkey, width=13, justify="center",
+                 bg=field, fg=fg, insertbackground=fg, bd=0, relief="flat",
+                 font=LBL).pack(side="right", ipady=4)
+        rr = row(self._sess_more)
+        label(rr, "Rows in popover").pack(side="left")
+        _StepperW(rr, self.v_sess_rows, 1, 12, theme, bg,
+                  width=86).pack(side="right")
+
         # ----- Alerts -----
-        section("Alerts")
+        # Anchor for the collapsible group above, so expanding it inserts the
+        # rows under their own button rather than at the bottom of the window.
+        self._sess_anchor = section("Alerts")
         toggle_row("Desktop alert on threshold", self.v_alerts)
         r = row()
         label(r, "Alert at").pack(side="left")
@@ -845,6 +1588,91 @@ class SettingsWindow:
             self._swatch.configure(bg=color)
         except tk.TclError:
             pass
+
+    def _max_body_h(self):
+        """Tallest the scrolling area may be: the screen, less the header, the
+        window chrome and a margin so the Save button is never off-screen."""
+        try:
+            screen_h = self.top.winfo_screenheight()
+        except Exception:
+            screen_h = 900
+        header = self._hdr.height() if self._hdr else 0
+        return max(240, screen_h - header - 140)
+
+    def _resize_scroll(self):
+        """Match the canvas to its content, scrolling only when it overflows."""
+        try:
+            needed = self._body_outer.winfo_reqheight()
+            limit = self._max_body_h()
+            self._canvas.configure(scrollregion=(0, 0, self.WIN_W, needed))
+            self._canvas.configure(height=min(needed, limit))
+            if needed > limit:
+                self._vsb.pack(side="right", fill="y")
+            else:
+                self._vsb.pack_forget()
+                self._canvas.yview_moveto(0)
+        except Exception:
+            pass
+
+    def _on_wheel(self, event):
+        try:
+            if self._body_outer.winfo_reqheight() <= self._max_body_h():
+                return          # nothing to scroll; don't swallow the event
+            self._canvas.yview_scroll(int(-event.delta / 120), "units")
+        except Exception:
+            pass
+
+    def _confirm_hooks(self):
+        """Show the exact JSON before letting us edit Claude Code's settings.
+
+        This is the one place Claudometer writes to a file that belongs to
+        another application, so the user sees the literal change and can say
+        no — and saying no puts the toggle straight back.
+        """
+        if not self.v_sess_hooks.get():
+            return                       # switching OFF needs no permission
+        if claude_hooks.interpreter() is None:
+            messagebox.showinfo(
+                "Instant alerts unavailable",
+                "No Python interpreter was found to run the hook relay, so "
+                "instant alerts aren't available in this build.\n\n"
+                "Sessions still update about once a second on their own.",
+                parent=self.top)
+            self.v_sess_hooks.set(False)
+            return
+        if not claude_hooks.settings_readable():
+            messagebox.showerror(
+                "Can't read Claude's settings",
+                f"{claude_hooks.settings_path()} exists but isn't valid JSON, "
+                f"so Claudometer won't touch it.\n\nFix or move that file and "
+                f"try again.",
+                parent=self.top)
+            self.v_sess_hooks.set(False)
+            return
+        ok = messagebox.askokcancel(
+            "Edit Claude Code's settings?",
+            "Claudometer will add these four hooks to\n"
+            f"{claude_hooks.settings_path()}\n\n"
+            f"{claude_hooks.preview()}\n\n"
+            "They run a small relay that records when a session needs you or "
+            "finishes. Your existing settings are backed up and left "
+            "untouched, and turning this off removes exactly these entries.\n\n"
+            "The relay is copied to ~/.claudometer, so updating or uninstalling "
+            "Claudometer can't strand it — and if Claudometer stops running for "
+            "a week it removes these hooks by itself.",
+            parent=self.top)
+        if not ok:
+            self.v_sess_hooks.set(False)
+
+    def _toggle_sessions(self):
+        self._sess_open = not self._sess_open
+        label = "Which alerts, and how many rows"
+        if self._sess_open:
+            self._sess_more.pack(fill="x", before=self._sess_anchor)
+            self._sess_btn.configure(text=f"▾  {label}")
+        else:
+            self._sess_more.pack_forget()
+            self._sess_btn.configure(text=f"▸  {label}")
 
     def _toggle_advanced(self):
         self._adv_open = not self._adv_open
@@ -924,6 +1752,14 @@ class SettingsWindow:
             maxturns = max(1, min(200, int(self.v_maxturns.get())))
         except Exception:
             maxturns = 30
+        try:
+            sess_rows = max(1, min(12, int(self.v_sess_rows.get())))
+        except Exception:
+            sess_rows = 6
+        try:
+            stuck_min = max(0, min(600, int(self.v_sess_stuck_min.get())))
+        except Exception:
+            stuck_min = 10
         cfg = dict(self._cfg)
         cfg.update({
             "poll": poll,
@@ -940,6 +1776,20 @@ class SettingsWindow:
             "resume_prompt": self.v_prompt.get().strip() or self._cfg.get("resume_prompt")
                              or "Continue where you left off.",
             "resume_max_turns": maxturns,
+            "sessions": bool(self.v_sessions.get()),
+            "sessions_on_strip": bool(self.v_sess_strip.get()),
+            "sessions_max_rows": sess_rows,
+            "sessions_alerts": bool(self.v_sess_alerts.get()),
+            "sessions_alert_on": [
+                name for name, var in (("waiting", self.v_a_waiting),
+                                       ("idle", self.v_a_idle),
+                                       ("stuck", self.v_a_stuck),
+                                       ("gone", self.v_a_gone)) if var.get()],
+            "sessions_stuck_minutes": stuck_min,
+            "sessions_quiet_foreground": bool(self.v_sess_quiet.get()),
+            "sessions_hooks": bool(self.v_sess_hooks.get()),
+            "sessions_hotkey": self.v_sess_hotkey.get().strip(),
+            "sessions_answer": bool(self.v_sess_answer.get()),
         })
         try:
             self._on_apply(cfg)
@@ -1054,11 +1904,58 @@ class BarWidget:
         self._photo = None
         self._hidden = False
 
+        # Live Claude Code sessions. These change far faster than the usage
+        # numbers (90s poll), so they refresh on the 1s UI tick instead —
+        # a snapshot costs well under a millisecond. Enrichment (titles, tools)
+        # reads transcript tails and is ~25x dearer, so it runs on its own
+        # slower cadence and its results are merged in by session id.
+        self._sessions_on = cfg["sessions"]
+        self._sessions_on_strip = cfg["sessions_on_strip"]
+        self._sessions_max_rows = cfg["sessions_max_rows"]
+        self._sess_tracker = sessions_core.SessionTracker()
+        self._sess_disp = {}
+        self._sess_extra = {}          # session_id -> enrichment fields
+        self._sess_enriched_at = 0.0
+        self._sess_known_ids = frozenset()
+        self._sess_alerts_on = cfg["sessions_alerts"]
+        self._sess_alert_on = tuple(cfg["sessions_alert_on"])
+        self._sess_quiet_fg = cfg["sessions_quiet_foreground"]
+        self._sess_stuck = sessions_core.StuckWatcher(cfg["sessions_stuck_minutes"])
+        # The very first tick sees every running session as newly appeared; that
+        # is startup, not news, so alerting stays off until after it.
+        self._sess_seeded = False
+        self._flash = False            # strip attention pulse
+        self._sess_sticky_pid = 0      # session the sticky toast belongs to
+        self._sess_answer_on = cfg["sessions_answer"]
+        self._answer_win = None
+        self._hotkey = None
+        if cfg["sessions_hotkey"]:
+            self._hotkey = hotkeys.Hotkey(cfg["sessions_hotkey"],
+                                          self._jump_to_blocked)
+        # Hooks: opt-in, and only trusted while the config says they're on —
+        # otherwise a stale settings.json entry could keep feeding us events.
+        self._sess_hooks_on = cfg["sessions_hooks"] and self._sessions_on
+        self._sess_hook_notes = {}     # session_id -> latest hook message
+        self._sess_heartbeat_at = 0.0
+        if self._sess_hooks_on:
+            # Reconcile on every start. The config saying "on" IS the prior
+            # consent, and an install can go stale on its own: after the app
+            # updates, the recorded relay path may no longer exist, which would
+            # leave Claude Code spawning a failing command on every event.
+            self._apply_hooks(True)
+        else:
+            # Not merely "don't read them" — take any registration from a
+            # previous run back out, or it keeps firing into a queue nobody
+            # drains for as long as the setting stays off.
+            self._apply_hooks(False)
+
         self._apply_bg((233, 238, 243))  # provisional; refined by sampling
         self._place_initial()
         self._bind_events()
         self._draw(core.status_display(core.Status.NO_DATA))
         threading.Thread(target=self._poll_loop, daemon=True).start()
+        if self._hotkey is not None and self._hotkey.registered:
+            self.root.after(self.HOTKEY_POLL_MS, self._hotkey_loop)
         self.root.after(400, self._refresh_ui)
         if self._start_in_demo:  # `app.py demo` — drop straight into the tour
             self.root.after(500, self._enter_demo)
@@ -1069,7 +1966,7 @@ class BarWidget:
         if hexc == self._bg_hex:
             return
         self._bg_hex = hexc
-        self._theme = self._forced_theme or ("light" if _lum(rgb) > 140 else "dark")
+        self._theme = self._forced_theme or _theme_for_bg(rgb)
         if not self._card:  # card mode keeps its transparent bg (no taskbar to match)
             self.root.configure(bg=hexc)
             self.canvas.configure(bg=hexc)
@@ -1092,6 +1989,9 @@ class BarWidget:
     # -- geometry --------------------------------------------------------- #
     def _place_initial(self):
         pos = self._load_pos()
+        if pos and not _on_a_monitor(*pos):
+            pos = None          # that display is gone; fall back to auto-place
+            self._need_autoplace = True
         if pos:
             self.root.geometry(f"+{pos[0]}+{pos[1]}")
         else:
@@ -1100,7 +2000,10 @@ class BarWidget:
 
     def _load_pos(self):
         try:
-            d = json.loads(POS_FILE.read_text(encoding="utf-8"))
+            # utf-8-sig: anything that rewrites this file on Windows is liable
+            # to leave a BOM, and a BOM makes json.loads fail — the remembered
+            # position is then silently discarded and the widget jumps.
+            d = json.loads(POS_FILE.read_text(encoding="utf-8-sig"))
             return int(d["x"]), int(d["y"])
         except Exception:
             return None
@@ -1137,13 +2040,20 @@ class BarWidget:
 
     def _release(self, e):
         if self._moved:
+            # Don't persist somewhere it can't be seen — a drag that ends past
+            # an edge would otherwise be remembered and reapplied on restart.
+            if not _on_a_monitor(self.root.winfo_x(), self.root.winfo_y()):
+                self._need_autoplace = True
+                self._sig = None
+                return
             self._save_pos()
         else:
             self._toggle_popover()
 
     def _get_disp(self):
         with self._lock:
-            return self._disp
+            disp = self._disp
+        return self._with_sessions(disp)
 
     def _toggle_popover(self):
         if self._popover is not None:
@@ -1160,11 +2070,324 @@ class BarWidget:
             self.root, self._theme, self._get_disp,
             rx, ry, ry + rh, work,
             self._refresh_now, self._quit, self._open_settings, self._on_popover_closed,
+            on_session=self._act_on_session, on_session_menu=self._session_menu,
         )
 
     def _on_popover_closed(self):
         self._popover = None
         self._pop_closed_at = time.monotonic()
+
+    # -- session actions --------------------------------------------------- #
+    def _row_for_pid(self, pid):
+        for row in (self._sess_disp or {}).get("sessions_rows") or []:
+            if row.get("pid") == pid:
+                return row
+        return None
+
+    def _session_is_live(self, pid):
+        """Is this pid still one of ours?
+
+        Deliberately NOT "is it among the visible rows". The list is truncated
+        to sessions_max_rows, so a session that scrolls off the bottom would
+        otherwise read as ended — and an answer meant for it would be refused
+        with "that session has gone" while it sat there waiting.
+        """
+        return pid in set((self._sess_disp or {}).get("sessions_pids") or [])
+
+    def _act_on_session(self, row):
+        """The one thing to do about a session.
+
+        Blocked and answerable — open the answer window, because replying is
+        the point and it doesn't disturb what you're doing. Anything else —
+        take you to its terminal.
+        """
+        if (self._sess_answer_on and row.get("status") == sessions_core.WAITING
+                and console_send.can_send()):
+            self._open_answer(row)
+        else:
+            self._focus_session(row)
+
+    def _focus_pid(self, pid):
+        """Raise a session's terminal by pid. Shared by the toast, the hotkey
+        and the row menu so they can't drift apart."""
+        return self._focus_session({"pid": pid})
+
+    #: What a waiting session looks like, for the tour. Run through the real
+    #: parser like everything else in the demo, so the window it produces is
+    #: the one a live session produces.
+    _DEMO_SCREEN = (
+        "✻ Wrangled for 1m 12s",
+        "> summarise the release notes for me",
+        "● Read 4 files (312 lines)",
+        "● Two of these read as breaking changes rather than features.",
+        "─────────────────────────────────────────────────",
+        " [ ] Release notes",
+        "How should I write up the breaking changes?",
+        "> 1. Call them out at the top",
+        "     Their own section, above everything else.",
+        "  2. Keep them in with the rest",
+        "     In order, flagged where they appear.",
+        "  3. Leave them out for now",
+        "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    )
+
+    def _poll_session(self, row):
+        """Everything the answer window needs about one session, in one look.
+
+        Liveness comes from the registry rather than the pid alone: a pid that
+        has been reused belongs to something else, and typing an answer into
+        that would be considerably worse than not answering at all.
+        """
+        pid = row.get("pid")
+        alive = self._session_is_live(pid)
+        live = self._row_for_pid(pid)
+        if self._demo:
+            # Never touch a console during the tour. Its pids are invented, and
+            # a real process could genuinely be running under one of them —
+            # answering a stranger's prompt is not a demo.
+            screen = list(self._DEMO_SCREEN)
+            return {"alive": live is not None, "row": live or row,
+                    "lines": screen, "readable": True,
+                    "prompt": sessions_core.parse_console_prompt(screen)}
+        screen = None
+        if alive:
+            try:
+                screen = console_send.read_screen(pid)
+            except Exception:
+                _log_exc()
+        prompt = None
+        if screen:
+            try:
+                prompt = sessions_core.parse_console_prompt(screen)
+            except Exception:
+                _log_exc()
+        return {"alive": alive, "row": live or row,
+                "lines": screen, "readable": screen is not None,
+                "prompt": prompt}
+
+    def _open_answer(self, row):
+        if (self._answer_win is not None
+                and self._answer_win.pid == row.get("pid")):
+            # Already open on this session — raise it rather than rebuild it,
+            # which would throw away a half-typed message.
+            try:
+                self._answer_win.top.lift()
+                self._answer_win.top.focus_force()
+                return
+            except Exception:
+                self._answer_win = None
+        # Read the screen before the window is built so it opens showing the
+        # real question rather than flashing the registry's coarse summary.
+        state = self._poll_session(row)
+        prompt = state.get("prompt")
+        if prompt:
+            row = dict(row, question=prompt["question"],
+                       options=list(prompt["options"]),
+                       selected=prompt["selected"])
+        if self._answer_win is not None:
+            # One window at a time: only one console can be attached at once.
+            try:
+                self._answer_win.close()
+            except Exception:
+                pass
+        try:
+            self._answer_win = AnswerWindow(
+                self.root, self._theme, row, self._send_answer,
+                self._focus_session, poll=self._poll_session,
+                on_close=self._clear_answer)
+        except Exception:
+            _log_exc()
+            self._focus_session(row)      # fall back to the old behaviour
+
+    def _clear_answer(self):
+        self._answer_win = None
+
+    def _close_answer(self):
+        if self._answer_win is not None:
+            try:
+                self._answer_win.close()
+            except Exception:
+                self._answer_win = None
+
+    def _send_answer(self, row, text, submit=True):
+        """Deliver an answer to that exact session. Returns (ok, error).
+
+        Only requires the session to still be live, not to still be waiting:
+        answering a question routinely starts a conversation, and the messages
+        that follow are sent to a session that is idle or already working.
+        Claude Code queues those, which is exactly what typing into its
+        terminal would do.
+        """
+        body = console_send.clean(text)
+        if not body and not submit:
+            return False, "Type something first."
+        pid = row.get("pid")
+        if not self._session_is_live(pid):
+            return False, "That session has gone."
+        if self._demo:
+            self._sess_sticky_pid = 0
+            return True, None       # the tour answers nothing real
+        ok, error = console_send.send_text(pid, body, submit=submit)
+        if ok:
+            self._sess_sticky_pid = 0
+            if self._toast is not None:
+                try:
+                    self._toast.close()
+                except Exception:
+                    pass
+        return ok, error
+
+    def _jump_to_blocked(self):
+        """Answer, or go to, whichever session needs you — the hotkey's job."""
+        pid = (self._sess_disp or {}).get("sessions_blocked_pid") or 0
+        if not pid:
+            self._notify_session("No session is waiting on you right now.")
+            return
+        row = self._row_for_pid(pid) or {"pid": pid}
+        self._act_on_session(row)
+
+    def _focus_session(self, row):
+        """Bring a session's terminal to the front.
+
+        This raises the WINDOW, not the tab — several sessions routinely share
+        one terminal and nothing in the process tree tells their tabs apart. So
+        it takes you to the right terminal and stops there rather than pretending
+        to land on the exact session.
+        """
+        if self._demo:
+            # The tour's pids are invented and a real process may hold one, so
+            # this must not go looking for a window to raise.
+            self._notify_session("Demo — this opens that session's terminal.")
+            return
+        try:
+            pid = row.get("pid")
+            parents = focus.parent_map()
+            if focus.window_for_pid(pid, parents) is None:
+                self._notify_session("No terminal window found for that session.")
+                return
+            if focus.raise_window(pid, parents):
+                if self._popover is not None:
+                    self._popover.close()   # get out of the way of what we raised
+                return
+            # raise_window reports what actually happened rather than what it
+            # asked for, so reaching here means Windows refused the switch.
+            self._notify_session("Windows wouldn't bring that terminal forward.")
+        except Exception:
+            _log_exc()
+            self._notify_session("Couldn't open that session's terminal.")
+
+    def _notify_session(self, message):
+        try:
+            self._show_toast(None, "Live sessions", message, "grey")
+        except Exception:
+            _log_exc()
+
+    def _copy(self, text, what):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(str(text))
+            self.root.update_idletasks()     # survive our own exit
+            self._notify_session(f"{what} copied to the clipboard.")
+        except Exception:
+            _log_exc()
+
+    def _open_path(self, path, what):
+        try:
+            if not path or not Path(path).exists():
+                self._notify_session(f"That {what} no longer exists.")
+                return
+            if _IS_WIN:
+                os.startfile(str(path))          # noqa: S606 - user-initiated
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+        except Exception:
+            _log_exc()
+            self._notify_session(f"Couldn't open that {what}.")
+
+    def _open_transcript(self, row):
+        path = sessions_core.transcript_path(row.get("session_id"),
+                                             row.get("cwd"))
+        if path is None:
+            self._notify_session("No transcript found for that session.")
+            return
+        self._open_path(path, "transcript")
+
+    def _reply_and_go(self, row, text):
+        """Put a reply on the clipboard, then jump to the terminal.
+
+        Claudometer can't answer the prompt itself — a running session exposes
+        no channel to send into, and typing blind would land in whatever tab
+        happens to be in front. This gets you there with the answer ready to
+        paste, which is the safe half of the job.
+        """
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(str(text))
+            self.root.update_idletasks()
+        except Exception:
+            _log_exc()
+        self._focus_session(row)
+
+    def _quick_answer(self, row, text):
+        ok, error = self._send_answer(row, text)
+        if not ok:
+            self._notify_session(error or "Couldn't send that.")
+
+    def _custom_reply(self, row):
+        from tkinter import simpledialog
+
+        text = simpledialog.askstring(
+            "Reply and go",
+            f"Copy a reply for {(row.get('label') or 'this session')[:40]}:",
+            parent=self.root)
+        if text:
+            self._reply_and_go(row, text)
+
+    def _session_menu(self, row, x_root, y_root):
+        """Right-click actions for one session row."""
+        menu = tk.Menu(self.root, tearoff=0)
+        label = (row.get("label") or "session")[:44]
+        menu.add_command(label=f"Go to {label}",
+                         command=lambda: self._focus_session(row))
+        if row.get("status") == sessions_core.WAITING:
+            if self._sess_answer_on and console_send.can_send():
+                menu.add_command(label="Answer without leaving here…",
+                                 command=lambda: self._open_answer(row))
+                reply = tk.Menu(menu, tearoff=0)
+                for text in ("yes", "no", "continue"):
+                    reply.add_command(
+                        label=f'Send "{text}"',
+                        command=lambda t=text: self._quick_answer(row, t))
+                menu.add_cascade(label="Send", menu=reply)
+            else:
+                # No console channel here (or switched off) — the best we can
+                # do is arrive with the answer ready to paste.
+                reply = tk.Menu(menu, tearoff=0)
+                for text in ("yes", "no", "continue"):
+                    reply.add_command(
+                        label=f'Copy "{text}" and go',
+                        command=lambda t=text: self._reply_and_go(row, t))
+                reply.add_separator()
+                reply.add_command(label="Custom reply…",
+                                  command=lambda: self._custom_reply(row))
+                menu.add_cascade(label="Reply and go", menu=reply)
+        menu.add_separator()
+        menu.add_command(label="Open project folder",
+                         command=lambda: self._open_path(row.get("cwd"), "folder"))
+        menu.add_command(label="Open transcript",
+                         command=lambda: self._open_transcript(row))
+        menu.add_separator()
+        menu.add_command(label="Copy session ID",
+                         command=lambda: self._copy(row.get("session_id"),
+                                                    "Session ID"))
+        menu.add_command(label="Copy project path",
+                         command=lambda: self._copy(row.get("cwd"), "Project path"))
+        try:
+            menu.tk_popup(int(x_root), int(y_root))
+        finally:
+            menu.grab_release()
 
     # -- threshold alerts ------------------------------------------------- #
     def _maybe_alert(self, disp):
@@ -1202,16 +2425,86 @@ class BarWidget:
     def _clear_toast(self):
         self._toast = None
 
-    def _show_toast(self, pct, title, subtitle, color):
+    def _show_toast(self, pct, title, subtitle, color, duration=6500,
+                    on_click=None, choices=(), on_choice=None):
         if self._hidden:
             return
         try:
             if self._toast is not None:
                 self._toast.close()
             self._toast = Toast(self.root, self._theme, pct, title, subtitle, color,
-                                on_close=self._clear_toast)
+                                duration=duration, on_close=self._clear_toast,
+                                on_click=on_click, choices=choices,
+                                on_choice=on_choice)
         except Exception:
             _log_exc()
+
+    #: Longest menu worth putting on a toast. Three words on a card is not
+    #: enough to choose between six options, and the window is one click away.
+    TOAST_CHOICES_MAX = 3
+
+    def _toast_choices(self, pid):
+        """What this blocked session could be answered with, if it's short.
+
+        Read once, when the toast is built — not on a timer. The point is to
+        deal with "run the tests?" without opening anything; a longer menu is
+        exactly the case that deserves the window.
+        """
+        if not (pid and self._sess_answer_on and console_send.can_send()):
+            return ()
+        if self._demo:
+            prompt = sessions_core.parse_console_prompt(list(self._DEMO_SCREEN))
+        else:
+            try:
+                prompt = sessions_core.parse_console_prompt(
+                    console_send.read_screen(pid))
+            except Exception:
+                _log_exc()
+                return ()
+        options = list((prompt or {}).get("options") or [])
+        if not 2 <= len(options) <= self.TOAST_CHOICES_MAX:
+            return ()
+        return tuple(options)
+
+    def _answer_from_toast(self, pid, index):
+        """Send the option the toast offered, then say so on the strip."""
+        row = self._row_for_pid(pid) or {"pid": pid}
+        ok, error = self._send_answer(row, str(index + 1))
+        if not ok:
+            self._notify_session(error or "Couldn't send that.")
+
+    # -- attention ---------------------------------------------------------- #
+    #: Half-cycles of the strip pulse, and how long each lasts.
+    PULSE_STEPS, PULSE_MS = 6, 180
+
+    def _pulse_strip(self, step=0):
+        """Flash the strip when a session starts needing you.
+
+        The widget is overrideredirect, so it has no taskbar button to flash —
+        pulsing the strip itself is the equivalent that's actually visible,
+        since the strip IS what sits on the taskbar.
+        """
+        if self._hidden:
+            return
+        self._flash = (step % 2 == 0)
+        self._sig = None                 # force the next tick to repaint
+        try:
+            with self._lock:
+                disp = self._disp
+            if disp is not None:
+                merged = self._with_sessions(disp)
+                # Only the status dot pulses. The strip's background is sampled
+                # from the taskbar so it blends in — repainting that would make
+                # the whole widget flash, which is not what it's for.
+                self._draw(dict(merged, _pulse=self._flash))
+        except Exception:
+            _log_exc()
+            return
+        if step + 1 < self.PULSE_STEPS:
+            self.root.after(self.PULSE_MS, self._pulse_strip, step + 1)
+        else:
+            self._flash = False
+            self._sig = None
 
     # -- resume on reset -------------------------------------------------- #
     def _track_resume(self, disp):
@@ -1312,6 +2605,41 @@ class BarWidget:
     # A scripted, fully offline sequence that drives the REAL alert/resume/render
     # code paths through every state — so you (and new users) can verify each
     # feature in ~50s instead of waiting for real usage to reach those conditions.
+    #: Plausible work for the tour's session list. Enough of them to show the
+    #: dot row overflowing.
+    _DEMO_SESSIONS = [
+        ("Ship the release pipeline", "claude-widget"),
+        ("Refactor the payment retries", "checkout-api"),
+        ("Draft the migration plan", "docs-site"),
+        ("Explore the caching idea", "proxy-passer"),
+        ("Chase the flaky login test", "web-app"),
+        ("Port the parser to Rust", "tokenizer"),
+        ("Write the upgrade notes", "handbook"),
+        ("Trim the docker image", "infra"),
+        ("Add the retry budget", "gateway"),
+        ("Rename the metrics", "telemetry"),
+        ("Tidy the changelog", "release-notes"),
+    ]
+
+    def _demo_session_set(self, spec):
+        """Build synthetic Sessions for one scene.
+
+        *spec* is a list of ``(index, status, waiting_for)``. Real Session
+        objects rather than pre-baked dicts, so the tour runs through the same
+        tracker, formatter and alert path as live data — if that path breaks,
+        the demo breaks with it.
+        """
+        now = sessions_core.now_ms()
+        out = []
+        for slot, (index, status, reason) in enumerate(spec):
+            title, project = self._DEMO_SESSIONS[index % len(self._DEMO_SESSIONS)]
+            out.append(sessions_core.Session(
+                session_id=f"demo-{index}", pid=900000 + index,
+                cwd=f"/demo/{project}", name=f"{project}-{index}",
+                title=title, status=status, waiting_for=reason,
+                status_updated_at=now - (45 + slot * 173) * 1000))
+        return out
+
     def _demo_timeline(self):
         now = datetime.now(timezone.utc)
 
@@ -1325,25 +2653,60 @@ class BarWidget:
             d.update(extra)
             return d
 
-        def status(session, color):  # a non-usage state (offline / rate-limited)
-            return {"_demo": True, "plan": None, "session": session,
-                    "session_pct": None, "weekly_pct": None, "face_color": color,
-                    "session_color": color, "weekly_color": color, "model_rows": []}
+        def status(session, color, **extra):  # non-usage state (offline / 429)
+            d = {"_demo": True, "plan": None, "session": session,
+                 "session_pct": None, "weekly_pct": None, "face_color": color,
+                 "session_color": color, "weekly_color": color, "model_rows": []}
+            d.update(extra)
+            return d
+
+        W, B, S, I = (sessions_core.WAITING, sessions_core.BUSY,
+                      sessions_core.SHELL, sessions_core.IDLE)
+
+        def live(*spec):
+            return {"_sessions": self._demo_session_set(list(spec))}
+
+        # The scripted list only ever GROWS, apart from one deliberate ending.
+        # Shrinking it would report a mass exodus the viewer never caused —
+        # jumping from ten sessions back to two once produced a bewildering
+        # "9 session updates" instead of the "Needs you" the scene was for.
+        working = live((0, B, ""), (1, S, ""), (2, I, ""))
+        blocked = live((0, W, "input needed"), (1, B, ""), (2, I, ""))
+        answered = live((0, B, ""), (1, B, ""), (2, I, ""))
+        finished = live((0, I, ""), (1, I, ""), (2, I, ""))
+        ended = live((0, I, ""), (1, B, ""))          # session 2 has ended
+        crowd_spec = [(0, I, ""), (1, B, "")] + [(i, B, "") for i in range(3, 11)]
+        crowd = live(*crowd_spec)
+        crowd_blocked = live(*[(i, W, "permission needed") if i == 5 else (i, s, r)
+                               for i, s, r in crowd_spec])
+        crowd_answered = live(*[(i, S, "") if i == 5 else (i, s, r)
+                                for i, s, r in crowd_spec])
 
         return [
-            (step(20, "green", 8, "green", 180), 4.0),    # 1  comfortable — green
-            (step(62, "amber", 15, "green", 120), 4.0),   # 2  getting close — amber
-            (step(84, "red", 22, "green", 40), 4.5),      # 3  session crosses 80% → alert
-            (step(93, "red", 24, "green", 16), 4.5),      # 4  session crosses 90% → alert
-            (step(48, "amber", 88, "red", 90), 4.5),      # 5  WEEKLY crosses 80% → alert
-            (step(100, "red", 30, "amber", 6), 4.5),      # 6  100% → "limit reached"
-            (step(85, "red", 30, "amber", 300), 6.0),     # 7  drop ≤90 → resume (Tier 1 notify)
-            (step(40, "green", 30, "amber", 240,
-                  cost_tokens=2_450_000, cost_usd=8.74), 5.0),   # 8  cost line (click to see)
-            (status("usage limit reached", "red"), 4.5),  # 9  rate-limited (429) state
-            (step(100, "red", 30, "amber", 5), 4.5),      # 10 limit reached again (capped)
-            (step(88, "red", 30, "amber", 260), 6.0),     # 11 drop ≤90 → resume (Tier 2 auto)
-            (status("offline (demo)", "grey"), 4.0),      # 12 graceful offline state
+            # The scenes carry a session list as well as usage, so the dot row
+            # on the strip is live throughout the tour rather than a separate
+            # act tacked on the end.
+            # Session moments are deliberately placed on scenes where no usage
+            # threshold is crossed. Only one toast exists at a time, so pairing
+            # them buries the session alert under the usage one — which is
+            # exactly what happened the first time this was built.
+            (step(20, "green", 8, "green", 180, **working), 4.0),   # 1  comfortable — green
+            (step(62, "amber", 15, "green", 120, **blocked), 5.5),  # 2  a session BLOCKS (no usage alert)
+            # 2b answering it, which is the whole point of the release and was
+            # the one thing the tour never showed. Same window the real thing
+            # opens, on the canned screen, sending nothing.
+            (step(62, "amber", 15, "green", 120, _answer=True, **blocked), 7.0),
+            (step(84, "red", 22, "green", 40, **answered), 4.5),    # 3  session crosses 80% → alert
+            (step(93, "red", 24, "green", 16, **answered), 4.5),    # 4  session crosses 90% → alert
+            (step(48, "amber", 88, "red", 90, **answered), 4.5),    # 5  WEEKLY crosses 80% → alert
+            (step(100, "red", 30, "amber", 6, **answered), 4.5),    # 6  100% → "limit reached"
+            (step(85, "red", 30, "amber", 300, **finished), 6.0),   # 7  resume (Tier 1) + two finish
+            (step(40, "green", 30, "amber", 240, cost_tokens=2_450_000,
+                  cost_usd=8.74, **ended), 5.0),                    # 8  cost line + one session ends
+            (status("usage limit reached", "red", **crowd), 4.5),   # 9  rate-limited; the list grows
+            (step(100, "red", 30, "amber", 5, **crowd), 4.5),       # 10 limit reached again (capped)
+            (step(88, "red", 30, "amber", 260, **crowd_blocked), 6.0),   # 11 resume (Tier 2) + one blocks
+            (status("offline (demo)", "grey", **crowd_answered), 4.0),   # 12 offline; the block is answered
         ]
 
     def _toggle_demo(self):
@@ -1358,6 +2721,7 @@ class BarWidget:
         self._demo = True
         self._demo_resume_n = 0
         self._reset_alert_resume_state()
+        self._reset_demo_sessions()
         self._demo_seq = self._demo_timeline()
         self._demo_i = 0
         self._demo_tick()
@@ -1366,6 +2730,7 @@ class BarWidget:
         if not self._demo:
             return
         self._demo = False
+        self._close_answer()      # the tour's window must not outlive the tour
         if self._demo_after is not None:
             try:
                 self.root.after_cancel(self._demo_after)
@@ -1380,8 +2745,23 @@ class BarWidget:
                     pass
         self._toast = self._resume_toast = None
         self._reset_alert_resume_state()
+        # Hand the session list back to real data, with no scripted history
+        # left to mistake for it.
+        self._reset_demo_sessions()
         self._sig = None    # force a redraw once real data arrives
         self._wake.set()    # wake the poll thread to fetch + publish now
+
+    def _reset_demo_sessions(self):
+        """Clear the session view on the way into and out of the tour."""
+        self._sess_tracker.reset()
+        self._sess_stuck.reset()
+        self._sess_disp = {}
+        self._sess_extra = {}
+        self._sess_known_ids = frozenset()
+        self._sess_sticky_pid = 0
+        self._flash = False
+        # The tour's first scene is a baseline, not news — same rule as startup.
+        self._sess_seeded = False
 
     def _reset_alert_resume_state(self):
         self._alerted = {"session": set(), "weekly": set()}
@@ -1394,18 +2774,63 @@ class BarWidget:
                 pass
             self._resume_retry_after = None
 
+    def _demo_sessions_tick(self, live):
+        """Run one scene's sessions through the real pipeline.
+
+        Deliberately the same tracker, formatter and alert path the live data
+        uses — so the tour shows the actual behaviour (blocked-first ordering,
+        a sticky toast, a coalesced summary, the strip pulse) rather than a
+        staged imitation that could drift away from it.
+        """
+        try:
+            events = self._sess_tracker.update(live)
+            self._sess_disp = sessions_core.format_sessions(
+                live, max_rows=self._sessions_max_rows)
+            self._sess_disp["sessions_recent"] = sessions_core.format_recent(
+                self._sess_tracker.recent)
+            self._retire_sticky_toast(live)
+            self._session_alerts(events, live)
+        except Exception:
+            _log_exc()
+
     def _demo_tick(self):
         if not self._demo:
             return  # exited — stop the loop
-        disp, hold = self._demo_seq[self._demo_i % len(self._demo_seq)]
+        scene, hold = self._demo_seq[self._demo_i % len(self._demo_seq)]
+        live = scene.get("_sessions")
+        disp = {k: v for k, v in scene.items() if k != "_sessions"}
         with self._lock:
             self._disp = dict(disp)
             self._poll_seq += 1
+        if live is not None:
+            self._demo_sessions_tick(live)
+        else:
+            self._sess_disp = {}      # scenes with no session list show none
+        self._demo_answer(bool(scene.get("_answer")))
         self._demo_i += 1
         try:
             self._demo_after = self.root.after(int(hold * 1000), self._demo_tick)
         except Exception:
             pass  # window closed
+
+    def _demo_answer(self, wanted):
+        """Open (or close) the answer window for the tour's blocked session.
+
+        Answering in place is the headline of this release and the tour never
+        showed it — you had to know to click a row. It opens the real window on
+        the real blocked row; everything behind it is already demo-safe, so it
+        reads a canned screen and sends nothing.
+        """
+        if not wanted:
+            if self._answer_win is not None:
+                self._close_answer()
+            return
+        if self._answer_win is not None:
+            return
+        pid = (self._sess_disp or {}).get("sessions_blocked_pid") or 0
+        row = self._row_for_pid(pid)
+        if row is not None and console_send.can_send():
+            self._open_answer(row)
 
     def _show_demo_resume(self):
         # Alternate the two resume tiers so the tour shows both over its run.
@@ -1510,6 +2935,9 @@ class BarWidget:
             "resume_prompt": self._resume_prompt,
             "resume_skip_permissions": self._resume_skip_perms,
             "resume_max_turns": self._resume_max_turns,
+            "sessions": self._sessions_on,
+            "sessions_max_rows": self._sessions_max_rows,
+            "sessions_on_strip": self._sessions_on_strip,
         }
 
     def _apply_settings(self, cfg):
@@ -1528,6 +2956,28 @@ class BarWidget:
         self._resume_prompt = cfg["resume_prompt"]
         self._resume_skip_perms = cfg["resume_skip_permissions"]
         self._resume_max_turns = cfg["resume_max_turns"]
+        sessions_was_on = self._sessions_on
+        self._sessions_on = cfg.get("sessions", self._sessions_on)
+        self._sessions_on_strip = cfg.get("sessions_on_strip", self._sessions_on_strip)
+        self._sessions_max_rows = cfg.get("sessions_max_rows", self._sessions_max_rows)
+        self._sess_alerts_on = cfg.get("sessions_alerts", self._sess_alerts_on)
+        self._sess_alert_on = tuple(cfg.get("sessions_alert_on",
+                                            self._sess_alert_on))
+        self._sess_quiet_fg = cfg.get("sessions_quiet_foreground",
+                                      self._sess_quiet_fg)
+        self._sess_stuck.minutes = cfg.get("sessions_stuck_minutes",
+                                           self._sess_stuck.minutes)
+        self._apply_hooks(bool(cfg.get("sessions_hooks", self._sess_hooks_on)))
+        self._apply_hotkey(cfg.get("sessions_hotkey", ""))
+        self._sess_answer_on = bool(cfg.get("sessions_answer",
+                                            self._sess_answer_on))
+        if self._sessions_on and not sessions_was_on:
+            # Re-enabled: forget the old history so the next tick doesn't
+            # announce every already-running session as newly appeared.
+            self._sess_tracker.reset()
+            self._sess_stuck.reset()
+            self._sess_known_ids = frozenset()
+            self._sess_seeded = False
         # accent: apply, or restore the theme's original when cleared
         self._accent = cfg["accent"]
         for k in render.THEMES:
@@ -1568,6 +3018,14 @@ class BarWidget:
         self._wake.set()  # nudge the poll thread so poll/cost apply immediately
 
     # -- drawing ---------------------------------------------------------- #
+    def _strip_metrics(self):
+        """Strip groups to draw — the usage meters plus, optionally, a live
+        session count."""
+        metrics = tuple(self._metrics)
+        if self._sessions_on and self._sessions_on_strip:
+            metrics += ("sessions",)
+        return metrics
+
     def _strip_sig(self, disp):
         return (
             self._bg_hex, self._theme,
@@ -1575,15 +3033,25 @@ class BarWidget:
             render._fmt_left(disp.get("session_resets_at")),
             disp.get("weekly_pct"), disp.get("weekly_color"),
             disp.get("face_pct"),
+            self._strip_metrics(),
+            disp.get("sessions_count"), disp.get("sessions_blocked"),
+            # The dot COLOURS, not just how many there are. A session going
+            # from done to working changes neither count, so without this the
+            # strip kept the stale colours until something unrelated moved —
+            # in practice the reset countdown ticking over, up to a minute
+            # later. The dots are the whole point of the at-a-glance row.
+            tuple(disp.get("sessions_dots") or ()),
+            disp.get("sessions_dots_overflow"),
         )
 
     def _draw(self, disp):
         if self._card:  # off-Windows: a rounded floating pill (its own bg + alpha corners)
             T = render.THEMES.get(self._theme, render.THEMES["light"])
-            strip = render.render_strip(disp, T["panel_bot"], self._theme, scale=3, metrics=self._metrics)
+            strip = render.render_strip(disp, T["panel_bot"], self._theme, scale=3, metrics=self._strip_metrics())
             img = _round_alpha(strip, min(strip.size[1] // 2, 15))
         else:  # Windows: opaque strip painted in the sampled taskbar color (blends in)
-            img = render.render_strip(disp, self._bg_hex, self._theme, scale=3, metrics=self._metrics)
+            img = render.render_strip(disp, self._bg_hex, self._theme, scale=3,
+                                      metrics=self._strip_metrics())
         self._photo = ImageTk.PhotoImage(img)
         w, h = img.size
         self.canvas.configure(width=w, height=h)
@@ -1598,6 +3066,267 @@ class BarWidget:
             self.root.geometry(f"{w}x{h}")
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
+
+    # -- live sessions ---------------------------------------------------- #
+    #: Seconds between transcript-tail enrichments. A snapshot is ~0.5ms so it
+    #: runs every tick; enrichment is ~5ms per session, so it doesn't.
+    SESS_ENRICH_EVERY = 5.0
+
+    #: Seconds between heartbeat writes while hooks are on.
+    HEARTBEAT_EVERY = 300.0
+
+    #: WM_HOTKEY lands on this thread's queue and nothing dispatches it for us.
+    #: It's drained on its own fast timer rather than the 1s UI tick: Windows
+    #: grants the hotkey's owner permission to change the foreground window only
+    #: for a moment after the press, and a second's delay loses it — the jump
+    #: then silently fails to raise anything.
+    HOTKEY_POLL_MS = 120
+
+    def _hotkey_loop(self):
+        if self._hotkey is not None:
+            self._hotkey.poll()
+        try:
+            self.root.after(self.HOTKEY_POLL_MS, self._hotkey_loop)
+        except Exception:
+            pass    # window closed
+
+    def _sessions_tick(self):
+        """Refresh the live-session list. Runs on the main thread every second.
+
+        Never raises: a failure here must not take down the usage widget, which
+        is the app's actual job.
+        """
+        if self._demo:
+            return          # the tour drives the session list itself
+        if not self._sessions_on:
+            self._sess_disp = {}
+            # A "needs you" toast has no timeout, so switching the monitor off
+            # would otherwise leave it on screen forever with nothing left
+            # running to take it down. Same for an open answer window, which
+            # polls a session list that is no longer being kept.
+            self._retire_sticky_toast([])
+            self._close_answer()
+            return
+        try:
+            self._drain_hook_events()
+            live = sessions_core.snapshot()
+            events = self._sess_tracker.update(live)
+            live = self._sess_tracker.sessions
+
+            # Re-enrich on a slow cadence, or immediately when the set of
+            # sessions changes so a new row isn't nameless for five seconds.
+            ids = frozenset(s.session_id for s in live)
+            now = time.monotonic()
+            if ids != self._sess_known_ids or \
+                    now - self._sess_enriched_at >= self.SESS_ENRICH_EVERY:
+                self._sess_known_ids = ids
+                self._sess_enriched_at = now
+                self._sess_extra = {
+                    s.session_id: {
+                        "title": s.title, "tool": s.tool, "model": s.model,
+                        "git_branch": s.git_branch, "last_prompt": s.last_prompt,
+                    }
+                    for s in sessions_core.enrich_all(live)
+                }
+            merged = []
+            for s in live:
+                fields = dict(self._sess_extra.get(s.session_id) or {})
+                note = self._sess_hook_notes.get(s.session_id)
+                if note and s.status == sessions_core.WAITING:
+                    # The hook knows the actual prompt; the registry only has a
+                    # category like "input needed".
+                    fields["waiting_for"] = note
+                merged.append(dataclasses.replace(s, **fields) if fields else s)
+            self._sess_disp = sessions_core.format_sessions(
+                merged, max_rows=self._sessions_max_rows)
+            self._sess_disp["sessions_recent"] = sessions_core.format_recent(
+                self._sess_tracker.recent)
+            self._retire_sticky_toast(merged)
+            self._session_alerts(events, merged)
+        except Exception:
+            _log_exc()
+            self._sess_disp = {}
+
+    def _apply_hotkey(self, spec):
+        """Re-register the global shortcut, reporting a clash rather than
+        failing silently — a shortcut that quietly does nothing is worse than
+        none at all."""
+        spec = (spec or "").strip()
+        current = self._hotkey.spec if self._hotkey is not None else ""
+        if spec == current and (self._hotkey is None or self._hotkey.registered):
+            return
+        if self._hotkey is not None:
+            self._hotkey.unregister()
+            self._hotkey = None
+        if not spec:
+            return
+        self._hotkey = hotkeys.Hotkey(spec, self._jump_to_blocked)
+        if not self._hotkey.registered:
+            messagebox.showwarning(
+                "Shortcut unavailable",
+                f"Couldn't register {spec} — {self._hotkey.error}.\n\n"
+                f"Pick a different combination, or clear the box to turn the "
+                f"shortcut off.",
+                parent=self.root)
+
+    def _apply_hooks(self, want):
+        """Install or remove the hook entries to match the setting.
+
+        Runs on every save, not just on change: an install can fail (a
+        read-only file, a settings.json that stopped parsing), and re-checking
+        each time lets it recover on the next save instead of staying silently
+        broken.
+
+        Hooks exist only to feed the session monitor, so turning that off takes
+        them with it. Left registered they would run in every Claude session
+        for a reader that never drains them — the queue would grow unbounded
+        and, with no heartbeat, the relay would eventually uninstall itself
+        while the setting still claimed to be on.
+        """
+        want = bool(want) and self._sessions_on
+        try:
+            if want:
+                if claude_hooks.status() != claude_hooks.INSTALLED:
+                    if not claude_hooks.install():
+                        want = False     # couldn't write — don't claim it's on
+                if want:
+                    claude_hooks.prune()
+            else:
+                claude_hooks.remove()
+                claude_hooks.clear_spool()
+                self._sess_hook_notes.clear()
+        except Exception:
+            _log_exc()
+            want = False
+        self._sess_hooks_on = want
+
+    def _drain_hook_events(self):
+        """Consume queued hook events into per-session notes.
+
+        Hooks are NOT a second source of alerts — the tracker stays the single
+        place a transition is decided, so an event arriving here can never
+        double-toast something the registry is about to report anyway. What
+        they add is text the registry doesn't have: the actual prompt a session
+        is blocked on, rather than a coarse category.
+        """
+        if not self._sess_hooks_on:
+            return
+        # Tell the relay we're still here. Throttled — the relay only checks
+        # for staleness in days, so a write per tick would be pure churn.
+        now = time.monotonic()
+        if now - self._sess_heartbeat_at >= self.HEARTBEAT_EVERY:
+            self._sess_heartbeat_at = now
+            claude_hooks.touch_heartbeat()
+        for raw in claude_hooks.read_events():
+            note = claude_hooks.summarize(raw)
+            session_id = note.get("session_id")
+            if not session_id:
+                continue
+            if note["event"] == "Notification":
+                text = note["message"] or note["title"]
+                if text:
+                    self._sess_hook_notes[session_id] = sessions_core.oneline(text)
+            elif note["event"] in ("Stop", "SessionEnd"):
+                self._sess_hook_notes.pop(session_id, None)
+
+    def _retire_sticky_toast(self, live):
+        """Drop a "needs you" toast once that session stops needing you.
+
+        It has no timeout, so nothing else would ever take it off the screen.
+        """
+        if not self._sess_sticky_pid:
+            return
+        still_blocked = any(s.pid == self._sess_sticky_pid
+                            and s.status == sessions_core.WAITING for s in live)
+        if not still_blocked:
+            self._sess_sticky_pid = 0
+            if self._toast is not None:
+                try:
+                    self._toast.close()
+                except Exception:
+                    pass
+
+    def _session_alerts(self, events, live):
+        """Toast the transitions worth interrupting for. Main thread."""
+        if not self._sess_seeded:
+            # First tick after start (or after re-enabling): everything already
+            # running looks brand new. That's startup, not news.
+            self._sess_seeded = True
+            return
+        # The tour alerts regardless of the user's settings — it exists to show
+        # what the feature does — and shows every kind, same as it overrides the
+        # usage thresholds.
+        if not (self._sess_alerts_on or self._demo) or self._hidden:
+            # The stuck watcher is deliberately NOT run here. Consuming a
+            # crossing while we're suppressed would mean a session that got
+            # blocked during a fullscreen app is never nudged — not even once
+            # you come back to the desktop.
+            return
+        # Re-point each transition at the enriched copy of its session, so an
+        # alert names the session the same way the popover row does (its AI
+        # title, not the raw CLI name) and picks up any hook message.
+        by_id = {s.session_id: s for s in live}
+        events = [sessions_core.Transition(
+            e.kind, by_id.get(e.session.session_id, e.session), e.before, e.after)
+            for e in events]
+        kinds = sessions_core.ALERT_KINDS if self._demo else self._sess_alert_on
+        alerts = sessions_core.alerts_for(events, kinds)
+        if "stuck" in kinds:
+            alerts += [sessions_core.alert_for_stuck(s)
+                       for s in self._sess_stuck.check(live)]
+        if not alerts:
+            return
+        if self._sess_quiet_fg:
+            # Only suppress when exactly one session sits under the focused
+            # window — sessions in tabs of a shared terminal are
+            # indistinguishable from here, and silencing all of them would hide
+            # the one that actually needs you.
+            quiet_pid = focus.exclusive_foreground_pid(
+                [s.pid for s in live], focus.parent_map())
+            if quiet_pid is not None:
+                alerts = [a for a in alerts if a["pid"] != quiet_pid]
+        if self._answer_win is not None and not self._demo:
+            # That session's next question is already on screen, in a window
+            # open in front of you. Announcing it would be talking over itself.
+            open_pid = self._answer_win.pid
+            alerts = [a for a in alerts if a["pid"] != open_pid]
+        if not alerts:
+            return
+        # One toast at a time: a second destroys the first before it paints, so
+        # a batch has to be summarised rather than fired one by one.
+        merged = sessions_core.coalesce_alerts(alerts)
+        if merged is None:
+            return
+        needs_you = merged["kind"] in ("waiting", "stuck")
+        jump_pid = merged["pid"] or (self._sess_disp.get("sessions_blocked_pid") or 0)
+        self._sess_sticky_pid = jump_pid if needs_you else 0
+        # Offer the answer on the toast itself when the prompt is short enough
+        # to decide from three words. Only for a single session's alert: a
+        # coalesced "3 sessions need you" has no one question to put buttons on.
+        choices = ()
+        if needs_you and jump_pid and merged.get("pid"):
+            choices = self._toast_choices(jump_pid)
+        self._show_toast(
+            None, merged["title"], merged["subtitle"], merged["color"],
+            # A request waits for you; an announcement doesn't need to.
+            duration=None if needs_you else 6500,
+            on_click=(lambda pid=jump_pid: self._act_on_session(
+                self._row_for_pid(pid) or {"pid": pid}))
+            if needs_you and jump_pid else None,
+            choices=choices,
+            on_choice=((lambda index, pid=jump_pid:
+                        self._answer_from_toast(pid, index))
+                       if choices else None))
+        if needs_you:
+            self._pulse_strip()
+
+    def _with_sessions(self, disp):
+        """Overlay the session fields onto a usage disp dict for rendering."""
+        if not disp or not self._sess_disp:
+            return disp
+        out = dict(disp)
+        out.update(self._sess_disp)
+        return out
 
     # -- loops ------------------------------------------------------------ #
     def _poll_loop(self):
@@ -1625,6 +3354,10 @@ class BarWidget:
                         disp = dict(disp)
                         disp["cost_tokens"] = c["tokens"]
                         disp["cost_usd"] = c["cost"]
+                        # Which project is actually burning it. Rendered in the
+                        # menus, which have no height limit, not the popover.
+                        disp["cost_projects"] = cost.compute_today_by_project(
+                            limit=5) or []
                 except Exception:
                     pass
             # Hand off to the main thread. Tkinter isn't thread-safe, so alerts
@@ -1679,6 +3412,11 @@ class BarWidget:
         # Process each new poll for alerts/resume state on the main thread — even
         # while hidden, so crossings/caps during fullscreen aren't lost. The toast
         # creation itself is deferred/suppressed via self._hidden.
+        # Live sessions refresh every tick regardless of visibility, so the
+        # tracker keeps its history across a fullscreen hide and alerts can't
+        # miss a transition that happened while we were away.
+        self._sessions_tick()
+
         with self._lock:
             disp = self._disp
             seq = self._poll_seq
@@ -1702,9 +3440,10 @@ class BarWidget:
             if rgb:
                 self._apply_bg(rgb)
         if disp is not None:
-            sig = self._strip_sig(disp)
+            merged = self._with_sessions(disp)
+            sig = self._strip_sig(merged)
             if sig != self._sig:
-                self._draw(disp)
+                self._draw(merged)
                 self._sig = sig
         self._topmost_ticks += 1
         if self._topmost_ticks >= 6 and self._popover is None:  # don't steal popover focus

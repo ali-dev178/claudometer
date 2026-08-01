@@ -27,10 +27,24 @@ DEFAULTS = {
     "resume_prompt": "Continue where you left off.",  # continuation prompt used for Tier 2
     "resume_skip_permissions": False,  # Tier 2: pass --dangerously-skip-permissions (dangerous)
     "resume_max_turns": 30,           # Tier 2: cap agentic turns per unattended resume
+    # Live Claude Code sessions (read from ~/.claude/sessions)
+    "sessions": True,                 # show live CLI sessions in the popover/menus
+    "sessions_max_rows": 6,           # rows before the list collapses to "+N more"
+    "sessions_on_strip": True,        # show a session count on the taskbar strip
+    "sessions_alerts": True,          # toast when a session needs you / finishes
+    "sessions_alert_on": ["waiting", "idle", "stuck"],  # which transitions alert
+    "sessions_stuck_minutes": 10,     # nudge if blocked this long (0 = never)
+    "sessions_quiet_foreground": True,  # no toast for the terminal you're using
+    "sessions_hooks": False,          # instant alerts via Claude Code hooks (asks first)
+    "sessions_hotkey": "ctrl+alt+j",  # global shortcut to the blocked session ("" = off)
+    "sessions_answer": True,          # answer a blocked session from the widget (Windows)
 }
 
 _VALID_THEMES = ("auto", "light", "dark")
 _VALID_METRICS = ("session", "weekly")
+# Mirrors sessions_core.ALERT_KINDS. Duplicated rather than imported so this
+# module stays dependency-free (it is imported by every adapter).
+_VALID_ALERT_KINDS = ("waiting", "idle", "stuck", "gone")
 
 
 def config_path() -> Path:
@@ -193,6 +207,38 @@ def load() -> dict:
                                    else max(1, min(200, int(cfg["resume_max_turns"]))))
     except (TypeError, ValueError):
         cfg["resume_max_turns"] = DEFAULTS["resume_max_turns"]
+    cfg["sessions"] = bool(cfg["sessions"])
+    cfg["sessions_on_strip"] = bool(cfg["sessions_on_strip"])
+    try:
+        # Ceiling is 12, not "as many as you like": at 12 rows the popover is
+        # ~610px tall, which still fits a 1366x768 laptop's work area. Beyond
+        # that it runs off the bottom of the screen, and the placement math can
+        # only move the card, not shrink it. The rest collapse to "+N more".
+        cfg["sessions_max_rows"] = (DEFAULTS["sessions_max_rows"]
+                                    if isinstance(cfg["sessions_max_rows"], bool)
+                                    else max(1, min(12, int(cfg["sessions_max_rows"]))))
+    except (TypeError, ValueError):
+        cfg["sessions_max_rows"] = DEFAULTS["sessions_max_rows"]
+    cfg["sessions_alerts"] = bool(cfg["sessions_alerts"])
+    cfg["sessions_hooks"] = bool(cfg["sessions_hooks"])
+    cfg["sessions_answer"] = bool(cfg["sessions_answer"])
+    hotkey = cfg["sessions_hotkey"]
+    cfg["sessions_hotkey"] = hotkey.strip() if isinstance(hotkey, str) else ""
+    cfg["sessions_quiet_foreground"] = bool(cfg["sessions_quiet_foreground"])
+    # Keep declaration order (waiting, idle, stuck, gone) rather than the order
+    # the user happened to type, and drop anything unrecognized.
+    raw = cfg["sessions_alert_on"]
+    if not isinstance(raw, list):
+        raw = list(DEFAULTS["sessions_alert_on"])
+    valid = [k for k in _VALID_ALERT_KINDS if k in raw]
+    cfg["sessions_alert_on"] = valid
+    try:
+        cfg["sessions_stuck_minutes"] = (
+            DEFAULTS["sessions_stuck_minutes"]
+            if isinstance(cfg["sessions_stuck_minutes"], bool)
+            else max(0, min(600, int(cfg["sessions_stuck_minutes"]))))
+    except (TypeError, ValueError):
+        cfg["sessions_stuck_minutes"] = DEFAULTS["sessions_stuck_minutes"]
     return cfg
 
 
@@ -214,47 +260,93 @@ def _toml_val(v) -> str:
 
 
 def to_toml(cfg: dict) -> str:
-    """Serialize a config dict to commented TOML matching the example file."""
+    """Serialize a config dict to commented TOML matching the example file.
+
+    Any key the caller omitted falls back to its default rather than raising:
+    callers build this dict by hand (the in-app panel does), so a key added to
+    DEFAULTS but forgotten in one of them must not make saving impossible.
+    """
+    def v(key):
+        return _toml_val(cfg[key] if key in cfg else DEFAULTS[key])
+
     L = [
         "# Claudometer configuration — managed by the in-app settings panel.",
         "# You can still hand-edit this file; changes apply on restart (some live).",
         "",
         "# Seconds between usage polls (clamped 60-300).",
-        f"poll = {_toml_val(cfg['poll'])}",
+        f"poll = {v('poll')}",
         "",
         '# "auto" follows your taskbar; force with "light" or "dark".',
-        f"theme = {_toml_val(cfg['theme'])}",
+        f"theme = {v('theme')}",
         "",
         '# Meters shown on the strip: any of "session", "weekly".',
-        f"metrics = {_toml_val(cfg['metrics'])}",
+        f"metrics = {v('metrics')}",
         "",
         "# Hide over fullscreen apps; false = always visible.",
-        f"hide_on_fullscreen = {_toml_val(cfg['hide_on_fullscreen'])}",
+        f"hide_on_fullscreen = {v('hide_on_fullscreen')}",
         "",
         "# Desktop toast alerts when you cross a usage threshold.",
-        f"alerts = {_toml_val(cfg['alerts'])}",
-        f"alert_thresholds = {_toml_val(cfg['alert_thresholds'])}",
+        f"alerts = {v('alerts')}",
+        f"alert_thresholds = {v('alert_thresholds')}",
         "",
         "# Estimated token/cost line in the popover.",
-        f"show_cost = {_toml_val(cfg['show_cost'])}",
+        f"show_cost = {v('show_cost')}",
         "",
         "# Accent color override (hex).",
     ]
-    L.append(f"accent = {_toml_val(cfg['accent'])}" if cfg.get("accent") else '# accent = "#d97757"')
+    L.append(f"accent = {v('accent')}" if cfg.get("accent") else '# accent = "#d97757"')
     L += [
         "",
         "# --- Resume when your 5-hour session limit resets ---",
-        f"resume_notify = {_toml_val(cfg['resume_notify'])}",
-        f"resume_auto = {_toml_val(cfg['resume_auto'])}   # Tier 2: unattended (risky)",
-        f"resume_prompt = {_toml_val(cfg['resume_prompt'])}",
-        f"resume_max_turns = {_toml_val(cfg['resume_max_turns'])}",
-        f"resume_skip_permissions = {_toml_val(cfg['resume_skip_permissions'])}",
+        f"resume_notify = {v('resume_notify')}",
+        f"resume_auto = {v('resume_auto')}   # Tier 2: unattended (risky)",
+        f"resume_prompt = {v('resume_prompt')}",
+        f"resume_max_turns = {v('resume_max_turns')}",
+        f"resume_skip_permissions = {v('resume_skip_permissions')}",
+        "",
+        "# --- Live Claude Code sessions (read from ~/.claude/sessions) ---",
+        "# Shows which CLI sessions are working, done, or waiting on you.",
+        f"sessions = {v('sessions')}",
+        f"sessions_max_rows = {v('sessions_max_rows')}",
+        f"sessions_on_strip = {v('sessions_on_strip')}",
+        "",
+        "# Toast when a session needs you, finishes, stays blocked, or ends.",
+        '# sessions_alert_on: any of "waiting", "idle", "stuck", "gone".',
+        f"sessions_alerts = {v('sessions_alerts')}",
+        f"sessions_alert_on = {v('sessions_alert_on')}",
+        f"sessions_stuck_minutes = {v('sessions_stuck_minutes')}   # 0 = never",
+        f"sessions_quiet_foreground = {v('sessions_quiet_foreground')}",
+        "",
+        "# Instant alerts via Claude Code hooks. Turning this on edits",
+        "# ~/.claude/settings.json — the app shows the exact JSON and asks first.",
+        f"sessions_hooks = {v('sessions_hooks')}",
+        "",
+        '# Global shortcut that jumps to whichever session needs you ("" = off).',
+        f"sessions_hotkey = {v('sessions_hotkey')}",
+        "",
+        "# Answer a blocked session from the widget instead of switching to its",
+        "# terminal. Windows only; elsewhere it opens the terminal instead.",
+        f"sessions_answer = {v('sessions_answer')}",
     ]
+    # Keys the user added by hand. Tables are written LAST and as real TOML —
+    # everything after a [header] belongs to that table, so one emitted early
+    # would swallow every setting below it. A table stringified into a scalar
+    # (which is what happened before) silently destroys whatever the user put
+    # there, and this file is theirs as much as ours.
     extras = [k for k in cfg if k not in DEFAULTS]
-    if extras:
+    scalars = [k for k in extras if not isinstance(cfg[k], dict)]
+    tables = [k for k in extras if isinstance(cfg[k], dict)]
+    if scalars:
         L.append("")
-        for k in extras:
+        for k in scalars:
             L.append(f"{k} = {_toml_val(cfg[k])}")
+    for k in tables:
+        L.append("")
+        L.append(f"[{k}]")
+        for sub, value in cfg[k].items():
+            if isinstance(value, dict):
+                continue        # nested tables are beyond what we round-trip
+            L.append(f"{sub} = {_toml_val(value)}")
     L.append("")
     return "\n".join(L)
 

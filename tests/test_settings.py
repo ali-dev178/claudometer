@@ -15,6 +15,155 @@ import settings
 
 
 # --------------------------------------------------------------------------- #
+# Live-sessions keys (added with the session monitor)
+# --------------------------------------------------------------------------- #
+def test_sessions_defaults(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(tmp_path / "none.toml"))
+    cfg = settings.load()
+    assert cfg["sessions"] is True
+    assert cfg["sessions_on_strip"] is True
+    assert cfg["sessions_max_rows"] == 6
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (0, 1),      # clamped up — a zero-row cap would hide every session
+    (-3, 1),
+    (1, 1),
+    (12, 12),    # the ceiling: 12 rows still fit a 1366x768 work area
+    (20, 12),    # clamped down — beyond this the popover runs off-screen
+    (21, 12),
+    ("4", 4),    # numeric string coerced
+    ("x", 6),    # unparsable -> default
+    (True, 6),   # a bool is not a row count -> default
+])
+def test_sessions_max_rows_is_clamped(monkeypatch, tmp_path, raw, expected):
+    p = tmp_path / "c.toml"
+    p.write_text(f"sessions_max_rows = {settings._toml_val(raw)}\n",
+                 encoding="utf-8")
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(p))
+    assert settings.load()["sessions_max_rows"] == expected
+
+
+def test_session_alert_defaults(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(tmp_path / "none.toml"))
+    cfg = settings.load()
+    assert cfg["sessions_alerts"] is True
+    assert cfg["sessions_alert_on"] == ["waiting", "idle", "stuck"]
+    assert cfg["sessions_stuck_minutes"] == 10
+    assert cfg["sessions_quiet_foreground"] is True
+
+
+def test_a_hand_written_table_survives_a_save(tmp_path, monkeypatch):
+    cfg_file = tmp_path / "c.toml"
+    cfg_file.write_text("theme = 'dark'\n\n[custom]\nkeep = 1\nname = 'mine'\n",
+                        encoding="utf-8")
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(cfg_file))
+    import importlib
+    importlib.reload(settings)
+    settings.save(settings.load())
+    text = cfg_file.read_text(encoding="utf-8")
+    assert "[custom]" in text and "keep = 1" in text, (
+        "this file is the user's as much as ours — stringifying their table "
+        "into custom = \"{'keep': 1}\" destroys it with no way back")
+    # load() exposes only keys it knows; extras survive via save()'s re-read,
+    # so the file is what has to still parse.
+    assert settings._parse(text)["custom"] == {"keep": 1, "name": "mine"}
+
+
+def test_a_table_is_written_after_every_setting(tmp_path, monkeypatch):
+    cfg_file = tmp_path / "c.toml"
+    cfg_file.write_text("[custom]\nkeep = 1\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(cfg_file))
+    import importlib
+    importlib.reload(settings)
+    settings.save(settings.load())
+    text = cfg_file.read_text(encoding="utf-8")
+    assert text.index("[custom]") > text.index("theme ="), (
+        "everything after a [header] belongs to that table — emitting one "
+        "early would swallow every setting below it")
+    assert settings.load()["theme"] == settings.DEFAULTS["theme"]
+
+
+def test_alert_kinds_mirror_sessions_core():
+    import sessions_core
+    assert settings._VALID_ALERT_KINDS == sessions_core.ALERT_KINDS
+
+
+def test_alert_on_drops_unknown_kinds_and_keeps_order(monkeypatch, tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text('sessions_alert_on = ["gone", "banana", "waiting"]\n',
+                 encoding="utf-8")
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(p))
+    assert settings.load()["sessions_alert_on"] == ["waiting", "gone"]
+
+
+def test_alert_on_empty_list_means_no_alerts(monkeypatch, tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text("sessions_alert_on = []\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(p))
+    assert settings.load()["sessions_alert_on"] == []
+
+
+def test_alert_on_non_list_falls_back_to_default(monkeypatch, tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text('sessions_alert_on = "waiting"\n', encoding="utf-8")
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(p))
+    assert settings.load()["sessions_alert_on"] == ["waiting", "idle", "stuck"]
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (0, 0),        # 0 = never nudge
+    (1, 1),
+    (600, 600),
+    (601, 600),
+    (-5, 0),
+    ("15", 15),
+    ("x", 10),
+    (True, 10),
+])
+def test_stuck_minutes_clamped(monkeypatch, tmp_path, raw, expected):
+    p = tmp_path / "c.toml"
+    p.write_text(f"sessions_stuck_minutes = {settings._toml_val(raw)}\n",
+                 encoding="utf-8")
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(p))
+    assert settings.load()["sessions_stuck_minutes"] == expected
+
+
+def test_sessions_flags_coerce_to_bool(monkeypatch, tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text('sessions = 0\nsessions_on_strip = "yes"\n', encoding="utf-8")
+    monkeypatch.setenv("CLAUDOMETER_CONFIG", str(p))
+    cfg = settings.load()
+    assert cfg["sessions"] is False
+    assert cfg["sessions_on_strip"] is True
+
+
+def test_to_toml_survives_a_cfg_missing_keys():
+    # The in-app panel builds this dict by hand. A key added to DEFAULTS but
+    # forgotten there must not make saving impossible (it used to KeyError).
+    out = settings.to_toml({"poll": 120})
+    assert "poll = 120" in out
+    assert "sessions = true" in out
+    assert "sessions_max_rows = 6" in out
+
+
+def test_to_toml_survives_an_empty_cfg():
+    out = settings.to_toml({})
+    for key in settings.DEFAULTS:
+        if key == "accent":          # emitted commented-out when unset
+            continue
+        assert f"{key} = " in out, key
+
+
+def test_to_toml_emits_sessions_keys():
+    out = settings.to_toml(dict(settings.DEFAULTS, sessions=False,
+                                sessions_max_rows=3, sessions_on_strip=False))
+    assert "sessions = false" in out
+    assert "sessions_max_rows = 3" in out
+    assert "sessions_on_strip = false" in out
+
+
+# --------------------------------------------------------------------------- #
 # Fixtures / helpers
 # --------------------------------------------------------------------------- #
 @pytest.fixture
