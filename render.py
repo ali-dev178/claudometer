@@ -442,8 +442,13 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
             elif contrast_ratio(_rgb(c), _rgb(bg_hex)) < SHAPE_CONTRAST:
                 # Keep the hue — it is what red, amber and green MEAN — and
                 # separate it from the background with a hairline instead.
+                # Scaled with S, because the strip is drawn at S× and then
+                # downsampled: a flat 1px stroke here would come out a third
+                # of a pixel and vanish in the resize. Kept under a full pixel
+                # once resolved — enough to separate the glyph, not so much
+                # that you read the outline instead of the number.
                 d.text((x, cy), t, font=f, fill=c, anchor="lm",
-                       stroke_width=max(1, S // 3), stroke_fill=ring)
+                       stroke_width=max(1, round(S * 0.7)), stroke_fill=ring)
             else:
                 d.text((x, cy), t, font=f, fill=c, anchor="lm")
             x += tmp.textlength(t, font=f)

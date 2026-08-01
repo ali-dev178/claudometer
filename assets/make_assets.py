@@ -5,10 +5,13 @@ macOS desktops with soft drop shadows. Run:  py assets/make_assets.py
 
 This covers every rendered surface: the strip (+ severity/offline states), the
 popover (light/dark, per-model, cost), threshold alert toasts, resume toasts,
-the fullscreen overlay, the mac menu bar and the app icon. The one surface it
-can't draw is the native Settings window (real Tk widgets) — regenerate that
-with  py assets/capture_settings.py  (Windows, needs a display).
-Keep these in sync: whenever the UI changes, re-run both scripts.
+the fullscreen overlay, the mac menu bar and the app icon.
+
+Three companions, all of which must be re-run whenever the UI changes:
+
+    py assets/make_gallery.py      the reference sheets — every state, labelled
+    py assets/capture_answer.py    the answer window (real Tk, needs a display)
+    py assets/capture_settings.py  the Settings panel (ditto)
 """
 
 import os

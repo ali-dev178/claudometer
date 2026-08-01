@@ -115,6 +115,84 @@ def _grab(theme, lines, status, dwell_ms):
     return img
 
 
+#: The rest of what a session can put in front of you. Each is what the
+#: session's screen actually looks like in that state; the window parses it
+#: exactly as it would live.
+PERMISSION = [
+    "● I need to run the test suite before changing anything else.",
+    "Claude needs your permission to run: pytest -q",
+    "> ",
+]
+WORKING = [
+    "> put the breaking changes at the top",
+    "● Reworking the summary now.",
+    "✻ Wrangling (12s · ↑ 1.4k tokens · esc to interrupt)",
+]
+SHELL_RUNNING = [
+    "> 1",
+    "● Running the suite to check nothing broke.",
+    "  ⎿  pytest -q",
+    "✻ Running (8s · esc to interrupt)",
+]
+UNREADABLE = None
+
+
+def _grab_state(theme, lines, status, dwell_ms, alive=True, readable=True):
+    """One window in one state, captured."""
+    row = sc.format_sessions([sc.Session(
+        session_id="s", pid=4242, cwd="/work/claude-widget",
+        name="claude-widget-b8", title="Ship the release pipeline",
+        status=status, waiting_for="input needed",
+        status_updated_at=sc.now_ms() - dwell_ms)])["sessions_rows"][0]
+    state = {"alive": alive, "readable": readable, "row": row, "lines": lines,
+             "prompt": sc.parse_console_prompt(lines) if lines else None}
+    root = tk.Tk()
+    root.geometry("100x24+0+0")
+    win = widget_bar.AnswerWindow(root, theme, row,
+                                  on_send=lambda r, t, s=True: (True, None),
+                                  on_open_terminal=lambda r: None,
+                                  poll=lambda r: state)
+    win.top.deiconify()
+    win.top.geometry("+80+80")
+    win.top.lift()
+    for _ in range(60):
+        win.top.update_idletasks()
+        win.top.update()
+    img = _capture(win.top.winfo_id())
+    root.destroy()
+    return img
+
+
+def gallery():
+    """Every state the answer window can be in, one sheet."""
+    from make_gallery import grid_sheet          # noqa: E402
+
+    items = [
+        ("A question, with its choices",
+         _grab_state("light", ASKING, sc.WAITING, 4 * 60_000)),
+        ("A permission prompt — no menu",
+         _grab_state("light", PERMISSION, sc.WAITING, 20_000)),
+        ("The conversation it started",
+         _grab_state("light", TALKING, sc.IDLE, 30_000)),
+        ("Working — what you send is queued",
+         _grab_state("light", WORKING, sc.BUSY, 12_000)),
+        ("Running the command you approved",
+         _grab_state("light", SHELL_RUNNING, sc.SHELL, 8_000)),
+        ("Its screen can't be read",
+         _grab_state("light", UNREADABLE, sc.WAITING, 60_000, readable=False)),
+        ("The session ended",
+         _grab_state("light", None, sc.IDLE, 60_000, alive=False)),
+        ("Dark",
+         _grab_state("dark", ASKING, sc.WAITING, 4 * 60_000)),
+    ]
+    grid_sheet(items, "gallery-answer.png",
+               "Answering a session, in every state it can be in", cols=4,
+               note="Windows only. The question is read off the session's own "
+                    "screen, because while it is waiting that is the only "
+                    "place the question exists — a tool call reaches the "
+                    "transcript once it has been ANSWERED.")
+
+
 def main():
     asking = _grab("light", ASKING, sc.WAITING, 4 * 60_000)
     talking = _grab("dark", TALKING, sc.IDLE, 30_000)
@@ -141,3 +219,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    gallery()

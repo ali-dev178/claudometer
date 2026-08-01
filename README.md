@@ -82,6 +82,38 @@ Claude's Pro / Max / Team plans enforce a rolling **5‑hour session** limit and
 
 ---
 
+## Every state, in pictures
+
+The shots above are the app at its best. These are the app at *every* setting — each state it can be in, including the quiet ones you only meet once: nothing running, more sessions than fit, the screen it can't read, the session that ended while you were reading it.
+
+Every image here is a **real render from the app's own code**, built through the same formatters the widget uses. None of it is mocked, so a state that stops working stops generating. Rebuild them with `py assets/make_gallery.py` (the Tk windows come from `capture_answer.py` and `capture_settings.py`, which need a display).
+
+### The strip
+
+Each meter combination, each severity, the live‑session dot row filling up and overflowing, and the states where there's nothing to report at all.
+
+<p align="center"><img src="assets/gallery-strip.png" alt="Every state the taskbar strip can be in" width="700"></p>
+
+### …on whatever it's sitting on
+
+The strip samples the colour behind it and paints itself in that, so it can end up on anything. It picks the palette by contrast, then lifts each label to the WCAG AA ratio — on a saturated wallpaper the theme greys alone measure about **1.2:1**, which isn't dim, it's absent. Severity colours are exempt and take a hairline outline instead, because red, amber and green *are* the message.
+
+<p align="center"><img src="assets/gallery-contrast.png" alt="The strip staying legible on eight different backgrounds" width="640"></p>
+
+### The details popover
+
+<p align="center"><img src="assets/gallery-popover.png" alt="Every popover state" width="860"></p>
+
+### Alerts
+
+<p align="center"><img src="assets/gallery-toasts.png" alt="Every alert toast" width="760"></p>
+
+### Answering a session *(Windows)*
+
+<p align="center"><img src="assets/gallery-answer.png" alt="Every state of the answer window" width="960"></p>
+
+---
+
 ## Install
 
 Requires a **Claude Pro / Max / Team** subscription, signed into **Claude Code** at least once (that's where the login lives).
