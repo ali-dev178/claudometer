@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ctypes
 import sys
+import threading
 from typing import Optional
 
 _IS_WIN = sys.platform == "win32"
@@ -62,58 +63,89 @@ def parse(spec: str):
     return mods, key
 
 
-class Hotkey:
-    """One registered system-wide hotkey."""
+WM_QUIT = 0x0012
 
-    def __init__(self, spec: str, on_press, hotkey_id: int = 0xC1AD):
+
+class Hotkey:
+    """One registered system-wide hotkey.
+
+    Registration and the message loop live on their own daemon thread. They
+    have to: ``RegisterHotKey`` is per-thread, and ``WM_HOTKEY`` is posted to
+    the thread queue rather than to a window — on the Tk main thread, Tk's own
+    message pump retrieves and discards it before we ever see it, so the
+    shortcut registers successfully and then silently never fires.
+
+    The thread only counts presses. :meth:`poll` drains that count from
+    whichever thread owns the UI, so the callback still runs where it's safe to
+    touch widgets.
+    """
+
+    def __init__(self, spec: str, on_press, hotkey_id: int = 0xC1AD,
+                 timeout: float = 2.0):
         self.spec = spec
         self._on_press = on_press
         self._id = hotkey_id
         self.registered = False
         self.error: Optional[str] = None
-        self._register()
+        self._pending = 0
+        self._lock = threading.Lock()
+        self._ready = threading.Event()
+        self._thread_id = None
 
-    def _register(self):
-        combo = parse(self.spec)
+        combo = parse(spec)
         if combo is None:
             self.error = "unrecognised shortcut"
             return
         if not _IS_WIN:
             self.error = "only supported on Windows"
             return
-        mods, key = combo
+        self._combo = combo
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name="claudometer-hotkey")
+        self._thread.start()
+        # The caller wants to report a clash immediately, so wait briefly for
+        # the registration result rather than leaving it indeterminate.
+        self._ready.wait(timeout)
+
+    def _run(self):
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        mods, key = self._combo
         try:
-            user32 = ctypes.windll.user32
+            self._thread_id = kernel32.GetCurrentThreadId()
             # MOD_NOREPEAT: holding the keys fires once, not continuously.
             ok = user32.RegisterHotKey(None, self._id, mods | MOD_NOREPEAT, key)
-            if ok:
-                self.registered = True
-            else:
+            self.registered = bool(ok)
+            if not ok:
                 self.error = "already taken by another application"
         except Exception as exc:
             self.error = str(exc)
+        finally:
+            self._ready.set()
+        if not self.registered:
+            return
+        try:
+            msg = ctypes.wintypes.MSG()
+            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                if msg.message == WM_HOTKEY and msg.wParam == self._id:
+                    with self._lock:
+                        self._pending += 1
+        except Exception:
+            pass
+        finally:
+            try:
+                user32.UnregisterHotKey(None, self._id)  # same thread as register
+            except Exception:
+                pass
+            self.registered = False
 
     def poll(self) -> int:
-        """Drain any pending presses; returns how many fired.
-
-        WM_HOTKEY goes to the thread queue, so this must run on the same thread
-        that registered it — the Tk main thread.
-        """
-        if not self.registered:
-            return 0
-        fired = 0
-        try:
-            user32 = ctypes.windll.user32
-            msg = ctypes.wintypes.MSG()
-            while user32.PeekMessageW(ctypes.byref(msg), None, WM_HOTKEY,
-                                      WM_HOTKEY, PM_REMOVE):
-                if msg.wParam == self._id:
-                    fired += 1
-        except Exception:
-            return 0
-        for _ in range(min(fired, 1)):   # collapse a burst into one action
+        """Run the callback if the hotkey was pressed. Returns presses seen."""
+        with self._lock:
+            fired, self._pending = self._pending, 0
+        if fired:
             try:
-                self._on_press()
+                self._on_press()      # a burst collapses into one action
             except Exception:
                 pass
         return fired
@@ -121,11 +153,13 @@ class Hotkey:
     def unregister(self):
         if not self.registered:
             return
+        self.registered = False
         try:
-            ctypes.windll.user32.UnregisterHotKey(None, self._id)
+            if self._thread_id:
+                ctypes.windll.user32.PostThreadMessageW(
+                    self._thread_id, WM_QUIT, 0, 0)
         except Exception:
             pass
-        self.registered = False
 
 
 # ctypes.wintypes isn't imported by default on non-Windows builds of ctypes.

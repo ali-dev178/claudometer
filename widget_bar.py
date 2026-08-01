@@ -98,6 +98,29 @@ def _screen_size():
     return 1920, 1080
 
 
+#: MonitorFromPoint: return NULL rather than the nearest monitor.
+_MONITOR_DEFAULTTONULL = 0
+
+
+def _on_a_monitor(x, y):
+    """True if (x, y) actually lands on a display.
+
+    A remembered position outlives the display it was chosen on — unplug a
+    second monitor, or let a drag fling the strip past an edge, and restoring
+    it verbatim leaves the widget running somewhere nobody can see, with no way
+    to get it back but deleting a file.
+    """
+    if not _IS_WIN:
+        sw, sh = _screen_size()
+        return -40 <= x <= sw - 20 and -40 <= y <= sh - 10
+    try:
+        pt = wintypes.POINT(int(x) + 8, int(y) + 8)   # just inside the strip
+        return bool(ctypes.windll.user32.MonitorFromPoint(
+            pt, _MONITOR_DEFAULTTONULL))
+    except Exception:
+        return True      # can't tell — trust what was saved
+
+
 def _monitor_workarea(x, y):
     """(left, top, right, bottom) work area of the monitor under screen point
     (x, y) — used to place the popover/toasts on the widget's own display.
@@ -1379,6 +1402,8 @@ class BarWidget:
         self._bind_events()
         self._draw(core.status_display(core.Status.NO_DATA))
         threading.Thread(target=self._poll_loop, daemon=True).start()
+        if self._hotkey is not None and self._hotkey.registered:
+            self.root.after(self.HOTKEY_POLL_MS, self._hotkey_loop)
         self.root.after(400, self._refresh_ui)
         if self._start_in_demo:  # `app.py demo` — drop straight into the tour
             self.root.after(500, self._enter_demo)
@@ -1412,6 +1437,9 @@ class BarWidget:
     # -- geometry --------------------------------------------------------- #
     def _place_initial(self):
         pos = self._load_pos()
+        if pos and not _on_a_monitor(*pos):
+            pos = None          # that display is gone; fall back to auto-place
+            self._need_autoplace = True
         if pos:
             self.root.geometry(f"+{pos[0]}+{pos[1]}")
         else:
@@ -1457,6 +1485,12 @@ class BarWidget:
 
     def _release(self, e):
         if self._moved:
+            # Don't persist somewhere it can't be seen — a drag that ends past
+            # an edge would otherwise be remembered and reapplied on restart.
+            if not _on_a_monitor(self.root.winfo_x(), self.root.winfo_y()):
+                self._need_autoplace = True
+                self._sig = None
+                return
             self._save_pos()
         else:
             self._toggle_popover()
@@ -2240,6 +2274,21 @@ class BarWidget:
     #: Seconds between heartbeat writes while hooks are on.
     HEARTBEAT_EVERY = 300.0
 
+    #: WM_HOTKEY lands on this thread's queue and nothing dispatches it for us.
+    #: It's drained on its own fast timer rather than the 1s UI tick: Windows
+    #: grants the hotkey's owner permission to change the foreground window only
+    #: for a moment after the press, and a second's delay loses it — the jump
+    #: then silently fails to raise anything.
+    HOTKEY_POLL_MS = 120
+
+    def _hotkey_loop(self):
+        if self._hotkey is not None:
+            self._hotkey.poll()
+        try:
+            self.root.after(self.HOTKEY_POLL_MS, self._hotkey_loop)
+        except Exception:
+            pass    # window closed
+
     def _sessions_tick(self):
         """Refresh the live-session list. Runs on the main thread every second.
 
@@ -2546,10 +2595,6 @@ class BarWidget:
         # tracker keeps its history across a fullscreen hide and alerts can't
         # miss a transition that happened while we were away.
         self._sessions_tick()
-        if self._hotkey is not None:
-            # WM_HOTKEY lands on this thread's queue; nothing dispatches it for
-            # us, so it has to be drained here.
-            self._hotkey.poll()
 
         with self._lock:
             disp = self._disp
