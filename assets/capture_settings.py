@@ -52,7 +52,12 @@ def _capture(hwnd):
     return img
 
 
-def _grab(theme):
+def _grab(theme, expand=None):
+    """Capture the panel. *expand* opens one collapsible group.
+
+    The body scrolls once it outgrows the screen, so a single shot can't show
+    every group at once — the two themes open different ones between them.
+    """
     root = tk.Tk()
     root.geometry("100x24+0+0")  # tiny visible master so the child stays mapped
     cfg = settings.load(); cfg["resume_auto"] = True  # advanced opens by default
@@ -61,13 +66,19 @@ def _grab(theme):
     win.top.deiconify(); win.top.lift()
     for _ in range(30):
         win.top.update_idletasks(); win.top.update()
+    if expand == "sessions":
+        win._toggle_sessions()
+        for _ in range(30):
+            win.top.update_idletasks(); win.top.update()
     img = _capture(win.top.winfo_id())
     root.destroy()
     return img
 
 
 def main():
-    light, dark = _grab("light"), _grab("dark")
+    # Light shows the live-session options; dark shows the resume advanced
+    # group. Together they cover both collapsible sections.
+    light, dark = _grab("light", expand="sessions"), _grab("dark")
     m, gap = 44, 46
     W = m + light.width + gap + dark.width + m
     H = m + max(light.height, dark.height) + 34 + m

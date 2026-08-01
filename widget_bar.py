@@ -151,13 +151,23 @@ def _get_pixel(x, y):
         _user32.ReleaseDC(0, hdc)
 
 
+def _hexish(value):
+    return isinstance(value, str) and len(value) == 7 and value.startswith("#")
+
+
 def _blend(hex_a, hex_b, amount):
-    """Mix two #rrggbb colors; amount 0 = all a, 1 = all b."""
+    """Mix two #rrggbb colors; amount 0 = all a, 1 = all b.
+
+    Always returns something a renderer can use — the result goes straight to
+    Pillow as a fill, where a None would raise.
+    """
     try:
         a = tuple(int(hex_a[i:i + 2], 16) for i in (1, 3, 5))
         b = tuple(int(hex_b[i:i + 2], 16) for i in (1, 3, 5))
     except (TypeError, ValueError, IndexError):
-        return hex_a
+        if _hexish(hex_a):
+            return hex_a
+        return hex_b if _hexish(hex_b) else "#000000"
     amount = min(max(float(amount), 0.0), 1.0)
     return "#%02x%02x%02x" % tuple(
         int(round(x + (y - x) * amount)) for x, y in zip(a, b))
@@ -2227,6 +2237,10 @@ class BarWidget:
             return          # the tour drives the session list itself
         if not self._sessions_on:
             self._sess_disp = {}
+            # A "needs you" toast has no timeout, so switching the monitor off
+            # would otherwise leave it on screen forever with nothing left
+            # running to take it down.
+            self._retire_sticky_toast([])
             return
         try:
             self._drain_hook_events()

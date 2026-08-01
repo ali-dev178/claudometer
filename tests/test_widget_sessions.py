@@ -302,6 +302,43 @@ def test_the_sticky_toast_retires_when_the_session_unblocks():
     assert w._sess_sticky_pid == 0 and closed == [1]
 
 
+def test_the_sticky_toast_is_dismissed_when_sessions_are_turned_off():
+    closed = []
+
+    class T:
+        def close(self):
+            closed.append(1)
+
+    w = Widget()
+    _block(w, pid=7)
+    w._toast = T()
+    w._sessions_on = False
+    w._sessions_tick()
+    assert w._sess_sticky_pid == 0 and closed == [1], (
+        "a sticky toast has no timeout — switching the monitor off must take "
+        "it down, or it stays on screen forever")
+
+
+# --------------------------------------------------------------------------- #
+# _blend — its result goes straight to Pillow as a fill
+# --------------------------------------------------------------------------- #
+def test_blend_midpoint():
+    assert widget_bar._blend("#000000", "#ffffff", 0.5) == "#808080"
+
+
+@pytest.mark.parametrize("amount,expected", [(0, "#e8edf3"), (1, "#e5484d"),
+                                             (-3, "#e8edf3"), (5, "#e5484d")])
+def test_blend_clamps_the_amount(amount, expected):
+    assert widget_bar._blend("#e8edf3", "#e5484d", amount) == expected
+
+
+@pytest.mark.parametrize("a,b", [(None, "#ffffff"), ("bad", "#ffffff"),
+                                 ("#e8edf3", None), (None, None), (5, 7)])
+def test_blend_always_returns_a_usable_colour(a, b):
+    out = widget_bar._blend(a, b, 0.5)
+    assert isinstance(out, str) and out.startswith("#") and len(out) == 7, out
+
+
 def test_the_sticky_toast_survives_while_still_blocked():
     closed = []
 
