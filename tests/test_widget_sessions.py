@@ -320,6 +320,162 @@ def test_the_sticky_toast_is_dismissed_when_sessions_are_turned_off():
 
 
 # --------------------------------------------------------------------------- #
+# Answering a blocked session — this types into a live AI session
+# --------------------------------------------------------------------------- #
+class Answering(Widget):
+    _sess_answer_on = True
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.opened = []
+        self.focused = []
+        self.notes = []
+
+    _row_for_pid = widget_bar.BarWidget._row_for_pid
+    _send_answer = widget_bar.BarWidget._send_answer
+    _act_on_session = widget_bar.BarWidget._act_on_session
+
+    def _open_answer(self, row):
+        self.opened.append(row)
+
+    def _focus_session(self, row):
+        self.focused.append(row)
+
+    def _notify_session(self, msg):
+        self.notes.append(msg)
+
+
+def _blocked_disp(pid=7):
+    return sc.format_sessions([_session(pid=pid, status=sc.WAITING,
+                                        waiting_for="input needed")])
+
+
+def test_a_blocked_row_opens_the_answer_window(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "can_send", lambda: True)
+    w = Answering()
+    w._sess_disp = _blocked_disp()
+    w._act_on_session(w._sess_disp["sessions_rows"][0])
+    assert len(w.opened) == 1 and not w.focused
+
+
+def test_a_working_row_goes_to_the_terminal(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "can_send", lambda: True)
+    w = Answering()
+    w._sess_disp = sc.format_sessions([_session(pid=7, status=sc.BUSY)])
+    w._act_on_session(w._sess_disp["sessions_rows"][0])
+    assert len(w.focused) == 1 and not w.opened
+
+
+def test_falls_back_to_the_terminal_where_sending_is_impossible(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "can_send", lambda: False)
+    w = Answering()
+    w._sess_disp = _blocked_disp()
+    w._act_on_session(w._sess_disp["sessions_rows"][0])
+    assert len(w.focused) == 1 and not w.opened
+
+
+def test_switching_the_feature_off_goes_to_the_terminal(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "can_send", lambda: True)
+    w = Answering()
+    w._sess_answer_on = False
+    w._sess_disp = _blocked_disp()
+    w._act_on_session(w._sess_disp["sessions_rows"][0])
+    assert len(w.focused) == 1 and not w.opened
+
+
+def test_send_refuses_empty_text_when_not_submitting():
+    w = Answering()
+    w._sess_disp = _blocked_disp()
+    ok, err = w._send_answer(w._sess_disp["sessions_rows"][0], "   ",
+                             submit=False)
+    assert ok is False and "something" in err.lower()
+
+
+def test_a_bare_enter_is_allowed_through(monkeypatch):
+    # Accepting the highlighted option in a numbered menu sends only Enter.
+    sent = []
+    monkeypatch.setattr(widget_bar.console_send, "send_text",
+                        lambda pid, text, **k: sent.append((pid, text, k)) or (True, None))
+    w = Answering()
+    w._sess_disp = _blocked_disp(pid=4242)
+    ok, _ = w._send_answer(w._sess_disp["sessions_rows"][0], "", submit=True)
+    assert ok is True
+    assert sent == [(4242, "", {"submit": True})], sent
+
+
+def test_send_refuses_a_session_that_has_gone(monkeypatch):
+    sent = []
+    monkeypatch.setattr(widget_bar.console_send, "send_text",
+                        lambda *a, **k: sent.append(a) or (True, None))
+    w = Answering()
+    row = _blocked_disp()["sessions_rows"][0]
+    w._sess_disp = sc.format_sessions([])          # it ended meanwhile
+    ok, err = w._send_answer(row, "yes")
+    assert ok is False and "gone" in err.lower()
+    assert not sent, "nothing may be typed into a session that no longer exists"
+
+
+def test_send_refuses_a_session_that_stopped_waiting(monkeypatch):
+    sent = []
+    monkeypatch.setattr(widget_bar.console_send, "send_text",
+                        lambda *a, **k: sent.append(a) or (True, None))
+    w = Answering()
+    row = _blocked_disp()["sessions_rows"][0]
+    # It was answered in the terminal while the window was open.
+    w._sess_disp = sc.format_sessions([_session(pid=7, status=sc.BUSY)])
+    ok, err = w._send_answer(row, "yes")
+    assert ok is False and "waiting" in err.lower()
+    assert not sent, "an answer to a question already dealt with must not land"
+
+
+def test_a_good_send_reaches_the_right_pid(monkeypatch):
+    sent = []
+    monkeypatch.setattr(widget_bar.console_send, "send_text",
+                        lambda pid, text, **k: sent.append((pid, text)) or (True, None))
+    w = Answering()
+    w._sess_disp = _blocked_disp(pid=4242)
+    ok, err = w._send_answer(w._sess_disp["sessions_rows"][0], " yes ")
+    assert ok is True and err is None
+    assert sent == [(4242, "yes")], sent
+
+
+def test_a_successful_send_retires_the_sticky_toast(monkeypatch):
+    closed = []
+
+    class T:
+        def close(self):
+            closed.append(1)
+
+    monkeypatch.setattr(widget_bar.console_send, "send_text",
+                        lambda *a, **k: (True, None))
+    w = Answering()
+    w._sess_disp = _blocked_disp()
+    w._sess_sticky_pid = 7
+    w._toast = T()
+    w._send_answer(w._sess_disp["sessions_rows"][0], "yes")
+    assert w._sess_sticky_pid == 0 and closed == [1]
+
+
+def test_a_failed_send_reports_the_reason(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "send_text",
+                        lambda *a, **k: (False, "that session's console isn't reachable"))
+    w = Answering()
+    w._sess_disp = _blocked_disp()
+    ok, err = w._send_answer(w._sess_disp["sessions_rows"][0], "yes")
+    assert ok is False and "console" in err
+
+
+def test_the_row_carries_the_question():
+    rows = _blocked_disp()["sessions_rows"]
+    assert rows[0]["question"] == "input needed"
+
+
+def test_a_working_row_has_no_question():
+    rows = sc.format_sessions([_session(status=sc.BUSY)])["sessions_rows"]
+    assert rows[0]["question"] == ""
+
+
+# --------------------------------------------------------------------------- #
 # Readable text on whatever the strip is sitting on
 # --------------------------------------------------------------------------- #
 def test_contrast_ratio_extremes():

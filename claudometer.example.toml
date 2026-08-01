@@ -95,3 +95,10 @@ sessions_hooks = false
 # application. Set to "" to turn it off. Windows only for now; if another app
 # already owns the combination, Claudometer says so rather than failing quietly.
 sessions_hotkey = "ctrl+alt+j"
+
+# Answer a blocked session from the widget instead of switching to its
+# terminal: a small window shows what it's asking, with Yes / No and a text
+# box. The answer is delivered to that session's console by process id, so it
+# reaches the right session whichever terminal tab happens to be in front.
+# Windows only — elsewhere the same click opens the terminal instead.
+sessions_answer = true

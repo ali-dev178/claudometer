@@ -408,6 +408,11 @@ def format_sessions(sessions, at_ms: Optional[int] = None,
             # "needs you · 4m" — the right-hand side of a row, prebuilt so the
             # renderer never has to decide how to join them.
             "detail": f"{status_text} · {dwell}" if dwell else status_text,
+            # What it is actually waiting on, for the answer window. With hooks
+            # on this is the real prompt text; without them it's the registry's
+            # coarser category.
+            "question": oneline(session.waiting_for)
+                        if session.status == WAITING else "",
             "tool": oneline(session.tool),
             "model": oneline(session.model),
             "branch": oneline(session.git_branch),

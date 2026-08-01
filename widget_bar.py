@@ -33,6 +33,7 @@ import sessions_core
 import focus
 import hooks as claude_hooks
 import hotkey as hotkeys
+import console_send
 import cost
 import resume
 import config
@@ -516,6 +517,154 @@ class Popover:
 # --------------------------------------------------------------------------- #
 # Threshold alert toast
 # --------------------------------------------------------------------------- #
+class AnswerWindow:
+    """Answer a blocked session without leaving what you're doing.
+
+    Shows what the session is waiting on, one-click Yes / No, and a box for
+    anything else. The answer goes to that session's console by pid, so it
+    lands in the right session regardless of which terminal tab is in front —
+    and without stealing your focus.
+    """
+
+    W = 380
+
+    def __init__(self, root, theme, row, on_send, on_open_terminal,
+                 on_close=None):
+        self._on_send = on_send
+        self._on_open = on_open_terminal
+        self._on_close = on_close
+        self._closed = False
+        self.row = row
+        T = render.THEMES.get(theme, render.THEMES["light"])
+        bg, fg, dim = T["panel_bot"], T["neutral"], T["dim"]
+
+        self.top = tk.Toplevel(root)
+        self.top.title("Answer session")
+        self.top.configure(bg=bg)
+        self.top.resizable(False, False)
+        try:
+            self.top.attributes("-topmost", True)
+        except Exception:
+            pass
+        self.top.protocol("WM_DELETE_WINDOW", self.close)
+        self.top.bind("<Escape>", lambda e: self.close())
+
+        pad = tk.Frame(self.top, bg=bg)
+        pad.pack(fill="both", expand=True, padx=18, pady=14)
+
+        head = tk.Frame(pad, bg=bg)
+        head.pack(fill="x")
+        tk.Canvas(head, width=10, height=10, bg=bg, highlightthickness=0).pack(
+            side="left", padx=(0, 8))
+        dot = head.winfo_children()[0]
+        dot.create_oval(1, 1, 9, 9, fill=render.sev_color(T, row.get("color", "red")),
+                        outline="")
+        tk.Label(head, text=(row.get("label") or "session")[:44], bg=bg, fg=fg,
+                 font=("Segoe UI Semibold", 11), anchor="w").pack(side="left")
+        # Project and how long it's been waiting — NOT row["detail"], which
+        # embeds the question and would repeat it directly above itself.
+        dwell = row.get("dwell") or ""
+        tk.Label(pad, text=f"{row.get('project', '')}"
+                           + (f" · waiting {dwell}" if dwell else ""),
+                 bg=bg, fg=dim, font=("Segoe UI", 9), anchor="w").pack(
+                     fill="x", pady=(2, 10))
+
+        question = row.get("question") or row.get("status_text") or ""
+        if question:
+            tk.Message(pad, text=question, bg=bg, fg=fg, font=("Segoe UI", 10),
+                       width=self.W - 40, anchor="w", justify="left").pack(
+                           fill="x", pady=(0, 12))
+
+        quick = tk.Frame(pad, bg=bg)
+        quick.pack(fill="x")
+        # Yes/No answer a permission prompt; "⏎ Enter" accepts the highlighted
+        # option in a numbered menu, which Yes/No cannot.
+        for label, text, primary in (("Yes", "yes", True), ("No", "no", False),
+                                     ("⏎ Enter", "", False)):
+            tk.Button(quick, text=label,
+                      command=lambda t=text: self._send(t, submit=True),
+                      bg=T["accent"] if primary else T["track"],
+                      fg="#ffffff" if primary else fg,
+                      activebackground=T["accent"] if primary else T["track"],
+                      bd=0, relief="flat", font=("Segoe UI Semibold", 10),
+                      padx=(22 if primary else 16), pady=5,
+                      cursor="hand2").pack(side="left", padx=(0, 8))
+
+        entry_row = tk.Frame(pad, bg=bg)
+        entry_row.pack(fill="x", pady=(12, 0))
+        self.var = tk.StringVar()
+        entry = tk.Entry(entry_row, textvariable=self.var, bg=T["track"], fg=fg,
+                         insertbackground=fg, bd=0, relief="flat",
+                         font=("Segoe UI", 10))
+        entry.pack(side="left", fill="x", expand=True, ipady=5)
+        entry.bind("<Return>", lambda e: self._send(self.var.get()))
+        tk.Button(entry_row, text="Send",
+                  command=lambda: self._send(self.var.get()),
+                  bg=T["accent"], fg="#ffffff", activebackground=T["accent"],
+                  bd=0, relief="flat", font=("Segoe UI Semibold", 10),
+                  padx=16, pady=4, cursor="hand2").pack(side="right",
+                                                        padx=(8, 0))
+
+        foot = tk.Label(pad, text="Open the terminal  →", bg=bg, fg=T["accent"],
+                        font=("Segoe UI", 9), cursor="hand2", anchor="e")
+        foot.pack(fill="x", pady=(12, 0))
+        foot.bind("<Button-1>", lambda e: self._open_terminal())
+
+        self.status = tk.Label(pad, text="", bg=bg, fg=dim,
+                               font=("Segoe UI", 9), anchor="w")
+        self.status.pack(fill="x", pady=(6, 0))
+
+        self._centre(root)
+        try:
+            self.top.lift()
+            self.top.focus_force()
+            entry.focus_set()
+        except Exception:
+            pass
+
+    def _centre(self, root):
+        try:
+            self.top.update_idletasks()
+            w, h = self.top.winfo_reqwidth(), self.top.winfo_reqheight()
+            wl, wt_, wr, wb = _monitor_workarea(
+                root.winfo_rootx() + root.winfo_width() // 2,
+                root.winfo_rooty() + root.winfo_height() // 2)
+            x = int(wr - w - 24)
+            y = int(wb - h - 24)
+            self.top.geometry(f"{max(w, self.W)}x{h}+{x}+{y}")
+        except Exception:
+            pass
+
+    def _send(self, text, submit=True):
+        ok, error = self._on_send(self.row, text, submit)
+        if ok:
+            self.close()
+            return
+        try:
+            self.status.configure(text=error or "Couldn't send that.")
+        except Exception:
+            pass
+
+    def _open_terminal(self):
+        self.close()
+        if self._on_open:
+            self._on_open(self.row)
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.top.destroy()
+        except Exception:
+            pass
+        if self._on_close:
+            try:
+                self._on_close()
+            except Exception:
+                pass
+
+
 class Toast:
     """A small auto-dismissing alert card near the tray."""
 
@@ -835,6 +984,7 @@ class SettingsWindow:
             value=cfg.get("sessions_quiet_foreground", True))
         self.v_sess_hooks = tk.BooleanVar(value=cfg.get("sessions_hooks", False))
         self.v_sess_hotkey = tk.StringVar(value=cfg.get("sessions_hotkey", ""))
+        self.v_sess_answer = tk.BooleanVar(value=cfg.get("sessions_answer", True))
 
         # rendered header banner (sparkle + title + subtitle)
         self._hdr = ImageTk.PhotoImage(render.render_settings_header(theme, self.WIN_W))
@@ -946,6 +1096,8 @@ class SettingsWindow:
         toggle_row("Stay quiet for the terminal I'm using", self.v_sess_quiet,
                    parent=self._sess_more)
         toggle_row("Show count on the strip", self.v_sess_strip,
+                   parent=self._sess_more)
+        toggle_row("Answer blocked sessions from here", self.v_sess_answer,
                    parent=self._sess_more)
         toggle_row("Instant alerts (edits Claude's settings)", self.v_sess_hooks,
                    parent=self._sess_more, cmd=self._confirm_hooks)
@@ -1240,6 +1392,7 @@ class SettingsWindow:
             "sessions_quiet_foreground": bool(self.v_sess_quiet.get()),
             "sessions_hooks": bool(self.v_sess_hooks.get()),
             "sessions_hotkey": self.v_sess_hotkey.get().strip(),
+            "sessions_answer": bool(self.v_sess_answer.get()),
         })
         try:
             self._on_apply(cfg)
@@ -1376,6 +1529,8 @@ class BarWidget:
         self._sess_seeded = False
         self._flash = False            # strip attention pulse
         self._sess_sticky_pid = 0      # session the sticky toast belongs to
+        self._sess_answer_on = cfg["sessions_answer"]
+        self._answer_win = None
         self._hotkey = None
         if cfg["sessions_hotkey"]:
             self._hotkey = hotkeys.Hotkey(cfg["sessions_hotkey"],
@@ -1448,7 +1603,10 @@ class BarWidget:
 
     def _load_pos(self):
         try:
-            d = json.loads(POS_FILE.read_text(encoding="utf-8"))
+            # utf-8-sig: anything that rewrites this file on Windows is liable
+            # to leave a BOM, and a BOM makes json.loads fail — the remembered
+            # position is then silently discarded and the widget jumps.
+            d = json.loads(POS_FILE.read_text(encoding="utf-8-sig"))
             return int(d["x"]), int(d["y"])
         except Exception:
             return None
@@ -1515,7 +1673,7 @@ class BarWidget:
             self.root, self._theme, self._get_disp,
             rx, ry, ry + rh, work,
             self._refresh_now, self._quit, self._open_settings, self._on_popover_closed,
-            on_session=self._focus_session, on_session_menu=self._session_menu,
+            on_session=self._act_on_session, on_session_menu=self._session_menu,
         )
 
     def _on_popover_closed(self):
@@ -1523,18 +1681,82 @@ class BarWidget:
         self._pop_closed_at = time.monotonic()
 
     # -- session actions --------------------------------------------------- #
+    def _row_for_pid(self, pid):
+        for row in (self._sess_disp or {}).get("sessions_rows") or []:
+            if row.get("pid") == pid:
+                return row
+        return None
+
+    def _act_on_session(self, row):
+        """The one thing to do about a session.
+
+        Blocked and answerable — open the answer window, because replying is
+        the point and it doesn't disturb what you're doing. Anything else —
+        take you to its terminal.
+        """
+        if (self._sess_answer_on and row.get("status") == sessions_core.WAITING
+                and console_send.can_send()):
+            self._open_answer(row)
+        else:
+            self._focus_session(row)
+
     def _focus_pid(self, pid):
         """Raise a session's terminal by pid. Shared by the toast, the hotkey
         and the row menu so they can't drift apart."""
         return self._focus_session({"pid": pid})
 
+    def _open_answer(self, row):
+        if self._answer_win is not None:
+            try:
+                self._answer_win.close()
+            except Exception:
+                pass
+        try:
+            self._answer_win = AnswerWindow(
+                self.root, self._theme, row, self._send_answer,
+                self._focus_session, on_close=self._clear_answer)
+        except Exception:
+            _log_exc()
+            self._focus_session(row)      # fall back to the old behaviour
+
+    def _clear_answer(self):
+        self._answer_win = None
+
+    def _send_answer(self, row, text, submit=True):
+        """Deliver an answer to that exact session. Returns (ok, error).
+
+        Re-checks that the session is still live and still waiting: the answer
+        was composed for a question that may have been dealt with in the
+        meantime, and typing it into whatever the pid became would be worse
+        than not sending it.
+        """
+        body = console_send.clean(text)
+        if not body and not submit:
+            return False, "Type something first."
+        pid = row.get("pid")
+        current = self._row_for_pid(pid)
+        if current is None:
+            return False, "That session has gone."
+        if current.get("status") != sessions_core.WAITING:
+            return False, "It isn't waiting any more."
+        ok, error = console_send.send_text(pid, body, submit=submit)
+        if ok:
+            self._sess_sticky_pid = 0
+            if self._toast is not None:
+                try:
+                    self._toast.close()
+                except Exception:
+                    pass
+        return ok, error
+
     def _jump_to_blocked(self):
-        """Go to whichever session needs you — the hotkey's whole job."""
+        """Answer, or go to, whichever session needs you — the hotkey's job."""
         pid = (self._sess_disp or {}).get("sessions_blocked_pid") or 0
         if not pid:
             self._notify_session("No session is waiting on you right now.")
             return
-        self._focus_pid(pid)
+        row = self._row_for_pid(pid) or {"pid": pid}
+        self._act_on_session(row)
 
     def _focus_session(self, row):
         """Bring a session's terminal to the front.
@@ -1615,6 +1837,11 @@ class BarWidget:
             _log_exc()
         self._focus_session(row)
 
+    def _quick_answer(self, row, text):
+        ok, error = self._send_answer(row, text)
+        if not ok:
+            self._notify_session(error or "Couldn't send that.")
+
     def _custom_reply(self, row):
         from tkinter import simpledialog
 
@@ -1632,15 +1859,27 @@ class BarWidget:
         menu.add_command(label=f"Go to {label}",
                          command=lambda: self._focus_session(row))
         if row.get("status") == sessions_core.WAITING:
-            reply = tk.Menu(menu, tearoff=0)
-            for text in ("yes", "no", "continue"):
-                reply.add_command(
-                    label=f'Copy "{text}" and go',
-                    command=lambda t=text: self._reply_and_go(row, t))
-            reply.add_separator()
-            reply.add_command(label="Custom reply…",
-                              command=lambda: self._custom_reply(row))
-            menu.add_cascade(label="Reply and go", menu=reply)
+            if self._sess_answer_on and console_send.can_send():
+                menu.add_command(label="Answer without leaving here…",
+                                 command=lambda: self._open_answer(row))
+                reply = tk.Menu(menu, tearoff=0)
+                for text in ("yes", "no", "continue"):
+                    reply.add_command(
+                        label=f'Send "{text}"',
+                        command=lambda t=text: self._quick_answer(row, t))
+                menu.add_cascade(label="Send", menu=reply)
+            else:
+                # No console channel here (or switched off) — the best we can
+                # do is arrive with the answer ready to paste.
+                reply = tk.Menu(menu, tearoff=0)
+                for text in ("yes", "no", "continue"):
+                    reply.add_command(
+                        label=f'Copy "{text}" and go',
+                        command=lambda t=text: self._reply_and_go(row, t))
+                reply.add_separator()
+                reply.add_command(label="Custom reply…",
+                                  command=lambda: self._custom_reply(row))
+                menu.add_cascade(label="Reply and go", menu=reply)
         menu.add_separator()
         menu.add_command(label="Open project folder",
                          command=lambda: self._open_path(row.get("cwd"), "folder"))
@@ -2177,6 +2416,8 @@ class BarWidget:
                                            self._sess_stuck.minutes)
         self._apply_hooks(bool(cfg.get("sessions_hooks", self._sess_hooks_on)))
         self._apply_hotkey(cfg.get("sessions_hotkey", ""))
+        self._sess_answer_on = bool(cfg.get("sessions_answer",
+                                            self._sess_answer_on))
         if self._sessions_on and not sessions_was_on:
             # Re-enabled: forget the old history so the next tick doesn't
             # announce every already-running session as newly appeared.
@@ -2494,7 +2735,8 @@ class BarWidget:
             None, merged["title"], merged["subtitle"], merged["color"],
             # A request waits for you; an announcement doesn't need to.
             duration=None if needs_you else 6500,
-            on_click=(lambda pid=jump_pid: self._focus_pid(pid))
+            on_click=(lambda pid=jump_pid: self._act_on_session(
+                self._row_for_pid(pid) or {"pid": pid}))
             if needs_you and jump_pid else None)
         if needs_you:
             self._pulse_strip()

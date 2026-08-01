@@ -37,6 +37,7 @@ DEFAULTS = {
     "sessions_quiet_foreground": True,  # no toast for the terminal you're using
     "sessions_hooks": False,          # instant alerts via Claude Code hooks (asks first)
     "sessions_hotkey": "ctrl+alt+j",  # global shortcut to the blocked session ("" = off)
+    "sessions_answer": True,          # answer a blocked session from the widget (Windows)
 }
 
 _VALID_THEMES = ("auto", "light", "dark")
@@ -220,6 +221,7 @@ def load() -> dict:
         cfg["sessions_max_rows"] = DEFAULTS["sessions_max_rows"]
     cfg["sessions_alerts"] = bool(cfg["sessions_alerts"])
     cfg["sessions_hooks"] = bool(cfg["sessions_hooks"])
+    cfg["sessions_answer"] = bool(cfg["sessions_answer"])
     hotkey = cfg["sessions_hotkey"]
     cfg["sessions_hotkey"] = hotkey.strip() if isinstance(hotkey, str) else ""
     cfg["sessions_quiet_foreground"] = bool(cfg["sessions_quiet_foreground"])
@@ -321,6 +323,10 @@ def to_toml(cfg: dict) -> str:
         "",
         '# Global shortcut that jumps to whichever session needs you ("" = off).',
         f"sessions_hotkey = {v('sessions_hotkey')}",
+        "",
+        "# Answer a blocked session from the widget instead of switching to its",
+        "# terminal. Windows only; elsewhere it opens the terminal instead.",
+        f"sessions_answer = {v('sessions_answer')}",
     ]
     extras = [k for k in cfg if k not in DEFAULTS]
     if extras:
