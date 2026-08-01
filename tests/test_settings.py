@@ -53,6 +53,19 @@ def test_session_alert_defaults(monkeypatch, tmp_path):
     assert cfg["sessions_quiet_foreground"] is True
 
 
+def test_the_fallback_parser_keeps_a_table_out_of_the_top_level():
+    # Python < 3.11 has no tomllib, so this parser runs for real. Ignoring the
+    # header hoisted "keep" to the top level, where it could collide with a
+    # setting of ours, and lost the section on the next save.
+    out = settings._mini_parse("theme = 'dark'\n\n[custom]\nkeep = 1\n")
+    assert out == {"theme": "dark", "custom": {"keep": 1}}
+
+
+def test_the_fallback_parser_still_reads_a_plain_file():
+    out = settings._mini_parse("theme = 'dark'\npoll = 90\n")
+    assert out == {"theme": "dark", "poll": 90}
+
+
 def test_a_hand_written_table_survives_a_save(tmp_path, monkeypatch):
     cfg_file = tmp_path / "c.toml"
     cfg_file.write_text("theme = 'dark'\n\n[custom]\nkeep = 1\nname = 'mine'\n",

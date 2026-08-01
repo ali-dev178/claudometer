@@ -137,13 +137,32 @@ def _mini_val(v):
 
 
 def _mini_parse(text: str) -> dict:
+    """Tolerant TOML-ish reader for Python < 3.11, and for a malformed file.
+
+    It understands ``[table]`` headers — not to support them as a feature, but
+    because ignoring them silently HOISTED every key inside one to the top
+    level, where it could collide with a real setting, and the section header
+    was then lost on the next save. A user's own table would quietly become
+    part of ours.
+    """
     out = {}
+    table = out
     for raw in text.splitlines():
         line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            name = line[1:-1].strip().strip('"').strip("'")
+            # Nested names ([a.b]) are beyond what this needs to round-trip;
+            # keeping the whole name as one key preserves the contents.
+            table = out.setdefault(name, {}) if name else out
+            if not isinstance(table, dict):
+                table = out
+            continue
+        if "=" not in line:
             continue
         k, v = line.split("=", 1)
-        out[k.strip()] = _mini_val(_strip_comment(v.strip()))
+        table[k.strip()] = _mini_val(_strip_comment(v.strip()))
     return out
 
 
