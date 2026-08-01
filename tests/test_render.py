@@ -696,3 +696,68 @@ def test_sev_color_falls_back_to_dim_for_unknown():
     T = render.THEMES["light"]
     assert render.sev_color(T, "totally-unknown") == T["dim"]
     assert render.sev_color(T, "green") == T["green"]
+
+
+# --------------------------------------------------------------------------- #
+# Staying legible on whatever the strip is sitting on
+# --------------------------------------------------------------------------- #
+#: Real taskbar and wallpaper colours where the theme's own greys measured
+#: between 1.0:1 and 2.2:1 — not dim, absent.
+HOSTILE = ("#808080", "#008080", "#808000", "#e0409a", "#00a000", "#d97757",
+           "#0050c0", "#5aa9e6", "#e8a317", "#7b1f2b", "#c00000")
+
+
+def test_readable_leaves_a_legible_colour_alone():
+    assert render.readable("#161b22", "#ffffff") == "#161b22", (
+        "recolouring something already legible would drift the palette for "
+        "no reason")
+
+
+def test_readable_rescues_every_label_colour_on_every_background():
+    for bg in HOSTILE + ("#202020", "#f3f3f3"):
+        for theme in ALL_THEMES:
+            T = render.THEMES[theme]
+            for key in ("neutral", "dim", "faint"):
+                fixed = render.readable(T[key], bg)
+                ratio = render.contrast_ratio(render._rgb(fixed),
+                                              render._rgb(bg))
+                assert ratio >= render.TEXT_CONTRAST - 0.01, (
+                    f"{key} on {bg} in the {theme} theme is {ratio:.2f}:1")
+
+
+def test_outline_picks_the_end_the_background_is_furthest_from():
+    assert render.outline_for("#000000") == "#ffffff"
+    assert render.outline_for("#ffffff") == "#000000"
+
+
+def test_severity_colours_stay_distinct_on_a_hostile_background():
+    """The point of the dot row is that the colours differ.
+
+    Forcing every colour to meet contrast turns red, amber and green into the
+    same near-black on a grey taskbar and the same white on a teal one — a
+    worse failure than being hard to see, because it destroys the meaning
+    rather than the legibility.
+    """
+    def strip(dots):
+        return render.render_strip(
+            {"sessions_count": len(dots), "sessions_blocked": 0,
+             "sessions_dots": list(dots), "sessions_dots_overflow": 0},
+            "#008080", "dark", metrics=("sessions",))
+
+    blocked = strip(["red", "green"]).tobytes()
+    calm = strip(["green", "green"]).tobytes()
+    assert blocked != calm, (
+        "a blocked session and a finished one must not render identically")
+
+
+def test_the_strip_still_renders_on_every_hostile_background():
+    for bg in HOSTILE:
+        for theme in ALL_THEMES:
+            img = render.render_strip(
+                {"session_pct": 92, "session_color": "amber",
+                 "session_resets_at": _in(3600), "weekly_pct": 39,
+                 "weekly_color": "green", "sessions_count": 2,
+                 "sessions_blocked": 1, "sessions_dots": ["red", "green"],
+                 "sessions_dots_overflow": 3},
+                bg, theme, metrics=("session", "weekly", "sessions"))
+            assert _is_image(img) and _positive_size(img)

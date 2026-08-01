@@ -180,20 +180,10 @@ def _lum(rgb):
     return 0.299 * r + 0.587 * g + 0.114 * b
 
 
-def _rel_luminance(rgb):
-    """WCAG relative luminance, for judging text contrast."""
-    out = []
-    for channel in rgb[:3]:
-        c = min(max(channel, 0), 255) / 255.0
-        out.append(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4)
-    return 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2]
-
-
-def _contrast(rgb_a, rgb_b):
-    """WCAG contrast ratio between two colours (1.0 … 21.0)."""
-    a, b = _rel_luminance(rgb_a), _rel_luminance(rgb_b)
-    lo, hi = sorted((a, b))
-    return (hi + 0.05) / (lo + 0.05)
+# The strip and the theme picker have to agree about what "readable" means, so
+# both use render's definition rather than keeping a second copy here.
+_rel_luminance = render.relative_luminance
+_contrast = render.contrast_ratio
 
 
 def _theme_for_bg(rgb):
@@ -2613,6 +2603,10 @@ class BarWidget:
             # exactly what happened the first time this was built.
             (step(20, "green", 8, "green", 180, **working), 4.0),   # 1  comfortable — green
             (step(62, "amber", 15, "green", 120, **blocked), 5.5),  # 2  a session BLOCKS (no usage alert)
+            # 2b answering it, which is the whole point of the release and was
+            # the one thing the tour never showed. Same window the real thing
+            # opens, on the canned screen, sending nothing.
+            (step(62, "amber", 15, "green", 120, _answer=True, **blocked), 7.0),
             (step(84, "red", 22, "green", 40, **answered), 4.5),    # 3  session crosses 80% → alert
             (step(93, "red", 24, "green", 16, **answered), 4.5),    # 4  session crosses 90% → alert
             (step(48, "amber", 88, "red", 90, **answered), 4.5),    # 5  WEEKLY crosses 80% → alert
@@ -2647,6 +2641,7 @@ class BarWidget:
         if not self._demo:
             return
         self._demo = False
+        self._close_answer()      # the tour's window must not outlive the tour
         if self._demo_after is not None:
             try:
                 self.root.after_cancel(self._demo_after)
@@ -2722,11 +2717,31 @@ class BarWidget:
             self._demo_sessions_tick(live)
         else:
             self._sess_disp = {}      # scenes with no session list show none
+        self._demo_answer(bool(scene.get("_answer")))
         self._demo_i += 1
         try:
             self._demo_after = self.root.after(int(hold * 1000), self._demo_tick)
         except Exception:
             pass  # window closed
+
+    def _demo_answer(self, wanted):
+        """Open (or close) the answer window for the tour's blocked session.
+
+        Answering in place is the headline of this release and the tour never
+        showed it — you had to know to click a row. It opens the real window on
+        the real blocked row; everything behind it is already demo-safe, so it
+        reads a canned screen and sends nothing.
+        """
+        if not wanted:
+            if self._answer_win is not None:
+                self._close_answer()
+            return
+        if self._answer_win is not None:
+            return
+        pid = (self._sess_disp or {}).get("sessions_blocked_pid") or 0
+        row = self._row_for_pid(pid)
+        if row is not None and console_send.can_send():
+            self._open_answer(row)
 
     def _show_demo_resume(self):
         # Alternate the two resume tiers so the tour shows both over its run.

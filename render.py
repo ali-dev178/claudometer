@@ -42,6 +42,80 @@ def sev_color(T, name):
 
 
 # --------------------------------------------------------------------------- #
+# Keeping the strip legible on whatever it is sitting on
+# --------------------------------------------------------------------------- #
+#: WCAG AA for text this size. The dots are shapes, not text, and take 3.0.
+TEXT_CONTRAST = 4.5
+SHAPE_CONTRAST = 3.0
+
+
+def relative_luminance(rgb):
+    """WCAG relative luminance, for judging contrast."""
+    out = []
+    for channel in rgb[:3]:
+        c = min(max(channel, 0), 255) / 255.0
+        out.append(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2]
+
+
+def contrast_ratio(rgb_a, rgb_b):
+    """WCAG contrast ratio between two colours (1.0 … 21.0)."""
+    a, b = relative_luminance(rgb_a), relative_luminance(rgb_b)
+    lo, hi = sorted((a, b))
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _rgb(color):
+    return ImageColor.getrgb(color)[:3] if isinstance(color, str) else tuple(color[:3])
+
+
+def outline_for(bg):
+    """Black or white — whichever separates a shape from *bg*.
+
+    Used instead of recolouring anything whose COLOUR is the message. Red,
+    amber and green mean blocked, working and done; pushing them until they
+    contrast turns all three into the same near-black on a grey taskbar and
+    the same white on a teal one, which is a worse failure than being hard to
+    see. A hairline outline makes the shape visible and leaves the fill alone.
+    """
+    back = _rgb(bg)
+    return "#ffffff" if contrast_ratio(back, (255, 255, 255)) >= \
+        contrast_ratio(back, (0, 0, 0)) else "#000000"
+
+
+def readable(color, bg, target=TEXT_CONTRAST):
+    """*color*, lightened or darkened just enough to be legible on *bg*.
+
+    The strip paints itself in the colour of whatever it sits on, so it can
+    end up on a saturated wallpaper where the theme's own greys all but
+    vanish — the labels measured 1.2:1 on mid grey, which is not dim, it is
+    absent. Picking the better of the two themes is not enough on its own.
+
+    The fix is applied to the TEXT, never the background: the strip blends
+    into the taskbar on purpose, and a plate behind the words would undo the
+    one thing it is trying to do.
+
+    Hue is preserved by moving straight toward white or black, so a red still
+    reads as red — which matters, because the severity colours carry meaning.
+    """
+    rgb, back = _rgb(color), _rgb(bg)
+    if contrast_ratio(rgb, back) >= target:
+        return color
+    # Toward whichever end the background is furthest from; on a mid grey both
+    # are poor, so take the better one and go as far as it allows.
+    end = (255, 255, 255) if contrast_ratio(back, (255, 255, 255)) >= \
+        contrast_ratio(back, (0, 0, 0)) else (0, 0, 0)
+    best = rgb
+    for step in range(1, 21):
+        t = step / 20.0
+        cand = tuple(round(rgb[i] + (end[i] - rgb[i]) * t) for i in range(3))
+        best = cand
+        if contrast_ratio(cand, back) >= target:
+            break
+    return "#%02x%02x%02x" % best
+
+
+# --------------------------------------------------------------------------- #
 # Fonts
 # --------------------------------------------------------------------------- #
 _FCACHE = {}
@@ -268,27 +342,33 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
     f_num = _font("sb", 13 * S)
     f_dim = _font("reg", 11 * S)
 
+    # Each item is (text, font, colour, carries_meaning). The flag decides how
+    # an illegible colour is rescued: a label can simply be recoloured, but a
+    # severity colour has to keep its hue and gets an outline instead.
     groups = []
     if "session" in metrics and disp.get("session_pct") is not None:
         sp = disp["session_pct"]
-        g = [("Session ", f_lbl, T["dim"]),
-             (f"{sp}%", f_num, sev_color(T, disp.get("session_color", "grey")))]
+        g = [("Session ", f_lbl, T["dim"], False),
+             (f"{sp}%", f_num, sev_color(T, disp.get("session_color", "grey")),
+              True)]
         if sp >= 100:  # be explicit when you're actually blocked
-            g.append(("   limit reached", f_dim, sev_color(T, "red")))
+            g.append(("   limit reached", f_dim, sev_color(T, "red"), True))
         else:
             left = _fmt_left(disp.get("session_resets_at"))
             if left:
-                g.append(("   " + left, f_dim, T["faint"]))
+                g.append(("   " + left, f_dim, T["faint"], False))
         groups.append(g)
     if "weekly" in metrics and disp.get("weekly_pct") is not None:
-        groups.append([("Weekly ", f_lbl, T["dim"]),
-                       (f"{disp['weekly_pct']}%", f_num, sev_color(T, disp.get("weekly_color", "grey")))])
+        groups.append([
+            ("Weekly ", f_lbl, T["dim"], False),
+            (f"{disp['weekly_pct']}%", f_num,
+             sev_color(T, disp.get("weekly_color", "grey")), True)])
     # NOTE: sessions_* (plural) are the LIVE CLI sessions; session_* (singular)
     # is the 5-hour usage meter. The two dicts are merged before rendering.
     if "sessions" in metrics and disp.get("sessions_count") is not None:
         # "Live", not "Sessions": the strip already says "Session 61%" for the
         # 5-hour usage window, and the two side by side read as the same thing.
-        g = [("Live ", f_lbl, T["dim"])]
+        g = [("Live ", f_lbl, T["dim"], False)]
         dots = disp.get("sessions_dots") or []
         if dots:
             # One dot per session, coloured by its state — readable without
@@ -296,17 +376,18 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
             f_dot = _font("reg", 13 * S)
             for i, color in enumerate(dots):
                 g.append(("●" + (" " if i < len(dots) - 1 else ""),
-                          f_dot, sev_color(T, color)))
+                          f_dot, sev_color(T, color), True))
             over = disp.get("sessions_dots_overflow") or 0
             if over:
-                g.append((f" +{over}", f_dim, T["dim"]))
+                g.append((f" +{over}", f_dim, T["dim"], False))
         else:
-            g.append(("0", f_num, T["dim"]))
+            g.append(("0", f_num, T["dim"], False))
         groups.append(g)
     if not groups:
-        groups.append([("Claude  " + (disp.get("session") or "—"), f_dim, T["dim"])])
+        groups.append([("Claude  " + (disp.get("session") or "—"), f_dim,
+                        T["dim"], False)])
     if disp.get("_demo"):  # unmistakable marker so simulated data isn't mistaken for real
-        groups.insert(0, [("DEMO", f_num, sev_color(T, "amber"))])
+        groups.insert(0, [("DEMO", f_num, sev_color(T, "amber"), True)])
 
     cand = []
     if disp.get("session_pct") is not None:
@@ -326,7 +407,7 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
     tmp = ImageDraw.Draw(Image.new("RGB", (4, 4)))
 
     def gw(g):
-        return sum(tmp.textlength(t, font=f) for (t, f, _) in g)
+        return sum(tmp.textlength(t, font=f) for (t, f, _c, _m) in g)
 
     total = PAD + (DOT_R * 2 + DOTGAP) + sum(gw(g) for g in groups) \
         + GGAP * (len(groups) - 1) + PAD
@@ -338,14 +419,33 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
     # The attention pulse swells the status dot only. The strip's background is
     # sampled from whatever sits behind it so the widget blends in — repainting
     # that would flash the entire strip, which is not what this is for.
+    # The strip paints itself in whatever it sits on, so on a saturated
+    # wallpaper the theme's own greys all but vanish — measured at 1.2:1,
+    # which is not dim, it is absent. Fixed on the TEXT, never the background:
+    # blending into the taskbar is the point of the strip.
+    ring = outline_for(bg_hex)
+    faint_dot = contrast_ratio(_rgb(dot_color), _rgb(bg_hex)) < SHAPE_CONTRAST
     r = DOT_R * (1.7 if disp.get("_pulse") else 1.0)
-    d.ellipse([dx - r, cy - r, dx + r, cy + r], fill=dot_color)
+    d.ellipse([dx - r, cy - r, dx + r, cy + r], fill=dot_color,
+              outline=ring if faint_dot else None,
+              width=max(1, S // 2) if faint_dot else 0)
     x = PAD + DOT_R * 2 + DOTGAP
     for gi, g in enumerate(groups):
         if gi > 0:
             x += GGAP
-        for (t, f, c) in g:
-            d.text((x, cy), t, font=f, fill=c, anchor="lm")
+        for (t, f, c, means) in g:
+            # Every glyph passes through here, the one place that knows both
+            # the colour and what it will sit on.
+            if not means:
+                d.text((x, cy), t, font=f, fill=readable(c, bg_hex),
+                       anchor="lm")
+            elif contrast_ratio(_rgb(c), _rgb(bg_hex)) < SHAPE_CONTRAST:
+                # Keep the hue — it is what red, amber and green MEAN — and
+                # separate it from the background with a hairline instead.
+                d.text((x, cy), t, font=f, fill=c, anchor="lm",
+                       stroke_width=max(1, S // 3), stroke_fill=ring)
+            else:
+                d.text((x, cy), t, font=f, fill=c, anchor="lm")
             x += tmp.textlength(t, font=f)
 
     return img.resize((max(1, round(total / S)), round(H / S)), Image.LANCZOS)

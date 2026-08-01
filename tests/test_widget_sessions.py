@@ -611,6 +611,66 @@ def test_the_demo_reads_no_console(monkeypatch):
     assert state["readable"] is True and state["prompt"] is not None
 
 
+class Touring(Answering):
+    """A widget whose answer window is recorded rather than built."""
+
+    _demo = True
+    _demo_answer = widget_bar.BarWidget._demo_answer
+    _row_for_pid = widget_bar.BarWidget._row_for_pid
+
+    def _open_answer(self, row):
+        self.opened.append(row)
+        self._answer_win = object()          # stands in for the real window
+
+    def _close_answer(self):
+        self._answer_win = None
+
+
+def test_the_tour_shows_the_answer_window(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "can_send", lambda: True)
+    w = Touring()
+    w._sess_disp = _blocked_disp(pid=900001)
+    w._demo_answer(True)
+    assert len(w.opened) == 1 and w.opened[0]["pid"] == 900001, (
+        "answering in place is the headline of the release — a tour that "
+        "never opens it leaves the viewer to guess the feature exists")
+
+
+def test_the_tour_opens_it_once_not_once_per_tick(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "can_send", lambda: True)
+    w = Touring()
+    w._sess_disp = _blocked_disp(pid=900001)
+    for _ in range(4):
+        w._demo_answer(True)
+    assert len(w.opened) == 1
+
+
+def test_the_tour_closes_it_when_the_scene_moves_on(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "can_send", lambda: True)
+    w = Touring()
+    w._sess_disp = _blocked_disp(pid=900001)
+    w._demo_answer(True)
+    w._demo_answer(False)
+    assert w._answer_win is None
+
+
+def test_the_tour_skips_it_where_answering_is_impossible(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "can_send", lambda: False)
+    w = Touring()
+    w._sess_disp = _blocked_disp(pid=900001)
+    w._demo_answer(True)
+    assert w.opened == [], (
+        "on macOS the real feature opens the terminal instead — demoing a "
+        "window that platform never shows would be a lie")
+
+
+def test_the_tour_needs_a_blocked_session_to_answer():
+    w = Touring()
+    w._sess_disp = sc.format_sessions([_session(pid=1, status=sc.BUSY)])
+    w._demo_answer(True)
+    assert w.opened == []
+
+
 def test_the_demo_screen_parses_into_a_real_prompt():
     prompt = sc.parse_console_prompt(list(widget_bar.BarWidget._DEMO_SCREEN))
     assert prompt is not None, (

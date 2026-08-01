@@ -31,6 +31,8 @@ Claude's Pro / Max / Team plans enforce a rolling **5‑hour session** limit and
 
 > ### 🖱️ Put it anywhere
 > The strip is a **free‑floating, always‑on‑top** widget — not locked to the taskbar. Drag it to a screen edge, over a window, or onto a second monitor, and it **remembers the spot**.
+>
+> Wherever it lands, it stays **readable**: it picks the light or dark palette by contrast against what's behind it, then lifts each label the rest of the way to the WCAG AA ratio if that isn't enough — on a saturated wallpaper the theme greys alone measure about 1.2:1. The severity colours are exempt, because red, amber and green *are* the message: they keep their hue and get a hairline outline instead. The background is never touched — blending into the taskbar is the point.
 > *(On **macOS** the native menu‑bar item is the default; the same floating widget is available with `app.py bar` — see [Platform support](#platform-support).)*
 
 <p align="center"><img src="assets/anywhere.png" alt="Drag the Windows strip anywhere on screen — not just the taskbar" width="780"></p>
@@ -236,6 +238,7 @@ Optional environment overrides:
 > - resume‑on‑reset — both **Tier 1** (notify + one click) and **Tier 2** (auto‑resume countdown)
 > - the estimated **cost** line (click the strip to see it) and the graceful **offline** state
 > - **live sessions** end to end — the dot row filling up and overflowing, a session **blocking** (red dot, red strip dot, a pulse and a toast that waits for you), it being answered, two **finishing** at once as one summary, and one **ending**
+> - **answering a blocked session in place** — the real window opens on the tour's blocked session, showing its question and choices as buttons. It reads a canned screen and sends nothing: the tour's process ids are invented, and one could belong to something real
 >
 > Pick **◼ Exit demo** to snap back to your real usage. No network, no credentials, nothing real touched.
 
