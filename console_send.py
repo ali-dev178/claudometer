@@ -87,6 +87,90 @@ def clean(text) -> str:
     return "".join(out).strip()[:MAX_LEN]
 
 
+if _IS_WIN:  # pragma: no cover - platform specific
+
+    class _COORD(ctypes.Structure):
+        _fields_ = [("X", ctypes.c_short), ("Y", ctypes.c_short)]
+
+    class _SMALL_RECT(ctypes.Structure):
+        _fields_ = [("Left", ctypes.c_short), ("Top", ctypes.c_short),
+                    ("Right", ctypes.c_short), ("Bottom", ctypes.c_short)]
+
+    class _CSBI(ctypes.Structure):
+        _fields_ = [("dwSize", _COORD), ("dwCursorPosition", _COORD),
+                    ("wAttributes", wintypes.WORD), ("srWindow", _SMALL_RECT),
+                    ("dwMaximumWindowSize", _COORD)]
+
+
+def read_screen(pid, max_rows: int = 120):
+    """What a session currently has on screen, as a list of lines.
+
+    The transcript only gains a tool call once it has been answered, so while a
+    session is actually waiting the question exists nowhere but its own screen.
+    Read-only.
+    """
+    if not _IS_WIN:
+        return None
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if pid <= 0:
+        return None
+    with _LOCK:
+        try:
+            kernel32 = ctypes.windll.kernel32
+        except Exception:
+            return None
+        try:
+            kernel32.FreeConsole()
+        except Exception:
+            pass
+        try:
+            if not kernel32.AttachConsole(pid):
+                return None
+        except Exception:
+            return None
+        try:
+            handle = kernel32.CreateFileW(
+                "CONOUT$", _GENERIC_READ | _GENERIC_WRITE,
+                _FILE_SHARE_READ | _FILE_SHARE_WRITE, None, _OPEN_EXISTING,
+                0, None)
+            if handle in (0, _INVALID_HANDLE):
+                return None
+            try:
+                info = _CSBI()
+                if not kernel32.GetConsoleScreenBufferInfo(handle,
+                                                           ctypes.byref(info)):
+                    return None
+                width = int(info.dwSize.X)
+                if width <= 0:
+                    return None
+                # Only the visible window, not the whole scrollback.
+                top = max(0, int(info.srWindow.Top))
+                bottom = min(int(info.dwSize.Y), int(info.srWindow.Bottom) + 1)
+                bottom = min(bottom, top + max_rows)
+                buf = ctypes.create_unicode_buffer(width)
+                got = wintypes.DWORD()
+                rows = []
+                for y in range(top, bottom):
+                    if not kernel32.ReadConsoleOutputCharacterW(
+                            handle, buf, width, _COORD(0, y),
+                            ctypes.byref(got)):
+                        break
+                    rows.append(buf.value[:got.value].rstrip())
+                return rows
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return None
+        finally:
+            try:
+                kernel32.FreeConsole()
+            except Exception:
+                pass
+
+
 def _records(text: str):
     recs = []
     for ch in text:

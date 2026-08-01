@@ -575,20 +575,41 @@ class AnswerWindow:
                        width=self.W - 40, anchor="w", justify="left").pack(
                            fill="x", pady=(0, 12))
 
-        quick = tk.Frame(pad, bg=bg)
-        quick.pack(fill="x")
-        # Yes/No answer a permission prompt; "⏎ Enter" accepts the highlighted
-        # option in a numbered menu, which Yes/No cannot.
-        for label, text, primary in (("Yes", "yes", True), ("No", "no", False),
-                                     ("⏎ Enter", "", False)):
-            tk.Button(quick, text=label,
-                      command=lambda t=text: self._send(t, submit=True),
-                      bg=T["accent"] if primary else T["track"],
-                      fg="#ffffff" if primary else fg,
-                      activebackground=T["accent"] if primary else T["track"],
-                      bd=0, relief="flat", font=("Segoe UI Semibold", 10),
-                      padx=(22 if primary else 16), pady=5,
-                      cursor="hand2").pack(side="left", padx=(0, 8))
+        options = list(row.get("options") or [])
+        if options:
+            # The session offered a numbered menu, so offer the same choices
+            # rather than a Yes/No that means nothing here. Picking one sends
+            # its number, which is how that menu is answered.
+            selected = int(row.get("selected") or 0)
+            for index, label in enumerate(options, start=1):
+                here = index == selected      # what the session has highlighted
+                tk.Button(pad, text=f"{index}.  {label}",
+                          command=lambda n=index: self._send(str(n)),
+                          bg=T["accent_soft"] if here else T["track"],
+                          fg=fg, activebackground=T["accent"],
+                          activeforeground="#ffffff", bd=0, relief="flat",
+                          font=("Segoe UI Semibold" if here else "Segoe UI", 10),
+                          anchor="w", padx=12, pady=6,
+                          cursor="hand2").pack(fill="x", pady=(0, 4))
+            tk.Label(pad, text="…or type an answer", bg=bg, fg=dim,
+                     font=("Segoe UI", 9), anchor="w").pack(fill="x",
+                                                            pady=(6, 2))
+        else:
+            quick = tk.Frame(pad, bg=bg)
+            quick.pack(fill="x")
+            # Yes/No answer a permission prompt; a bare Enter accepts whatever
+            # option a menu already has highlighted.
+            for label, text, primary in (("Yes", "yes", True),
+                                         ("No", "no", False),
+                                         ("⏎ Enter", "", False)):
+                tk.Button(quick, text=label,
+                          command=lambda t=text: self._send(t, submit=True),
+                          bg=T["accent"] if primary else T["track"],
+                          fg="#ffffff" if primary else fg,
+                          activebackground=T["accent"] if primary else T["track"],
+                          bd=0, relief="flat", font=("Segoe UI Semibold", 10),
+                          padx=(22 if primary else 16), pady=5,
+                          cursor="hand2").pack(side="left", padx=(0, 8))
 
         entry_row = tk.Frame(pad, bg=bg)
         entry_row.pack(fill="x", pady=(12, 0))
@@ -1705,7 +1726,26 @@ class BarWidget:
         and the row menu so they can't drift apart."""
         return self._focus_session({"pid": pid})
 
+    def _live_question(self, row):
+        """Refresh a row with what the session is asking *right now*.
+
+        Read at the moment the window opens rather than on every tick: it costs
+        a console attach, and it is only ever needed here.
+        """
+        try:
+            screen = console_send.read_screen(row.get("pid"))
+            prompt = sessions_core.parse_console_prompt(screen)
+            if prompt and (prompt["question"] or prompt["options"]):
+                return dict(row,
+                            question=prompt["question"] or row.get("question"),
+                            options=list(prompt["options"]),
+                            selected=prompt["selected"])
+        except Exception:
+            _log_exc()
+        return row
+
     def _open_answer(self, row):
+        row = self._live_question(row)
         if self._answer_win is not None:
             try:
                 self._answer_win.close()

@@ -168,6 +168,12 @@ class Session:
     input_tokens: int = 0
     output_tokens: int = 0
     subagents: int = 0
+    # What the session is actually blocked on, read from its transcript: the
+    # tool call still awaiting a result. The registry only ever says "input
+    # needed", which isn't enough to answer from.
+    pending_tool: str = ""
+    pending_question: str = ""
+    pending_options: tuple = ()
 
     # --- derived ---------------------------------------------------------- #
     @property
@@ -408,11 +414,15 @@ def format_sessions(sessions, at_ms: Optional[int] = None,
             # "needs you · 4m" — the right-hand side of a row, prebuilt so the
             # renderer never has to decide how to join them.
             "detail": f"{status_text} · {dwell}" if dwell else status_text,
-            # What it is actually waiting on, for the answer window. With hooks
-            # on this is the real prompt text; without them it's the registry's
-            # coarser category.
-            "question": oneline(session.waiting_for)
-                        if session.status == WAITING else "",
+            # What it is actually waiting on, for the answer window. The
+            # transcript's outstanding tool call is the real question; the
+            # registry's "input needed" is only the fallback.
+            "question": (oneline(session.pending_question)
+                         or oneline(session.waiting_for)
+                         if session.status == WAITING else ""),
+            "options": list(session.pending_options)
+                       if session.status == WAITING else [],
+            "pending_tool": oneline(session.pending_tool),
             "tool": oneline(session.tool),
             "model": oneline(session.model),
             "branch": oneline(session.git_branch),
@@ -1296,6 +1306,159 @@ def read_transcript_tail(path, max_bytes: int = TRANSCRIPT_TAIL_BYTES) -> dict:
     return out
 
 
+#: Fields worth quoting back when the pending tool isn't a question — the one
+#: that says what the tool is about to do, in the order we'd prefer them.
+_TOOL_SUMMARY_KEYS = ("command", "file_path", "path", "pattern", "url",
+                      "prompt", "description", "query")
+
+
+def _tool_summary(payload) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    for key in _TOOL_SUMMARY_KEYS:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return oneline(value, 160)
+    return ""
+
+
+#: A numbered choice on a session's screen: "> 1. Label" or "  2) Label".
+_SCREEN_OPTION_RE = re.compile(r"^\s*([>❯»❯]?)\s*(\d{1,2})[.)]\s+(\S.*)$")
+
+#: Claude Code prints this under a menu. Its presence is what tells us the
+#: numbers above really are a choice and not, say, a numbered list in prose.
+_MENU_HINTS = ("to select", "to navigate", "to cancel")
+
+#: Box drawing, spinners and status glyphs that are never the question.
+_SCREEN_NOISE = "─━│┃┄┅┈┉╌╍═�texttt▪▫◦·✻✽⎿⏵❯>"
+
+
+def _is_noise(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return True
+    letters = [c for c in stripped if c.isalnum()]
+    if not letters:
+        return True
+    # Mostly rule characters — a separator, not a sentence.
+    return len(letters) / len(stripped) < 0.35
+
+
+def parse_console_prompt(lines):
+    """Pull the question and its choices off a session's visible screen.
+
+    Returns ``{"question", "options", "selected"}`` or None. The transcript is
+    no help here — a tool call only lands in it once it has been answered — so
+    the screen is the one place a live question exists.
+    """
+    if not lines:
+        return None
+    rows = list(lines)
+    hint_at = None
+    for index in range(len(rows) - 1, -1, -1):
+        low = rows[index].lower()
+        if any(h in low for h in _MENU_HINTS):
+            hint_at = index
+            break
+    if hint_at is None:
+        return None
+
+    options, selected, first_at = [], 0, None
+    for index in range(hint_at - 1, max(-1, hint_at - 40), -1):
+        match = _SCREEN_OPTION_RE.match(rows[index])
+        if not match:
+            continue
+        marker, number, label = match.groups()
+        number = int(number)
+        if number < 1 or number > 20:
+            continue
+        options.append((number, oneline(label, 80), bool(marker.strip())))
+        first_at = index
+        if number == 1:
+            break
+    if not options:
+        return None
+    options.reverse()
+    # Only trust a clean 1..N run; anything else is prose that happens to be
+    # numbered.
+    if [n for n, _l, _m in options] != list(range(1, len(options) + 1)):
+        return None
+    for position, (_n, _label, marked) in enumerate(options, start=1):
+        if marked:
+            selected = position
+
+    question = ""
+    for index in range(first_at - 1, max(-1, first_at - 8), -1):
+        candidate = rows[index]
+        if _is_noise(candidate) or _SCREEN_OPTION_RE.match(candidate):
+            continue
+        question = oneline(candidate, 400)
+        break
+    return {"question": question,
+            "options": tuple(label for _n, label, _m in options),
+            "selected": selected}
+
+
+def pending_prompt(path, max_bytes: int = TRANSCRIPT_TAIL_BYTES):
+    """What a session is currently waiting on, or None.
+
+    A tool call with no matching ``tool_result`` is the one still outstanding,
+    so that is the question being asked. ``AskUserQuestion`` carries its
+    options as structured data, which is what lets them be offered as buttons
+    rather than a sentence telling you to go and look.
+    """
+    text = _tail_text(path, max_bytes)
+    if not text:
+        return None
+    uses, answered = {}, set()
+    for line in text.splitlines():
+        line = line.strip().lstrip("﻿")
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        message = entry.get("message") if isinstance(entry, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            kind = block.get("type")
+            if kind == "tool_use" and block.get("id"):
+                uses[block["id"]] = (_str(block.get("name")),
+                                     block.get("input") or {})
+            elif kind == "tool_result" and block.get("tool_use_id"):
+                answered.add(block["tool_use_id"])
+
+    outstanding = [pair for tid, pair in uses.items() if tid not in answered]
+    if not outstanding:
+        return None
+    name, payload = outstanding[-1]     # dicts keep insertion order
+
+    if name == "AskUserQuestion":
+        questions = payload.get("questions") if isinstance(payload, dict) else None
+        first = questions[0] if isinstance(questions, list) and questions else None
+        if isinstance(first, dict):
+            options = []
+            for option in first.get("options") or []:
+                if isinstance(option, dict):
+                    label = oneline(option.get("label"), 60)
+                    if label:
+                        options.append(label)
+            return {"tool": name,
+                    "question": oneline(first.get("question"), 400),
+                    "options": tuple(options)}
+
+    summary = _tool_summary(payload)
+    return {"tool": name,
+            "question": f"{name}: {summary}" if summary else
+                        (f"Waiting on {name}" if name else ""),
+            "options": ()}
+
+
 def last_prompts(config_dir=None, max_bytes: int = HISTORY_TAIL_BYTES) -> dict:
     """Map session id -> the most recent prompt text, from history.jsonl."""
     path = _config_dir(config_dir) / "history.jsonl"
@@ -1332,6 +1495,14 @@ def enrich(session: Session, config_dir=None, prompts: Optional[dict] = None,
         path = transcript_path(session.session_id, session.cwd, config_dir)
         if path is not None:
             fields.update(read_transcript_tail(path, max_bytes))
+            # Only a blocked session has anything outstanding, and this is a
+            # second pass over the tail — don't pay for it otherwise.
+            if session.status == WAITING:
+                pending = pending_prompt(path, max_bytes)
+                if pending:
+                    fields["pending_tool"] = pending["tool"]
+                    fields["pending_question"] = pending["question"]
+                    fields["pending_options"] = pending["options"]
     except Exception:
         pass
 

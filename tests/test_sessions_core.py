@@ -907,6 +907,85 @@ def test_diff_reports_several_changes_at_once():
 
 
 # --------------------------------------------------------------------------- #
+# parse_console_prompt — the live question, read off the session's screen
+# --------------------------------------------------------------------------- #
+# Taken verbatim from a real waiting session; the transcript had nothing,
+# because a tool call only lands there once it has been answered.
+REAL_SCREEN = [
+    "✻ Crunched for 5m 15s",
+    "> again",
+    "─────────────────────────────────────────────────",
+    " [ ] Overrated",
+    "What's the most overrated thing everyone seems to agree is great?",
+    "> 1. Networking events",
+    "     Rooms full of people exchanging cards and never speaking again.",
+    "  2. Waking up at 5am",
+    "     The productivity cult's favorite badge of honor.",
+    "  3. Open-plan offices",
+    "     Collaboration, allegedly. Noise, actually.",
+    "  4. Most new AI tools",
+    "  5. Type something.",
+    "─────────────────────────────────────────────────",
+    "  6. Chat about this",
+    "Enter to select · ↑/↓ to navigate · Esc to cancel",
+]
+
+
+def test_parse_console_prompt_reads_the_real_screen():
+    out = sc.parse_console_prompt(REAL_SCREEN)
+    assert out["question"] == \
+        "What's the most overrated thing everyone seems to agree is great?"
+    assert out["options"] == (
+        "Networking events", "Waking up at 5am", "Open-plan offices",
+        "Most new AI tools", "Type something.", "Chat about this")
+
+
+def test_parse_console_prompt_finds_the_highlighted_option():
+    assert sc.parse_console_prompt(REAL_SCREEN)["selected"] == 1
+
+
+def test_parse_console_prompt_marker_elsewhere():
+    screen = ["Pick one", "  1. first", "> 2. second", "  3. third",
+              "Enter to select"]
+    out = sc.parse_console_prompt(screen)
+    assert out["selected"] == 2 and len(out["options"]) == 3
+
+
+def test_parse_console_prompt_needs_the_menu_hint():
+    # Numbered prose is not a menu.
+    screen = ["Here are three things:", "1. one", "2. two", "3. three"]
+    assert sc.parse_console_prompt(screen) is None
+
+
+def test_parse_console_prompt_rejects_a_broken_run():
+    # 1,2,4 isn't a menu we can address by number.
+    screen = ["Pick", "  1. a", "  2. b", "  4. d", "Enter to select"]
+    assert sc.parse_console_prompt(screen) is None
+
+
+def test_parse_console_prompt_skips_separators_for_the_question():
+    screen = ["The actual question?", "────────────────────", "  1. a",
+              "  2. b", "Enter to select"]
+    assert sc.parse_console_prompt(screen)["question"] == "The actual question?"
+
+
+@pytest.mark.parametrize("screen", [None, [], ["nothing here"], [""] * 5])
+def test_parse_console_prompt_handles_nothing(screen):
+    assert sc.parse_console_prompt(screen) is None
+
+
+def test_parse_console_prompt_without_options_is_none():
+    assert sc.parse_console_prompt(["Enter to select"]) is None
+
+
+def test_parse_console_prompt_scrubs_control_characters():
+    screen = ["Question\there?", "  1. opt\tone", "  2. two", "Enter to select"]
+    out = sc.parse_console_prompt(screen)
+    assert "\t" not in out["question"]
+    assert all("\t" not in o for o in out["options"])
+
+
+# --------------------------------------------------------------------------- #
 # Alerts
 # --------------------------------------------------------------------------- #
 def _t(kind, session, before="", after=""):
