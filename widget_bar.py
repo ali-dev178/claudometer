@@ -532,6 +532,13 @@ class AnswerWindow:
 
     W = 470
     POLL_MS = 900
+    #: How long a finished session's window hangs about before retiring. It
+    #: opened because something needed answering; once nothing does, and you
+    #: are plainly not using it, it should get out of the way on its own.
+    CLOSE_AFTER = 30.0
+    #: …but never without saying so first. A window that vanished mid-sentence
+    #: while you were reading would be worse than one that overstayed.
+    WARN_AT = 10.0
 
     def __init__(self, root, theme, row, on_send, on_open_terminal,
                  poll=None, on_close=None):
@@ -550,6 +557,7 @@ class AnswerWindow:
         self._set_geom = None      # the size WE asked for, to spot resizes
         self._geom_settled = False  # …seen honoured, so deviations are theirs
         self._user_sized = False   # …after which the size is theirs, not ours
+        self._touched = time.monotonic()   # last sign of life from the user
         self.alive = True
         self.readable = True
         self.row = dict(row)
@@ -570,6 +578,10 @@ class AnswerWindow:
         # Resizable on purpose — a long conversation deserves a taller panel.
         self.top.bind("<Configure>", self._sized_by_user)
         self.top.minsize(self.W, 160)
+        # Bindings on a Toplevel see its children's events too, so this is
+        # every keystroke and click anywhere in the window.
+        self.top.bind("<Key>", self._touch, add="+")
+        self.top.bind("<Button-1>", self._touch, add="+")
 
         pad = tk.Frame(self.top, bg=bg)
         pad.pack(fill="both", expand=True, padx=16, pady=12)
@@ -893,14 +905,41 @@ class AnswerWindow:
             except Exception:
                 pass
 
+    def _touch(self, _event=None):
+        """Anything you do in here means you are still using it."""
+        self._touched = time.monotonic()
+
+    def _retire(self):
+        """Close once there is nothing left to answer and nobody using it.
+
+        The window is a request: a session needed you. When it no longer does
+        — it has replied, or ended — leaving the window up means you close it
+        by hand every single time. So it retires itself, but only while the
+        box is empty and nothing has been touched, and never silently.
+        """
+        if self.var.get().strip():
+            return self._touch()        # a half-typed message is still yours
+        status = self.row.get("status")
+        if self.alive and status in (sessions_core.WAITING, sessions_core.BUSY):
+            # Its turn, or about to be yours again. Not finished either way.
+            return self._touch()
+        left = self.CLOSE_AFTER - (time.monotonic() - self._touched)
+        if left <= 0:
+            self.close()
+        elif left <= self.WARN_AT:
+            self._say(f"nothing left to answer — closing in {int(left) + 1}s")
+
     def _tick(self):
         if self._closed:
             return
         try:
             if self._poll and self.alive:
                 self._absorb(self._poll(self.row))
+            self._retire()
         except Exception:
             _log_exc()
+        if self._closed:
+            return
         try:
             self._after = self.top.after(self.POLL_MS, self._tick)
         except Exception:
@@ -927,6 +966,7 @@ class AnswerWindow:
         self._send(str(number))
 
     def _send(self, text, submit=True):
+        self._touch()
         ok, error = self._on_send(self.row, text, submit)
         if ok:
             # Deliberately stays open: an answer often starts a conversation,

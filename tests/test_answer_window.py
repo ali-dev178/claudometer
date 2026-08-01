@@ -6,6 +6,7 @@ the stub agrees with itself.
 """
 
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -369,6 +370,72 @@ def test_nothing_said_yet_shows_no_transcript(harness):
     h = harness([_state(["> just do it", "✻ Cogitated for 14s"])])
     assert h.reply() == "", (
         "an empty box where a sentence goes reads as something failing")
+
+
+# --------------------------------------------------------------------------- #
+# Retiring itself once there is nothing left to answer
+# --------------------------------------------------------------------------- #
+def _stale(win, seconds=None):
+    """Wind the clock back to just past the closing threshold."""
+    win._touched = time.monotonic() - (
+        seconds if seconds is not None else win.CLOSE_AFTER + 1)
+
+
+def test_a_finished_session_closes_itself(harness):
+    h = harness([_state(CHAT, row=_row(status=sc.IDLE))])
+    _stale(h.win)
+    h.win._tick()
+    assert h.closed is True, (
+        "it opened because something needed answering — once nothing does, "
+        "leaving it up means closing it by hand every single time")
+
+
+def test_it_warns_before_it_goes(harness):
+    h = harness([_state(CHAT, row=_row(status=sc.IDLE))])
+    _stale(h.win, h.win.CLOSE_AFTER - 4)
+    h.win._tick()
+    assert h.closed is False
+    assert "closing in" in h.status(), (
+        "vanishing mid-sentence while being read would be worse than "
+        "overstaying")
+
+
+def test_a_waiting_session_never_closes_itself(harness):
+    h = harness([_state(MENU)])
+    _stale(h.win)
+    h.win._tick()
+    assert h.closed is False, "it is asking you something right now"
+
+
+def test_a_working_session_never_closes_itself(harness):
+    h = harness([_state(CHAT, row=_row(status=sc.BUSY))])
+    _stale(h.win)
+    h.win._tick()
+    assert h.closed is False, "it is about to say something"
+
+
+def test_a_half_typed_message_keeps_it_open(harness):
+    h = harness([_state(CHAT, row=_row(status=sc.IDLE))])
+    h.win.var.set("what about the second one")
+    _stale(h.win)
+    h.win._tick()
+    assert h.closed is False, "closing would throw away what they wrote"
+
+
+def test_using_it_resets_the_clock(harness):
+    h = harness([_state(CHAT, row=_row(status=sc.IDLE))])
+    _stale(h.win, h.win.CLOSE_AFTER - 2)
+    h.win._touch()
+    h.win._tick()
+    assert h.closed is False
+
+
+def test_a_session_that_ended_also_retires(harness):
+    h = harness([_state(MENU), _state(None, alive=False)])
+    h.win._tick()
+    _stale(h.win)
+    h.win._tick()
+    assert h.closed is True, "nothing can be sent to it and it says nothing more"
 
 
 # --------------------------------------------------------------------------- #

@@ -164,6 +164,8 @@ The window **stays open** once you answer. Choosing *"chat about this"* starts a
 
 It handles the rest of what a session can do to you: it says when one is **working** (anything you send is queued, exactly as typing into the terminal would be), when a menu **moved** under your pointer (that choice is refused rather than sent to a question you never read), and when the session has **ended** (the last thing it said stays up; nothing more can be sent).
 
+**It closes itself.** The window opened because something needed answering; once nothing does — the session has replied, or ended — it counts down and goes, telling you before it does. Typing, clicking or sending resets that, and a half-written message keeps it up indefinitely, so it can't take anything from you. A session that is still asking, or still working, is never retired. `Esc` closes it now.
+
 > **Why this is safe.** Input is delivered to the session's *process*, not to a window — several sessions routinely share one terminal and nothing in the process tree tells their tabs apart, so anything window-based would be a coin flip. Every send re-checks the session is still live first, since a process id gets reused. Windows only: this uses `AttachConsole`, and neither macOS nor a modern Linux has an equivalent — there, clicking a blocked session takes you to its terminal instead. Turn it off with `sessions_answer = false`.
 
 It reads `~/.claude/sessions` locally — the same registry Claude Code maintains — about once a second. Nothing is sent anywhere.

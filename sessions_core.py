@@ -1344,42 +1344,59 @@ def _is_noise(line: str) -> bool:
     return len(letters) / len(stripped) < 0.35
 
 
-#: A line the user typed, echoed back. Deliberately NOT a numbered option:
-#: "> 1. Keep it" is the menu's highlight marker, not something you said.
-_USER_LINE_RE = re.compile(r"^\s*[>❯⏵]\s*(?!\d{1,2}[.)]\s)(\S.*)$")
+#: The TUI's input box, with or without something typed in it.
+_PROMPT_RE = re.compile(r"^\s*[>❯⏵]\s*")
 
 #: Claude Code's own bookkeeping: how long it thought, what a tool returned,
 #: which topic a question belongs to. None of it is the session talking.
 _ASIDE_RE = re.compile(r"^\s*(?:[✻✽✢✶*]\s|[⎿└]|\[.?\]\s|\d+\s*(?:tokens|lines))")
 
-#: The bullet Claude Code puts in front of what it says.
-_SAID = " ⏺•⧉\t"
+#: The bullet Claude Code puts in front of everything it says.
+_SAID_RE = re.compile(r"^\s*[⏺•⧉]\s*(\S.*)$")
+_SAID_CHARS = " ⏺•⧉\t"
+
+#: How far up from the bottom the input box can be. It is the last thing on
+#: screen bar the status bar, which is one or two lines.
+PROMPT_TAIL = 8
 
 
 def latest_reply(lines, upto=None, max_chars: int = 600):
-    """What the session has said since you last typed, as one piece of prose.
+    """The last thing the session said, as one piece of prose.
 
-    Terminal output is wrapped to the terminal's width and studded with
-    glyphs a UI font doesn't have, so it is rejoined rather than mirrored —
-    what matters is the sentence, not the column it broke at.
+    Terminal output is wrapped to the terminal's width and studded with glyphs
+    a UI font doesn't have, so it is rejoined rather than mirrored — what
+    matters is the sentence, not the column it happened to break at.
 
-    Anything before your last input is left out: you have already read it, and
-    what makes this worth showing is the part you haven't answered yet.
+    Two things below it have to go first. The input box lives at the BOTTOM of
+    the TUI, so anything keyed off "the last thing typed" runs off the end of
+    the reply and into the status bar underneath it — which is how a window
+    meant to show an answer ends up showing "ctx 5% · manual mode on".
     """
     rows = list(lines or [])
     if upto is not None and 0 < upto <= len(rows):
         rows = rows[:upto]
-    start = 0
+    # Everything from the input box down is the TUI's own furniture. Only the
+    # bottom of the screen is searched for it: a reply that quotes a shell
+    # prompt would otherwise be mistaken for one and thrown away.
+    for index in range(len(rows) - 1, max(-1, len(rows) - PROMPT_TAIL), -1):
+        if _PROMPT_RE.match(rows[index]):
+            rows = rows[:index]
+            break
+    # Claude Code marks everything it says with a bullet, so the last one is
+    # where the newest thing it said begins.
+    start = None
     for index, row in enumerate(rows):
-        if _USER_LINE_RE.match(row):
-            start = index + 1
+        if _SAID_RE.match(row):
+            start = index
+    if start is None:
+        return ""
     said = []
     for row in rows[start:]:
-        if _is_noise(row) or _ASIDE_RE.match(row) or _USER_LINE_RE.match(row):
+        if (_is_noise(row) or _ASIDE_RE.match(row) or _PROMPT_RE.match(row)
+                or _SCREEN_OPTION_RE.match(row)):
             continue
-        said.append(row.strip().lstrip(_SAID).strip())
-    text = oneline(" ".join(part for part in said if part), max_chars)
-    return text
+        said.append(row.strip().lstrip(_SAID_CHARS).strip())
+    return oneline(" ".join(part for part in said if part), max_chars)
 
 
 def parse_console_prompt(lines):

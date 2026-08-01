@@ -940,6 +940,13 @@ def test_parse_console_prompt_reads_the_real_screen():
         "Most new AI tools", "Type something.", "Chat about this")
 
 
+def test_parse_console_prompt_reports_where_the_prompt_begins():
+    out = sc.parse_console_prompt(REAL_SCREEN)
+    assert REAL_SCREEN[out["start"]] == out["question"], (
+        "'start' is what lets a caller show the screen ABOVE the prompt "
+        "without repeating the choices it is already drawing as buttons")
+
+
 def test_parse_console_prompt_finds_the_highlighted_option():
     assert sc.parse_console_prompt(REAL_SCREEN)["selected"] == 1
 
@@ -982,11 +989,26 @@ def test_latest_reply_rejoins_the_terminals_wrapping():
 
 
 def test_latest_reply_drops_the_bookkeeping():
-    out = sc.latest_reply(["> go on", "✻ Cogitated for 14s",
-                           "⎿  Read 4 files (312 lines)", " [ ] Bad advice",
-                           "⏺ Here's what I found."])
+    out = sc.latest_reply(["✻ Cogitated for 14s", "⎿  Read 4 files (312 lines)",
+                           " [ ] Bad advice", "⏺ Here's what I found.", "> "])
     assert out == "Here's what I found.", (
         "how long it thought and what a tool returned is not it talking")
+
+
+def test_latest_reply_keeps_a_quoted_prompt_in_the_reply():
+    # A long reply that quotes a shell prompt, still being written, so the
+    # input box is nowhere near the bottom of the screen.
+    screen = ["⏺ Run this:", "  > npm run build",
+              "  Then check the output.", "  It writes to dist/.",
+              "  Nothing else changes.", "  Let me know how it goes.",
+              "  I'll wait.", "  Ready when you are.", "  Anything else?",
+              "  That's everything."]
+    out = sc.latest_reply(screen)
+    assert out.startswith("Run this:"), (
+        "a '>' quoted inside a reply is not the input box — only the bottom "
+        "of the screen is searched for that, and here there is no box on "
+        "screen at all")
+    assert "That's everything." in out
 
 
 def test_latest_reply_is_empty_when_it_has_not_spoken():
@@ -1003,6 +1025,39 @@ def test_latest_reply_does_not_mistake_a_menu_choice_for_your_input():
 def test_latest_reply_stops_at_the_prompt():
     start = sc.parse_console_prompt(REAL_SCREEN)["start"]
     assert "Networking events" not in sc.latest_reply(REAL_SCREEN, upto=start)
+
+
+#: Verbatim from a session that had just answered — including the input box
+#: and the status bar UNDER it, which is what the window wrongly showed.
+REAL_TALKING = [
+    "⏺ That came back as a clarify request again — what would you like to clarify?",
+    "✻ Worked for 5s",
+    "✻ recap: You're testing the multiple-choice question picker with random"
+    " casual questions, not project work. (disable recaps in /config)",
+    "  again please",
+    "⏺ User answered Claude's questions:",
+    "  ⎿ · You get to permanently delete one everyday annoyance. Which goes?"
+    " → Traffic",
+    "⏺ Traffic — the honest answer. It's the only one on that list you can't"
+    " opt out of by changing a habit or a setting.",
+    "",
+    "  Ready for another whenever you are.",
+    "✻ Sautéed for 8s",
+    "",
+    "> again please",
+    "  mian-electric  main  Opus 5 (1M context)  ctx 5%",
+    "  ▣manual mode on · ← for agents",
+]
+
+
+def test_latest_reply_ignores_the_input_box_and_status_bar():
+    out = sc.latest_reply(REAL_TALKING)
+    assert out.startswith("Traffic — the honest answer")
+    assert out.endswith("Ready for another whenever you are.")
+    assert "ctx 5%" not in out and "manual mode" not in out, (
+        "the input box is at the BOTTOM of the TUI, so anything keyed off "
+        "'after the last thing typed' lands in the status bar under it")
+    assert "clarify request" not in out, "that is an older turn"
 
 
 def test_latest_reply_is_capped():
