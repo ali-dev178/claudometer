@@ -90,3 +90,8 @@ sessions_quiet_foreground = true
 # and itself — so an uninstall tidies up even if you forget to switch this off
 # first. Starting Claudometer again simply puts them back.
 sessions_hooks = false
+
+# Global shortcut that jumps to whichever session is waiting on you, from any
+# application. Set to "" to turn it off. Windows only for now; if another app
+# already owns the combination, Claudometer says so rather than failing quietly.
+sessions_hotkey = "ctrl+alt+j"

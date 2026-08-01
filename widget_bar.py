@@ -32,6 +32,7 @@ import settings
 import sessions_core
 import focus
 import hooks as claude_hooks
+import hotkey as hotkeys
 import cost
 import resume
 import config
@@ -148,6 +149,18 @@ def _get_pixel(x, y):
         return (c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF)
     finally:
         _user32.ReleaseDC(0, hdc)
+
+
+def _blend(hex_a, hex_b, amount):
+    """Mix two #rrggbb colors; amount 0 = all a, 1 = all b."""
+    try:
+        a = tuple(int(hex_a[i:i + 2], 16) for i in (1, 3, 5))
+        b = tuple(int(hex_b[i:i + 2], 16) for i in (1, 3, 5))
+    except (TypeError, ValueError, IndexError):
+        return hex_a
+    amount = min(max(float(amount), 0.0), 1.0)
+    return "#%02x%02x%02x" % tuple(
+        int(round(x + (y - x) * amount)) for x, y in zip(a, b))
 
 
 def _lum(rgb):
@@ -462,8 +475,11 @@ class Toast:
     """A small auto-dismissing alert card near the tray."""
 
     def __init__(self, root, theme, pct, title, subtitle, color_name, duration=6500,
-                 on_close=None):
+                 on_close=None, on_click=None):
         self._on_close = on_close
+        # A blocked session is a request, not an announcement — its toast stays
+        # until it's dealt with (duration=None) instead of timing out.
+        self._on_click = on_click
         self.top = tk.Toplevel(root)
         self.top.overrideredirect(True)
         try:
@@ -477,19 +493,33 @@ class Toast:
         c = tk.Canvas(self.top, width=w, height=h, bg=key, highlightthickness=0, bd=0)
         c.pack()
         c.create_image(0, 0, anchor="nw", image=self._photo)
-        c.bind("<Button-1>", lambda e: self.close())
+        c.bind("<Button-1>", self._clicked)
+        try:
+            c.configure(cursor="hand2" if on_click else "")
+        except Exception:
+            pass
         wl, wt, wr, wb = _monitor_workarea(root.winfo_rootx() + root.winfo_width() // 2,
                                            root.winfo_rooty() + root.winfo_height() // 2)
         self.top.geometry(f"{w}x{h}+{wr - w - 20}+{wb - h - 16}")
         self._closed = False
-        self._after = self.top.after(duration, self.close)
+        self._after = self.top.after(duration, self.close) if duration else None
+
+    def _clicked(self, _e=None):
+        action = self._on_click
+        self.close()
+        if action:
+            try:
+                action()
+            except Exception:
+                _log_exc()
 
     def close(self):
         if self._closed:
             return
         self._closed = True
         try:
-            self.top.after_cancel(self._after)
+            if self._after:
+                self.top.after_cancel(self._after)
         except Exception:
             pass
         try:
@@ -759,6 +789,7 @@ class SettingsWindow:
         self.v_sess_quiet = tk.BooleanVar(
             value=cfg.get("sessions_quiet_foreground", True))
         self.v_sess_hooks = tk.BooleanVar(value=cfg.get("sessions_hooks", False))
+        self.v_sess_hotkey = tk.StringVar(value=cfg.get("sessions_hotkey", ""))
 
         # rendered header banner (sparkle + title + subtitle)
         self._hdr = ImageTk.PhotoImage(render.render_settings_header(theme, self.WIN_W))
@@ -873,6 +904,11 @@ class SettingsWindow:
                    parent=self._sess_more)
         toggle_row("Instant alerts (edits Claude's settings)", self.v_sess_hooks,
                    parent=self._sess_more, cmd=self._confirm_hooks)
+        rk = row(self._sess_more)
+        label(rk, "Jump shortcut").pack(side="left")
+        tk.Entry(rk, textvariable=self.v_sess_hotkey, width=13, justify="center",
+                 bg=field, fg=fg, insertbackground=fg, bd=0, relief="flat",
+                 font=LBL).pack(side="right", ipady=4)
         rr = row(self._sess_more)
         label(rr, "Rows in popover").pack(side="left")
         _StepperW(rr, self.v_sess_rows, 1, 12, theme, bg,
@@ -1158,6 +1194,7 @@ class SettingsWindow:
             "sessions_stuck_minutes": stuck_min,
             "sessions_quiet_foreground": bool(self.v_sess_quiet.get()),
             "sessions_hooks": bool(self.v_sess_hooks.get()),
+            "sessions_hotkey": self.v_sess_hotkey.get().strip(),
         })
         try:
             self._on_apply(cfg)
@@ -1292,6 +1329,12 @@ class BarWidget:
         # The very first tick sees every running session as newly appeared; that
         # is startup, not news, so alerting stays off until after it.
         self._sess_seeded = False
+        self._flash = False            # strip attention pulse
+        self._sess_sticky_pid = 0      # session the sticky toast belongs to
+        self._hotkey = None
+        if cfg["sessions_hotkey"]:
+            self._hotkey = hotkeys.Hotkey(cfg["sessions_hotkey"],
+                                          self._jump_to_blocked)
         # Hooks: opt-in, and only trusted while the config says they're on —
         # otherwise a stale settings.json entry could keep feeding us events.
         self._sess_hooks_on = cfg["sessions_hooks"] and self._sessions_on
@@ -1424,6 +1467,19 @@ class BarWidget:
         self._pop_closed_at = time.monotonic()
 
     # -- session actions --------------------------------------------------- #
+    def _focus_pid(self, pid):
+        """Raise a session's terminal by pid. Shared by the toast, the hotkey
+        and the row menu so they can't drift apart."""
+        return self._focus_session({"pid": pid})
+
+    def _jump_to_blocked(self):
+        """Go to whichever session needs you — the hotkey's whole job."""
+        pid = (self._sess_disp or {}).get("sessions_blocked_pid") or 0
+        if not pid:
+            self._notify_session("No session is waiting on you right now.")
+            return
+        self._focus_pid(pid)
+
     def _focus_session(self, row):
         """Bring a session's terminal to the front.
 
@@ -1487,12 +1543,48 @@ class BarWidget:
             return
         self._open_path(path, "transcript")
 
+    def _reply_and_go(self, row, text):
+        """Put a reply on the clipboard, then jump to the terminal.
+
+        Claudometer can't answer the prompt itself — a running session exposes
+        no channel to send into, and typing blind would land in whatever tab
+        happens to be in front. This gets you there with the answer ready to
+        paste, which is the safe half of the job.
+        """
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(str(text))
+            self.root.update_idletasks()
+        except Exception:
+            _log_exc()
+        self._focus_session(row)
+
+    def _custom_reply(self, row):
+        from tkinter import simpledialog
+
+        text = simpledialog.askstring(
+            "Reply and go",
+            f"Copy a reply for {(row.get('label') or 'this session')[:40]}:",
+            parent=self.root)
+        if text:
+            self._reply_and_go(row, text)
+
     def _session_menu(self, row, x_root, y_root):
         """Right-click actions for one session row."""
         menu = tk.Menu(self.root, tearoff=0)
         label = (row.get("label") or "session")[:44]
         menu.add_command(label=f"Go to {label}",
                          command=lambda: self._focus_session(row))
+        if row.get("status") == sessions_core.WAITING:
+            reply = tk.Menu(menu, tearoff=0)
+            for text in ("yes", "no", "continue"):
+                reply.add_command(
+                    label=f'Copy "{text}" and go',
+                    command=lambda t=text: self._reply_and_go(row, t))
+            reply.add_separator()
+            reply.add_command(label="Custom reply…",
+                              command=lambda: self._custom_reply(row))
+            menu.add_cascade(label="Reply and go", menu=reply)
         menu.add_separator()
         menu.add_command(label="Open project folder",
                          command=lambda: self._open_path(row.get("cwd"), "folder"))
@@ -1545,16 +1637,47 @@ class BarWidget:
     def _clear_toast(self):
         self._toast = None
 
-    def _show_toast(self, pct, title, subtitle, color):
+    def _show_toast(self, pct, title, subtitle, color, duration=6500,
+                    on_click=None):
         if self._hidden:
             return
         try:
             if self._toast is not None:
                 self._toast.close()
             self._toast = Toast(self.root, self._theme, pct, title, subtitle, color,
-                                on_close=self._clear_toast)
+                                duration=duration, on_close=self._clear_toast,
+                                on_click=on_click)
         except Exception:
             _log_exc()
+
+    # -- attention ---------------------------------------------------------- #
+    #: Half-cycles of the strip pulse, and how long each lasts.
+    PULSE_STEPS, PULSE_MS = 6, 180
+
+    def _pulse_strip(self, step=0):
+        """Flash the strip when a session starts needing you.
+
+        The widget is overrideredirect, so it has no taskbar button to flash —
+        pulsing the strip itself is the equivalent that's actually visible,
+        since the strip IS what sits on the taskbar.
+        """
+        if self._hidden or self._demo:
+            return
+        self._flash = (step % 2 == 0)
+        self._sig = None                 # force the next tick to repaint
+        try:
+            with self._lock:
+                disp = self._disp
+            if disp is not None:
+                self._draw(self._with_sessions(disp))
+        except Exception:
+            _log_exc()
+            return
+        if step + 1 < self.PULSE_STEPS:
+            self.root.after(self.PULSE_MS, self._pulse_strip, step + 1)
+        else:
+            self._flash = False
+            self._sig = None
 
     # -- resume on reset -------------------------------------------------- #
     def _track_resume(self, disp):
@@ -1886,6 +2009,7 @@ class BarWidget:
         self._sess_stuck.minutes = cfg.get("sessions_stuck_minutes",
                                            self._sess_stuck.minutes)
         self._apply_hooks(bool(cfg.get("sessions_hooks", self._sess_hooks_on)))
+        self._apply_hotkey(cfg.get("sessions_hotkey", ""))
         if self._sessions_on and not sessions_was_on:
             # Re-enabled: forget the old history so the next tick doesn't
             # announce every already-running session as newly appeared.
@@ -1958,7 +2082,11 @@ class BarWidget:
             strip = render.render_strip(disp, T["panel_bot"], self._theme, scale=3, metrics=self._strip_metrics())
             img = _round_alpha(strip, min(strip.size[1] // 2, 15))
         else:  # Windows: opaque strip painted in the sampled taskbar color (blends in)
-            img = render.render_strip(disp, self._bg_hex, self._theme, scale=3, metrics=self._strip_metrics())
+            bg = self._bg_hex
+            if self._flash:   # attention pulse: tint the strip toward red
+                bg = _blend(bg, render.THEMES.get(self._theme,
+                                                  render.THEMES["light"])["red"], 0.45)
+            img = render.render_strip(disp, bg, self._theme, scale=3, metrics=self._strip_metrics())
         self._photo = ImageTk.PhotoImage(img)
         w, h = img.size
         self.canvas.configure(width=w, height=h)
@@ -2025,10 +2153,33 @@ class BarWidget:
                 merged, max_rows=self._sessions_max_rows)
             self._sess_disp["sessions_recent"] = sessions_core.format_recent(
                 self._sess_tracker.recent)
+            self._retire_sticky_toast(merged)
             self._session_alerts(events, merged)
         except Exception:
             _log_exc()
             self._sess_disp = {}
+
+    def _apply_hotkey(self, spec):
+        """Re-register the global shortcut, reporting a clash rather than
+        failing silently — a shortcut that quietly does nothing is worse than
+        none at all."""
+        spec = (spec or "").strip()
+        current = self._hotkey.spec if self._hotkey is not None else ""
+        if spec == current and (self._hotkey is None or self._hotkey.registered):
+            return
+        if self._hotkey is not None:
+            self._hotkey.unregister()
+            self._hotkey = None
+        if not spec:
+            return
+        self._hotkey = hotkeys.Hotkey(spec, self._jump_to_blocked)
+        if not self._hotkey.registered:
+            messagebox.showwarning(
+                "Shortcut unavailable",
+                f"Couldn't register {spec} — {self._hotkey.error}.\n\n"
+                f"Pick a different combination, or clear the box to turn the "
+                f"shortcut off.",
+                parent=self.root)
 
     def _apply_hooks(self, want):
         """Install or remove the hook entries to match the setting.
@@ -2090,6 +2241,23 @@ class BarWidget:
             elif note["event"] in ("Stop", "SessionEnd"):
                 self._sess_hook_notes.pop(session_id, None)
 
+    def _retire_sticky_toast(self, live):
+        """Drop a "needs you" toast once that session stops needing you.
+
+        It has no timeout, so nothing else would ever take it off the screen.
+        """
+        if not self._sess_sticky_pid:
+            return
+        still_blocked = any(s.pid == self._sess_sticky_pid
+                            and s.status == sessions_core.WAITING for s in live)
+        if not still_blocked:
+            self._sess_sticky_pid = 0
+            if self._toast is not None:
+                try:
+                    self._toast.close()
+                except Exception:
+                    pass
+
     def _session_alerts(self, events, live):
         """Toast the transitions worth interrupting for. Main thread."""
         if not self._sess_seeded:
@@ -2128,9 +2296,19 @@ class BarWidget:
         # One toast at a time: a second destroys the first before it paints, so
         # a batch has to be summarised rather than fired one by one.
         merged = sessions_core.coalesce_alerts(alerts)
-        if merged is not None:
-            self._show_toast(None, merged["title"], merged["subtitle"],
-                             merged["color"])
+        if merged is None:
+            return
+        needs_you = merged["kind"] in ("waiting", "stuck")
+        jump_pid = merged["pid"] or (self._sess_disp.get("sessions_blocked_pid") or 0)
+        self._sess_sticky_pid = jump_pid if needs_you else 0
+        self._show_toast(
+            None, merged["title"], merged["subtitle"], merged["color"],
+            # A request waits for you; an announcement doesn't need to.
+            duration=None if needs_you else 6500,
+            on_click=(lambda pid=jump_pid: self._focus_pid(pid))
+            if needs_you and jump_pid else None)
+        if needs_you:
+            self._pulse_strip()
 
     def _with_sessions(self, disp):
         """Overlay the session fields onto a usage disp dict for rendering."""
@@ -2225,9 +2403,13 @@ class BarWidget:
         # while hidden, so crossings/caps during fullscreen aren't lost. The toast
         # creation itself is deferred/suppressed via self._hidden.
         # Live sessions refresh every tick regardless of visibility, so the
-        # tracker keeps its history across a fullscreen hide and Phase 3's
-        # alerts can't miss a transition that happened while we were away.
+        # tracker keeps its history across a fullscreen hide and alerts can't
+        # miss a transition that happened while we were away.
         self._sessions_tick()
+        if self._hotkey is not None:
+            # WM_HOTKEY lands on this thread's queue; nothing dispatches it for
+            # us, so it has to be drained here.
+            self._hotkey.poll()
 
         with self._lock:
             disp = self._disp

@@ -256,16 +256,22 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
     # NOTE: sessions_* (plural) are the LIVE CLI sessions; session_* (singular)
     # is the 5-hour usage meter. The two dicts are merged before rendering.
     if "sessions" in metrics and disp.get("sessions_count") is not None:
-        n = disp["sessions_count"]
         # "Live", not "Sessions": the strip already says "Session 61%" for the
         # 5-hour usage window, and the two side by side read as the same thing.
-        g = [("Live ", f_lbl, T["dim"]),
-             (str(n), f_num, sev_color(T, disp.get("sessions_color", "grey")))]
-        # Only the blocked count earns extra pixels on the strip — it's the one
-        # that means "go do something".
-        blocked = disp.get("sessions_blocked") or 0
-        if blocked:
-            g.append((f"   {blocked} needs you", f_dim, sev_color(T, "red")))
+        g = [("Live ", f_lbl, T["dim"])]
+        dots = disp.get("sessions_dots") or []
+        if dots:
+            # One dot per session, coloured by its state — readable without
+            # reading. Blocked sessions sort first, so red leads.
+            f_dot = _font("reg", 13 * S)
+            for i, color in enumerate(dots):
+                g.append(("●" + (" " if i < len(dots) - 1 else ""),
+                          f_dot, sev_color(T, color)))
+            over = disp.get("sessions_dots_overflow") or 0
+            if over:
+                g.append((f" +{over}", f_dim, T["dim"]))
+        else:
+            g.append(("0", f_num, T["dim"]))
         groups.append(g)
     if not groups:
         groups.append([("Claude  " + (disp.get("session") or "—"), f_dim, T["dim"])])
@@ -281,6 +287,10 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
         dot_color = sev_color(T, max(cand, key=lambda c: c[0])[1])
     else:  # status state (no percentages) — key the dot off face_color so a
         dot_color = sev_color(T, disp.get("face_color", "grey"))  # 429 shows red, not grey
+    # A session blocked on you outranks usage severity: usage is something to
+    # pace, a blocked session is something to go and do.
+    if "sessions" in metrics and (disp.get("sessions_blocked") or 0):
+        dot_color = sev_color(T, "red")
 
 
     tmp = ImageDraw.Draw(Image.new("RGB", (4, 4)))

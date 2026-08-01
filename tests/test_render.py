@@ -331,14 +331,33 @@ def test_strip_live_group_renders():
     assert _is_image(img) and _positive_size(img)
 
 
-def test_strip_live_group_widens_when_blocked():
-    base = {"session_pct": 50, "session_color": "green", "sessions_count": 3,
-            "sessions_color": "amber"}
-    plain = render.render_strip(dict(base, sessions_blocked=0), "#ffffff",
+def test_strip_draws_one_dot_per_session():
+    base = {"session_pct": 50, "session_color": "green", "sessions_color": "amber"}
+    one = render.render_strip(
+        dict(base, sessions_count=1, sessions_dots=["amber"]),
+        "#ffffff", "light", metrics=("session", "sessions"))
+    four = render.render_strip(
+        dict(base, sessions_count=4, sessions_dots=["red"] + ["amber"] * 3),
+        "#ffffff", "light", metrics=("session", "sessions"))
+    assert four.size[0] > one.size[0]
+
+
+def test_strip_dot_overflow_is_shown():
+    base = {"session_pct": 50, "session_color": "green", "sessions_color": "amber",
+            "sessions_count": 12, "sessions_dots": ["amber"] * 8}
+    plain = render.render_strip(dict(base, sessions_dots_overflow=0), "#ffffff",
                                 "light", metrics=("session", "sessions"))
-    blocked = render.render_strip(dict(base, sessions_blocked=2), "#ffffff",
-                                  "light", metrics=("session", "sessions"))
-    assert blocked.size[0] > plain.size[0]
+    over = render.render_strip(dict(base, sessions_dots_overflow=4), "#ffffff",
+                               "light", metrics=("session", "sessions"))
+    assert over.size[0] > plain.size[0]
+
+
+def test_strip_zero_sessions_still_renders():
+    img = render.render_strip(
+        {"session_pct": 50, "session_color": "green", "sessions_count": 0,
+         "sessions_dots": [], "sessions_color": "grey"},
+        "#ffffff", "light", metrics=("session", "sessions"))
+    assert _is_image(img) and _positive_size(img)
 
 
 def test_strip_omits_live_group_without_a_count():

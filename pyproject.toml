@@ -51,7 +51,7 @@ py-modules = [
     "sessions_core", "focus", "autostart", "updates",
     # hook_relay is never imported — Claude Code spawns it as a script — but it
     # still has to be in the wheel or the hook command points at nothing.
-    "hooks", "hook_relay",
+    "hooks", "hook_relay", "hotkey",
 ]
 
 [tool.setuptools.dynamic]

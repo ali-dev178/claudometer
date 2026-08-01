@@ -51,7 +51,7 @@ Claude's Pro / Max / Team plans enforce a rolling **5‑hour session** limit and
 - 🔒 **Zero setup** — reuses your existing Claude login. Nothing to configure.
 - 🪶 **Featherweight** — ~0.03% CPU idle, ~50 MB RAM. You won't notice it.
 - 🔔 **Alerts** — optional desktop toast when you cross 80% / 90%.
-- 🟢 **Live sessions** — see every running `claude` session at a glance: which is working, which finished, and which is **blocked waiting on you**. Click one to jump to its terminal.
+- 🟢 **Live sessions** — a coloured dot per running `claude` session, right on the taskbar: which is working, which finished, and which is **blocked waiting on you**. One click — or a global shortcut — lands you in that terminal.
 - ⏭️ **Resume** — one click picks up interrupted work when your limit resets (auto‑resume optional).
 - 🖥️ **Out of the way** — auto‑hides over fullscreen movies/games (or set it to always show).
 - ⚙️ **Tunable** — a built‑in **settings panel** (no file editing) for theme, meters, alerts, accent, cost view, and more.
@@ -142,11 +142,17 @@ Running Claude in three terminals and losing track of which one is waiting on yo
 | 🟠 | **running a command** | a shell command specifically |
 | 🟢 | **done** | it replied; waiting for your next prompt |
 
-Blocked sessions sort to the top, each row shows how long it's held that state, and the taskbar strip carries a compact **Live N** count so you don't have to open anything.
+Blocked sessions sort to the top and each row shows how long it's held that state.
 
-- **Alerts** — a toast when a session needs you, finishes, or stays blocked too long. Pick which ones in Settings; several at once collapse into one summary rather than burying each other.
-- **Click a row** to bring that session's terminal to the front. **Right‑click** for open project folder, open transcript, copy session ID / path.
-- **Recently finished** sessions and a **today‑by‑project** usage split (with `show_cost`) live in the tray / menu‑bar menus.
+**You don't have to open anything.** The strip carries one coloured dot per session — `Live ● ● ●` — so a glance tells you how many are running and what each is doing. The moment one needs you, the leading dot turns **red** and stays red until it's dealt with, and the strip pulses once to catch your eye.
+
+- **Alerts** — a toast when a session needs you, finishes, or stays blocked too long. A *"needs you"* toast has **no timeout**: it waits until you click it or the session unblocks. Several at once collapse into one summary rather than burying each other.
+- **Click the toast** to land in that terminal — one click from notice to answering.
+- **A global shortcut** (`Ctrl+Alt+J` by default) jumps to whichever session is waiting, from any application.
+- **Click a row** to bring that session's terminal forward. **Right‑click** for open project folder, open transcript, copy session ID / path — and, on a blocked session, **Reply and go**, which puts `yes` / `no` / your own text on the clipboard and takes you there ready to paste.
+- **Recently finished** sessions and a **today‑by‑project** usage split (with `show_cost`) live in the tray / menu‑bar menus. In the tray, the icon itself turns red with a count while sessions are blocked.
+
+> **Why not answer from the widget?** Because it can't be done safely. A running session exposes no channel to send input into, and the only alternative — typing into the terminal — raises the *window*, not the tab. Several sessions routinely share one terminal, so a blind `y` could approve something in a different session. Claudometer gets you there instead, with the answer already on your clipboard.
 
 It reads `~/.claude/sessions` locally — the same registry Claude Code maintains — about once a second. Nothing is sent anywhere.
 
@@ -192,6 +198,7 @@ sessions_alert_on = ["waiting", "idle", "stuck"]   # + "gone"
 sessions_stuck_minutes = 10      # nudge if still blocked after this (0 = never)
 sessions_quiet_foreground = true # stay quiet for the terminal you're using
 sessions_hooks = false           # instant alerts (edits ~/.claude/settings.json; asks first)
+sessions_hotkey = "ctrl+alt+j"   # global shortcut to the waiting session ("" = off)
 ```
 
 Optional environment overrides:

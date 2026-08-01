@@ -52,10 +52,20 @@ class Widget:
         self._sess_enriched_at = 0.0
         self._sess_heartbeat_at = 0.0
         self._sess_known_ids = frozenset()
+        self._sess_sticky_pid = 0
+        self._sess_disp = {}
         self.toasts = []
+        self.pulses = 0
 
-    def _show_toast(self, pct, title, subtitle, color):
-        self.toasts.append((title, subtitle, color))
+    def _show_toast(self, pct, title, subtitle, color, duration=6500,
+                    on_click=None):
+        self.toasts.append((title, subtitle, color, duration, on_click))
+
+    def _pulse_strip(self, step=0):
+        self.pulses = getattr(self, "pulses", 0) + 1
+
+    _retire_sticky_toast = widget_bar.BarWidget._retire_sticky_toast
+    _toast = None
 
     _sessions_tick = widget_bar.BarWidget._sessions_tick
     _drain_hook_events = widget_bar.BarWidget._drain_hook_events
@@ -229,6 +239,81 @@ def test_a_block_during_a_fullscreen_app_is_reported_afterwards():
     w._hidden = False
     w._session_alerts([], blocked)
     assert len(w.toasts) == 1 and "waiting" in w.toasts[0][0].lower()
+
+
+# --------------------------------------------------------------------------- #
+# Attention: sticky toasts, the jump, and the pulse
+# --------------------------------------------------------------------------- #
+def _block(w, pid=7):
+    live = [_session(pid=pid, status=sc.WAITING, waiting_for="input needed")]
+    w._sess_tracker.update([_session(pid=pid, status=sc.BUSY)])
+    events = w._sess_tracker.update(live)
+    w._sess_disp = sc.format_sessions(live)
+    w._session_alerts(events, live)
+    return live
+
+
+def test_a_needs_you_toast_is_sticky_and_clickable():
+    w = Widget()
+    _block(w)
+    title, _sub, _color, duration, on_click = w.toasts[-1]
+    assert title == "Needs you"
+    assert duration is None, "a request must wait for you, not time out"
+    assert callable(on_click), "clicking it should take you to that terminal"
+
+
+def test_a_finished_toast_still_times_out():
+    w = Widget()
+    busy = [_session(status=sc.BUSY)]
+    w._sess_tracker.update(busy)
+    events = w._sess_tracker.update([_session(status=sc.IDLE)])
+    w._session_alerts(events, [_session(status=sc.IDLE)])
+    assert w.toasts[-1][3] == 6500
+    assert w.toasts[-1][4] is None
+
+
+def test_becoming_blocked_pulses_the_strip():
+    w = Widget()
+    _block(w)
+    assert w.pulses == 1
+
+
+def test_finishing_does_not_pulse():
+    w = Widget()
+    busy = [_session(status=sc.BUSY)]
+    w._sess_tracker.update(busy)
+    events = w._sess_tracker.update([_session(status=sc.IDLE)])
+    w._session_alerts(events, [_session(status=sc.IDLE)])
+    assert w.pulses == 0
+
+
+def test_the_sticky_toast_retires_when_the_session_unblocks():
+    closed = []
+
+    class T:
+        def close(self):
+            closed.append(1)
+
+    w = Widget()
+    _block(w, pid=7)
+    assert w._sess_sticky_pid == 7
+    w._toast = T()
+    w._retire_sticky_toast([_session(pid=7, status=sc.BUSY)])   # answered
+    assert w._sess_sticky_pid == 0 and closed == [1]
+
+
+def test_the_sticky_toast_survives_while_still_blocked():
+    closed = []
+
+    class T:
+        def close(self):
+            closed.append(1)
+
+    w = Widget()
+    _block(w, pid=7)
+    w._toast = T()
+    w._retire_sticky_toast([_session(pid=7, status=sc.WAITING)])
+    assert w._sess_sticky_pid == 7 and closed == []
 
 
 def test_alerts_can_be_switched_off():

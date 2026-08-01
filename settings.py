@@ -36,6 +36,7 @@ DEFAULTS = {
     "sessions_stuck_minutes": 10,     # nudge if blocked this long (0 = never)
     "sessions_quiet_foreground": True,  # no toast for the terminal you're using
     "sessions_hooks": False,          # instant alerts via Claude Code hooks (asks first)
+    "sessions_hotkey": "ctrl+alt+j",  # global shortcut to the blocked session ("" = off)
 }
 
 _VALID_THEMES = ("auto", "light", "dark")
@@ -219,6 +220,8 @@ def load() -> dict:
         cfg["sessions_max_rows"] = DEFAULTS["sessions_max_rows"]
     cfg["sessions_alerts"] = bool(cfg["sessions_alerts"])
     cfg["sessions_hooks"] = bool(cfg["sessions_hooks"])
+    hotkey = cfg["sessions_hotkey"]
+    cfg["sessions_hotkey"] = hotkey.strip() if isinstance(hotkey, str) else ""
     cfg["sessions_quiet_foreground"] = bool(cfg["sessions_quiet_foreground"])
     # Keep declaration order (waiting, idle, stuck, gone) rather than the order
     # the user happened to type, and drop anything unrecognized.
@@ -315,6 +318,9 @@ def to_toml(cfg: dict) -> str:
         "# Instant alerts via Claude Code hooks. Turning this on edits",
         "# ~/.claude/settings.json — the app shows the exact JSON and asks first.",
         f"sessions_hooks = {v('sessions_hooks')}",
+        "",
+        '# Global shortcut that jumps to whichever session needs you ("" = off).',
+        f"sessions_hotkey = {v('sessions_hotkey')}",
     ]
     extras = [k for k in cfg if k not in DEFAULTS]
     if extras:

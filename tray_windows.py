@@ -200,6 +200,7 @@ class TrayApp:
             tuple((r["label"], r["detail"], r["emoji"])
                   for r in disp.get("sessions_rows") or ()),
             disp.get("sessions_rows") is not None,
+            disp.get("sessions_blocked"),
             tuple((r["label"], r["detail"])
                   for r in disp.get("sessions_recent") or ()),
             tuple((r["project"], r["tokens"])
@@ -213,8 +214,15 @@ class TrayApp:
         if sig == self._last_sig:
             return
         self._last_sig = sig
-        self.icon.icon = render_icon(disp["face_pct"], disp["face_color"])
-        self.icon.title = merged["tooltip"]
+        # A blocked session outranks the usage number: usage is something to
+        # pace yourself against, a blocked session is something to go and do.
+        blocked = merged.get("sessions_blocked") or 0
+        if blocked:
+            self.icon.icon = render_icon(str(blocked), "red")
+            self.icon.title = f"Claude · {blocked} session(s) waiting on you"
+        else:
+            self.icon.icon = render_icon(disp["face_pct"], disp["face_color"])
+            self.icon.title = merged["tooltip"]
         self.icon.menu = self._build_menu(merged)
         self.icon.update_menu()
 

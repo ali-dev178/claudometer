@@ -295,6 +295,10 @@ def stuck_sessions(sessions, minutes: float, at_ms: Optional[int] = None):
 #: fixed-width card, so an unbounded list would run off the screen.
 DEFAULT_MAX_ROWS = 6
 
+#: Dots drawn on the taskbar strip before it falls back to "+N". The strip
+#: shares a crowded taskbar, so this stays small.
+DOT_CAP = 8
+
 # Plural-safe wording for the one-line summary, in the order it reads best:
 # what needs you first, then what is running, then what is finished.
 _SUMMARY_ORDER = ((WAITING, "needs you"), (SHELL, "in shell"),
@@ -413,10 +417,18 @@ def format_sessions(sessions, at_ms: Optional[int] = None,
 
     count = len(ordered)
     summary = summarize(ordered)
+    blocked = [s for s in ordered if s.status == WAITING]
     return {
         "sessions_rows": rows,
         "sessions_count": count,
-        "sessions_blocked": sum(1 for s in ordered if s.status == WAITING),
+        "sessions_blocked": len(blocked),
+        # One colour per session, already in display order, for the strip's
+        # at-a-glance dot row. Blocked sessions sort first, so they lead.
+        "sessions_dots": [s.color for s in ordered[:DOT_CAP]],
+        "sessions_dots_overflow": max(0, count - DOT_CAP),
+        # The session to jump to when you just want "the one that needs me".
+        "sessions_blocked_pid": blocked[0].pid if blocked else 0,
+        "sessions_blocked_label": oneline(blocked[0].label) if blocked else "",
         "sessions_overflow": max(0, count - len(shown)),
         "sessions_summary": summary,
         "sessions_color": overall_color(ordered),
