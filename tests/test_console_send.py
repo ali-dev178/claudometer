@@ -51,6 +51,14 @@ def test_clean_keeps_unicode():
 # --------------------------------------------------------------------------- #
 # send_text guards — nothing reaches a console without passing these
 # --------------------------------------------------------------------------- #
+#: These assert the ARGUMENT guards, which only run once send_text has got
+#: past "is this even Windows". Off Windows it returns before reaching them,
+#: which is correct behaviour and a different assertion.
+windows_only = pytest.mark.skipif(sys.platform != "win32",
+                                  reason="the guards being tested are Windows-only")
+
+
+@windows_only
 @pytest.mark.parametrize("text", ["", "   ", None, "\n\n"])
 def test_send_refuses_empty_text_when_not_submitting(text):
     ok, err = console_send.send_text(1234, text, submit=False)
@@ -66,6 +74,7 @@ def test_empty_text_with_submit_is_a_bare_enter(text):
     assert err != "nothing to send", err
 
 
+@windows_only
 @pytest.mark.parametrize("pid", [0, -1, None, "abc", ""])
 def test_send_refuses_a_bad_pid(pid):
     ok, err = console_send.send_text(pid, "yes")

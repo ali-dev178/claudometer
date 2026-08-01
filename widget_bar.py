@@ -1915,7 +1915,7 @@ class BarWidget:
         self._sess_tracker = sessions_core.SessionTracker()
         self._sess_disp = {}
         self._sess_extra = {}          # session_id -> enrichment fields
-        self._sess_enriched_at = 0.0
+        self._sess_enriched_at = None   # never, not "at zero" — see the drain
         self._sess_known_ids = frozenset()
         self._sess_alerts_on = cfg["sessions_alerts"]
         self._sess_alert_on = tuple(cfg["sessions_alert_on"])
@@ -1936,7 +1936,7 @@ class BarWidget:
         # otherwise a stale settings.json entry could keep feeding us events.
         self._sess_hooks_on = cfg["sessions_hooks"] and self._sessions_on
         self._sess_hook_notes = {}     # session_id -> latest hook message
-        self._sess_heartbeat_at = 0.0
+        self._sess_heartbeat_at = None
         if self._sess_hooks_on:
             # Reconcile on every start. The config saying "on" IS the prior
             # consent, and an install can go stale on its own: after the app
@@ -3118,6 +3118,7 @@ class BarWidget:
             ids = frozenset(s.session_id for s in live)
             now = time.monotonic()
             if ids != self._sess_known_ids or \
+                    self._sess_enriched_at is None or \
                     now - self._sess_enriched_at >= self.SESS_ENRICH_EVERY:
                 self._sess_known_ids = ids
                 self._sess_enriched_at = now
@@ -3214,7 +3215,13 @@ class BarWidget:
         # Tell the relay we're still here. Throttled — the relay only checks
         # for staleness in days, so a write per tick would be pure churn.
         now = time.monotonic()
-        if now - self._sess_heartbeat_at >= self.HEARTBEAT_EVERY:
+        # None means "never sent", not "sent at zero". time.monotonic() counts
+        # from boot, so on a machine that started minutes ago the difference
+        # from 0.0 is smaller than the interval and the first heartbeat was
+        # skipped — for the first five minutes of every uptime, on exactly the
+        # machines least likely to have one already.
+        if (self._sess_heartbeat_at is None
+                or now - self._sess_heartbeat_at >= self.HEARTBEAT_EVERY):
             self._sess_heartbeat_at = now
             claude_hooks.touch_heartbeat()
         for raw in claude_hooks.read_events():

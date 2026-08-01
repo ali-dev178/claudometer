@@ -49,8 +49,8 @@ class Widget:
         self._sess_disp = {}
         self._sess_extra = {}
         self._sess_hook_notes = {}
-        self._sess_enriched_at = 0.0
-        self._sess_heartbeat_at = 0.0
+        self._sess_enriched_at = None
+        self._sess_heartbeat_at = None
         self._sess_known_ids = frozenset()
         self._sess_sticky_pid = 0
         self._sess_disp = {}
@@ -160,6 +160,20 @@ def test_drain_consumes_and_writes_a_heartbeat():
     w._drain_hook_events()
     assert hooks.read_events() == []
     assert hooks.heartbeat_path().is_file()
+
+
+def test_the_first_heartbeat_is_sent_on_a_freshly_booted_machine(monkeypatch):
+    # time.monotonic() counts from boot, so a few minutes after startup it is
+    # SMALLER than the throttle interval. Comparing it against a 0.0 "never"
+    # sentinel therefore skipped the first heartbeat for the first five
+    # minutes of every uptime — on exactly the machines least likely to have
+    # written one already. CI caught this; a long-running desktop never would.
+    calls = []
+    monkeypatch.setattr(widget_bar.claude_hooks, "touch_heartbeat",
+                        lambda: calls.append(1))
+    monkeypatch.setattr(widget_bar.time, "monotonic", lambda: 12.0)
+    Widget(hooks_on=True)._drain_hook_events()
+    assert calls == [1], "a machine that booted 12 seconds ago still needs one"
 
 
 def test_heartbeat_is_throttled(monkeypatch):

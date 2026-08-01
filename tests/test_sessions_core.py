@@ -132,8 +132,16 @@ def test_project_is_basename():
     assert _session(cwd="/a/b/claude-widget").project == "claude-widget"
 
 
+@pytest.mark.skipif(sys.platform != "win32",
+                    reason="a backslash is a separator only on Windows — and "
+                           "elsewhere it is a legal character in a directory "
+                           "name, so treating it as one would be wrong")
 def test_project_handles_windows_separators_and_trailing_slash():
     assert _session(cwd="C:\\Personal Space\\widget\\").project == "widget"
+
+
+def test_project_handles_posix_separators_and_trailing_slash():
+    assert _session(cwd="/home/me/projects/widget/").project == "widget"
 
 
 def test_project_falls_back_to_cwd_when_no_basename():
