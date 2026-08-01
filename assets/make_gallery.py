@@ -226,9 +226,10 @@ def contrast_gallery():
                "Legible on whatever it lands on",
                "The palette is chosen by contrast, then each label is lifted to "
                "the WCAG AA ratio. Severity colours never change hue — red, "
-               "amber and green are the message: the numbers only go lighter or "
-               "darker, and the dots, too small to darken without becoming three "
-               "identical blobs, keep their colour and take a ring instead.",
+               "amber and green are the message: the numbers only go lighter "
+               "or darker, and the dots, too small to darken without becoming "
+               "three identical blobs, keep their colour and gain an edge in "
+               "that same colour when they would otherwise disappear.",
                label_w=230)
 
 
@@ -240,6 +241,14 @@ def toast_gallery():
         return render.render_toast(pct, title, sub, color, theme)
 
     items = [
+        ("A short prompt — answer it here",
+         render.render_toast(None, "Needs you",
+                             "claude-widget · run the test suite?", "red",
+                             "light", choices=("Yes", "No"))),
+        ("…or three, still decidable",
+         render.render_toast(None, "Needs you",
+                             "docs-site · where do the notes go?", "red",
+                             "dark", choices=("Top", "Inline", "Skip"))),
         ("A session needs you — waits until dealt with",
          toast(None, "Needs you", "Ship the release pipeline · input needed", "red")),
         ("Permission prompt, from the hook",

@@ -58,9 +58,16 @@ class Widget:
         self.toasts = []
         self.pulses = 0
 
+    _sess_answer_on = False          # the stub takes the no-console path
+    TOAST_CHOICES_MAX = widget_bar.BarWidget.TOAST_CHOICES_MAX
+    _DEMO_SCREEN = widget_bar.BarWidget._DEMO_SCREEN
+    _toast_choices = widget_bar.BarWidget._toast_choices
+
     def _show_toast(self, pct, title, subtitle, color, duration=6500,
-                    on_click=None):
+                    on_click=None, choices=(), on_choice=None):
         self.toasts.append((title, subtitle, color, duration, on_click))
+        self.toast_choices = tuple(choices)
+        self.toast_on_choice = on_choice
 
     def _pulse_strip(self, step=0):
         self.pulses = getattr(self, "pulses", 0) + 1
@@ -669,6 +676,100 @@ def test_the_tour_needs_a_blocked_session_to_answer():
     w._sess_disp = sc.format_sessions([_session(pid=1, status=sc.BUSY)])
     w._demo_answer(True)
     assert w.opened == []
+
+
+# --------------------------------------------------------------------------- #
+# Answering from the toast, for prompts short enough to decide from
+# --------------------------------------------------------------------------- #
+class Toasting(Polling):
+    _sess_answer_on = True
+    _sess_alerts_on = True
+    _hidden = False
+    _answer_win = None
+    _sess_quiet_fg = False
+    _toast_choices = widget_bar.BarWidget._toast_choices
+    _answer_from_toast = widget_bar.BarWidget._answer_from_toast
+
+
+SHORT_MENU = ["● I need to run the tests first.", "Run the test suite?",
+              "> 1. Yes", "  2. No",
+              "Enter to select · ↑/↓ to navigate · Esc to cancel"]
+LONG_MENU = ["● Which heading?", "> 1. First", "  2. Second", "  3. Third",
+             "  4. Fourth", "  5. Fifth",
+             "Enter to select · ↑/↓ to navigate · Esc to cancel"]
+
+
+def test_a_short_prompt_is_answerable_from_the_toast(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "can_send", lambda: True)
+    monkeypatch.setattr(widget_bar.console_send, "read_screen",
+                        lambda pid, **k: SHORT_MENU)
+    w = Toasting()
+    assert w._toast_choices(4242) == ("Yes", "No"), (
+        "'run the tests?' wants a yes, not a window")
+
+
+def test_a_long_menu_is_not_offered_on_the_toast(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "can_send", lambda: True)
+    monkeypatch.setattr(widget_bar.console_send, "read_screen",
+                        lambda pid, **k: LONG_MENU)
+    w = Toasting()
+    assert w._toast_choices(4242) == (), (
+        "three words on a card is not enough to choose between five options "
+        "— that is exactly the case the window is for")
+
+
+def test_nothing_is_offered_where_answering_is_impossible(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "can_send", lambda: False)
+    monkeypatch.setattr(widget_bar.console_send, "read_screen",
+                        lambda pid, **k: SHORT_MENU)
+    assert Toasting()._toast_choices(4242) == ()
+
+
+def test_nothing_is_offered_with_answering_switched_off(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "can_send", lambda: True)
+    monkeypatch.setattr(widget_bar.console_send, "read_screen",
+                        lambda pid, **k: SHORT_MENU)
+    w = Toasting()
+    w._sess_answer_on = False
+    assert w._toast_choices(4242) == ()
+
+
+def test_a_toast_choice_sends_that_option_number(monkeypatch):
+    sent = []
+    monkeypatch.setattr(widget_bar.console_send, "send_text",
+                        lambda pid, text, **k: sent.append((pid, text)) or (True, None))
+    w = Toasting()
+    w._sess_disp = _blocked_disp(pid=4242)
+    w._answer_from_toast(4242, 1)          # the SECOND button
+    assert sent == [(4242, "2")], "buttons are zero-based, the menu is not"
+
+
+def test_a_failed_toast_answer_says_so(monkeypatch):
+    monkeypatch.setattr(widget_bar.console_send, "send_text",
+                        lambda *a, **k: (False, "the session refused the input"))
+    w = Toasting()
+    w._sess_disp = _blocked_disp(pid=4242)
+    w._answer_from_toast(4242, 0)
+    assert w.notes and "refused" in w.notes[0]
+
+
+def test_a_coalesced_alert_offers_no_buttons(monkeypatch):
+    # "3 sessions need you" has no single question to put buttons on.
+    monkeypatch.setattr(widget_bar.console_send, "can_send", lambda: True)
+    monkeypatch.setattr(widget_bar.console_send, "read_screen",
+                        lambda pid, **k: SHORT_MENU)
+    w = Toasting()
+    w.toast_choices = ("unset",)
+    blocked = [_session(session_id=str(i), pid=100 + i, status=sc.WAITING,
+                        waiting_for="input needed") for i in range(3)]
+    w._sess_disp = sc.format_sessions(blocked)
+    # Transition.kind is appeared|gone|status; "waiting" is what alert_for
+    # derives FROM a status change, not what you hand it.
+    w._session_alerts(
+        [sc.Transition("status", s, sc.BUSY, sc.WAITING) for s in blocked],
+        blocked)
+    assert w.toast_choices == (), (
+        "one card cannot answer three different questions")
 
 
 def test_the_demo_screen_parses_into_a_real_prompt():

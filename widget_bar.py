@@ -548,6 +548,7 @@ class AnswerWindow:
         self._geom_settled = False  # …seen honoured, so deviations are theirs
         self._user_sized = False   # …after which the size is theirs, not ours
         self._touched = time.monotonic()   # last sign of life from the user
+        self._typing = False       # is the caret in the box? see <FocusIn>
         self.alive = True
         self.readable = True
         self.row = dict(row)
@@ -572,6 +573,10 @@ class AnswerWindow:
         # every keystroke and click anywhere in the window.
         self.top.bind("<Key>", self._touch, add="+")
         self.top.bind("<Button-1>", self._touch, add="+")
+        # 1–9 pick an option, so the whole thing can be done from the keyboard:
+        # the global shortcut opens this window, and the number answers it.
+        for digit in range(1, 10):
+            self.top.bind(str(digit), self._pick_by_key, add="+")
 
         pad = tk.Frame(self.top, bg=bg)
         pad.pack(fill="both", expand=True, padx=16, pady=12)
@@ -624,6 +629,11 @@ class AnswerWindow:
                                font=("Segoe UI", 10))
         self._entry.pack(side="left", fill="x", expand=True, ipady=5)
         self._entry.bind("<Return>", lambda e: self._send(self.var.get()))
+        # Tracked rather than asked for: focus_get() reports nothing while the
+        # window is unmapped, and "is the caret in the box" decides whether a
+        # digit is a choice or a character.
+        self._entry.bind("<FocusIn>", lambda e: setattr(self, "_typing", True))
+        self._entry.bind("<FocusOut>", lambda e: setattr(self, "_typing", False))
         self._send_btn = tk.Button(
             entry_row, text="Send", command=lambda: self._send(self.var.get()),
             bg=T["accent"], fg="#ffffff", activebackground=T["accent"],
@@ -666,7 +676,7 @@ class AnswerWindow:
         try:
             self.top.lift()
             self.top.focus_force()
-            self._entry.focus_set()
+            self._focus_where_it_is_useful()
         except Exception:
             pass
 
@@ -941,6 +951,34 @@ class AnswerWindow:
             pass
 
     # -- actions ----------------------------------------------------------- #
+    def _focus_where_it_is_useful(self):
+        """Focus the box when you'd type, the window when you'd press a number.
+
+        Putting the caret in the entry unconditionally means every digit you
+        press goes into the box, so the number keys — the fastest way to
+        answer a menu — would never once fire.
+        """
+        try:
+            if self.row.get("options"):
+                self.top.focus_set()
+            else:
+                self._entry.focus_set()
+        except Exception:
+            pass
+
+    def _pick_by_key(self, event):
+        """1–9 answers the menu, unless you're typing a message."""
+        if self._typing:
+            return                          # they're writing, not choosing
+        options = list(self.row.get("options") or [])
+        try:
+            number = int(event.char)
+        except (TypeError, ValueError):
+            return
+        if 1 <= number <= len(options):
+            self._pick(number)
+            return "break"
+
     def _pick(self, number):
         """Answer with a menu number, having checked the menu still says that.
 
@@ -1012,11 +1050,13 @@ class Toast:
     """A small auto-dismissing alert card near the tray."""
 
     def __init__(self, root, theme, pct, title, subtitle, color_name, duration=6500,
-                 on_close=None, on_click=None):
+                 on_close=None, on_click=None, choices=(), on_choice=None):
         self._on_close = on_close
         # A blocked session is a request, not an announcement — its toast stays
         # until it's dealt with (duration=None) instead of timing out.
         self._on_click = on_click
+        self._on_choice = on_choice
+        self._hit = []
         self.top = tk.Toplevel(root)
         self.top.overrideredirect(True)
         try:
@@ -1024,7 +1064,9 @@ class Toast:
         except Exception:
             pass
         key = _make_transparent(self.top, theme)
-        img = _round_alpha(render.render_toast(pct, title, subtitle, color_name, theme), 14)
+        img = _round_alpha(render.render_toast(pct, title, subtitle, color_name,
+                                               theme, choices=tuple(choices),
+                                               hit=self._hit), 14)
         self._photo = ImageTk.PhotoImage(img)
         w, h = img.size
         c = tk.Canvas(self.top, width=w, height=h, bg=key, highlightthickness=0, bd=0)
@@ -1041,7 +1083,19 @@ class Toast:
         self._closed = False
         self._after = self.top.after(duration, self.close) if duration else None
 
-    def _clicked(self, _e=None):
+    def _clicked(self, event=None):
+        # A click on one of the answer buttons answers; anywhere else on the
+        # card still does what the whole toast has always done.
+        if event is not None and self._on_choice:
+            for index, x0, y0, x1, y1 in self._hit:
+                if x0 <= event.x <= x1 and y0 <= event.y <= y1:
+                    action, self._on_choice = self._on_choice, None
+                    self.close()
+                    try:
+                        action(index)
+                    except Exception:
+                        _log_exc()
+                    return
         action = self._on_click
         self.close()
         if action:
@@ -2372,7 +2426,7 @@ class BarWidget:
         self._toast = None
 
     def _show_toast(self, pct, title, subtitle, color, duration=6500,
-                    on_click=None):
+                    on_click=None, choices=(), on_choice=None):
         if self._hidden:
             return
         try:
@@ -2380,9 +2434,44 @@ class BarWidget:
                 self._toast.close()
             self._toast = Toast(self.root, self._theme, pct, title, subtitle, color,
                                 duration=duration, on_close=self._clear_toast,
-                                on_click=on_click)
+                                on_click=on_click, choices=choices,
+                                on_choice=on_choice)
         except Exception:
             _log_exc()
+
+    #: Longest menu worth putting on a toast. Three words on a card is not
+    #: enough to choose between six options, and the window is one click away.
+    TOAST_CHOICES_MAX = 3
+
+    def _toast_choices(self, pid):
+        """What this blocked session could be answered with, if it's short.
+
+        Read once, when the toast is built — not on a timer. The point is to
+        deal with "run the tests?" without opening anything; a longer menu is
+        exactly the case that deserves the window.
+        """
+        if not (pid and self._sess_answer_on and console_send.can_send()):
+            return ()
+        if self._demo:
+            prompt = sessions_core.parse_console_prompt(list(self._DEMO_SCREEN))
+        else:
+            try:
+                prompt = sessions_core.parse_console_prompt(
+                    console_send.read_screen(pid))
+            except Exception:
+                _log_exc()
+                return ()
+        options = list((prompt or {}).get("options") or [])
+        if not 2 <= len(options) <= self.TOAST_CHOICES_MAX:
+            return ()
+        return tuple(options)
+
+    def _answer_from_toast(self, pid, index):
+        """Send the option the toast offered, then say so on the strip."""
+        row = self._row_for_pid(pid) or {"pid": pid}
+        ok, error = self._send_answer(row, str(index + 1))
+        if not ok:
+            self._notify_session(error or "Couldn't send that.")
 
     # -- attention ---------------------------------------------------------- #
     #: Half-cycles of the strip pulse, and how long each lasts.
@@ -3211,13 +3300,23 @@ class BarWidget:
         needs_you = merged["kind"] in ("waiting", "stuck")
         jump_pid = merged["pid"] or (self._sess_disp.get("sessions_blocked_pid") or 0)
         self._sess_sticky_pid = jump_pid if needs_you else 0
+        # Offer the answer on the toast itself when the prompt is short enough
+        # to decide from three words. Only for a single session's alert: a
+        # coalesced "3 sessions need you" has no one question to put buttons on.
+        choices = ()
+        if needs_you and jump_pid and merged.get("pid"):
+            choices = self._toast_choices(jump_pid)
         self._show_toast(
             None, merged["title"], merged["subtitle"], merged["color"],
             # A request waits for you; an announcement doesn't need to.
             duration=None if needs_you else 6500,
             on_click=(lambda pid=jump_pid: self._act_on_session(
                 self._row_for_pid(pid) or {"pid": pid}))
-            if needs_you and jump_pid else None)
+            if needs_you and jump_pid else None,
+            choices=choices,
+            on_choice=((lambda index, pid=jump_pid:
+                        self._answer_from_toast(pid, index))
+                       if choices else None))
         if needs_you:
             self._pulse_strip()
 

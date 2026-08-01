@@ -32,7 +32,7 @@ Claude's Pro / Max / Team plans enforce a rolling **5‑hour session** limit and
 > ### 🖱️ Put it anywhere
 > The strip is a **free‑floating, always‑on‑top** widget — not locked to the taskbar. Drag it to a screen edge, over a window, or onto a second monitor, and it **remembers the spot**.
 >
-> Wherever it lands, it stays **readable**: it picks the light or dark palette by contrast against what's behind it, then lifts each label the rest of the way to the WCAG AA ratio if that isn't enough — on a saturated wallpaper the theme greys alone measure about 1.2:1. Severity colours never change **hue**, because red, amber and green *are* the message: the numbers only go lighter or darker, and the dots — too small to darken without becoming three identical blobs — keep their colour and take a thin ring instead. The background is never touched: blending into the taskbar is the point.
+> Wherever it lands, it stays **readable**: it picks the light or dark palette by contrast against what's behind it, then lifts each label the rest of the way to the WCAG AA ratio if that isn't enough — on a saturated wallpaper the theme greys alone measure about 1.2:1. Severity colours never change **hue**, because red, amber and green *are* the message: the numbers only go lighter or darker, and the dots keep their colour outright. The background is never touched: blending into the taskbar is the point.
 > *(On **macOS** the native menu‑bar item is the default; the same floating widget is available with `app.py bar` — see [Platform support](#platform-support).)*
 
 <p align="center"><img src="assets/anywhere.png" alt="Drag the Windows strip anywhere on screen — not just the taskbar" width="780"></p>
@@ -98,7 +98,7 @@ Each meter combination, each severity, the live‑session dot row filling up and
 
 The strip samples the colour behind it and paints itself in that, so it can end up on anything. It picks the palette by contrast, then lifts each label to the WCAG AA ratio — on a saturated wallpaper the theme greys alone measure about **1.2:1**, which isn't dim, it's absent.
 
-Severity colours are handled separately, because red, amber and green *are* the message. Recolouring them the way labels are recoloured turns all three into the same near-black on a grey taskbar, which destroys the meaning to fix the legibility. So the **numbers** move along lightness only — a deeper amber is still obviously amber — and the **dots**, at four pixels too small to darken without becoming three identical blobs, keep their colour at full strength and take a thin ring instead.
+Severity colours are handled separately, because red, amber and green *are* the message. Recolouring them the way labels are recoloured turns all three into the same near-black on a grey taskbar, which destroys the meaning to fix the legibility. So the **numbers** move along lightness only — a deeper amber is still obviously amber — and the **dots**, too small to darken without becoming three identical blobs, keep their colour and gain an edge in that same colour when they'd otherwise disappear.
 
 <p align="center"><img src="assets/gallery-contrast.png" alt="The strip staying legible on eight different backgrounds" width="640"></p>
 
@@ -189,6 +189,7 @@ Blocked sessions sort to the top and each row shows how long it's held that stat
 **You don't have to open anything.** The strip carries one coloured dot per session — `Live ● ● ●` — so a glance tells you how many are running and what each is doing. The moment one needs you, the leading dot turns **red** and stays red until it's dealt with, and the strip pulses once to catch your eye.
 
 - **Alerts** — a toast when a session needs you, finishes, or stays blocked too long. A *"needs you"* toast has **no timeout**: it waits until you click it or the session unblocks. Several at once collapse into one summary rather than burying each other.
+- **Answer from the toast.** When the prompt is short enough to decide from — *"run the test suite?"* — its choices appear on the toast itself, so a yes costs one click and opens nothing. Longer menus deliberately don't: three words on a card isn't enough to choose between six options, and that's exactly what the window is for.
 - **Click the toast** to answer the session that raised it, without leaving what you're doing.
 - **A global shortcut** (`Ctrl+Alt+J` by default) goes to whichever session is waiting, from any application.
 - **Click a row** to answer a blocked session, or to bring any other session's terminal forward. **Right‑click** for open project folder, open transcript, copy session ID / path, and *Reply and go*.
@@ -198,7 +199,7 @@ Blocked sessions sort to the top and each row shows how long it's held that stat
 
 <p align="center"><img src="assets/answer.png" alt="Answering a blocked session from the widget" width="760"></p>
 
-Clicking a blocked session opens it in a small window showing **the question it is actually asking** and its choices as buttons. Pick one and it goes straight to that session.
+Clicking a blocked session opens it in a small window showing **the question it is actually asking** and its choices as buttons. Pick one and it goes straight to that session — with the mouse, or by pressing its **number**. The global shortcut opens the window and `1`–`9` answers it, so a blocked session can be dealt with without touching the mouse at all. (Digits go into the message box instead once you click into it, since at that point you're writing rather than choosing.)
 
 The question comes off the session's own screen, because that is the only place it exists — Claude Code's transcript records a tool call *after* it has been answered, so while a session is waiting the transcript doesn't know what it asked.
 

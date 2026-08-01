@@ -358,6 +358,46 @@ def test_nothing_said_yet_shows_no_transcript(harness):
 
 
 # --------------------------------------------------------------------------- #
+# Answering from the keyboard
+# --------------------------------------------------------------------------- #
+class _Key:
+    def __init__(self, char):
+        self.char = char
+
+
+def test_a_number_key_picks_that_option(harness):
+    h = harness([_state()])
+    h.win._pick_by_key(_Key("2"))
+    assert h.sent == [(4242, "2", True)]
+
+
+def test_a_menu_does_not_park_the_caret_in_the_box(harness):
+    h = harness([_state()])
+    assert h.win._typing is False, (
+        "with the caret in the box every digit goes into the box, so the "
+        "number keys — the fastest way to answer — would never fire")
+
+
+def test_typing_a_digit_into_the_box_is_not_a_choice(harness):
+    h = harness([_state()])
+    h.win._typing = True                 # as <FocusIn> on the box would set it
+    h.win._pick_by_key(_Key("2"))
+    assert h.sent == [], "they are writing '2 files', not choosing option 2"
+
+
+def test_a_number_past_the_end_of_the_menu_does_nothing(harness):
+    h = harness([_state()])              # three options
+    h.win._pick_by_key(_Key("7"))
+    assert h.sent == []
+
+
+def test_a_number_with_no_menu_does_nothing(harness):
+    h = harness([_state(CHAT, row=_row(status=sc.IDLE))])
+    h.win._pick_by_key(_Key("1"))
+    assert h.sent == []
+
+
+# --------------------------------------------------------------------------- #
 # Retiring itself once there is nothing left to answer
 # --------------------------------------------------------------------------- #
 def _stale(win, seconds=None):

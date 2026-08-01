@@ -725,6 +725,50 @@ def test_readable_rescues_every_label_colour_on_every_background():
                     f"{key} on {bg} in the {theme} theme is {ratio:.2f}:1")
 
 
+# --------------------------------------------------------------------------- #
+# A toast you can answer from
+# --------------------------------------------------------------------------- #
+def test_a_toast_without_choices_is_the_size_it_always_was():
+    plain = render.render_toast(None, "Needs you", "sub", "red", "light")
+    assert plain.size == (322, 70)
+
+
+def test_choices_make_the_toast_taller_not_wider():
+    tall = render.render_toast(None, "Needs you", "sub", "red", "light",
+                               choices=("Yes", "No"))
+    assert tall.size[0] == 322 and tall.size[1] > 70
+
+
+def test_the_hit_map_covers_the_buttons_and_nothing_else():
+    hit = []
+    img = render.render_toast(None, "Needs you", "sub", "red", "light",
+                              choices=("Yes", "No"), hit=hit)
+    assert [i for i, *_ in hit] == [0, 1]
+    for index, x0, y0, x1, y1 in hit:
+        assert 0 <= x0 < x1 <= img.width, f"button {index} is off the card"
+        assert 0 <= y0 < y1 <= img.height
+        assert y0 >= 70, "the buttons sit below the message, not over it"
+    (_i0, ax0, _ay0, ax1, _ay1), (_i1, bx0, *_rest) = hit
+    assert ax1 <= bx0, "the two buttons must not overlap"
+
+
+def test_three_choices_each_get_their_own_target():
+    hit = []
+    render.render_toast(None, "Needs you", "sub", "red", "light",
+                        choices=("Top", "Inline", "Skip"), hit=hit)
+    assert len(hit) == 3
+    centres = [(x0 + x1) // 2 for _i, x0, _y0, x1, _y1 in hit]
+    assert centres == sorted(centres) and len(set(centres)) == 3
+
+
+def test_a_long_choice_is_elided_rather_than_overflowing():
+    hit = []
+    img = render.render_toast(
+        None, "Needs you", "sub", "red", "light",
+        choices=("Call them out at the very top of the page", "No"), hit=hit)
+    assert _is_image(img) and len(hit) == 2
+
+
 def test_keeping_hue_leaves_a_visible_colour_alone():
     assert render.keeping_hue("#e5484d", "#ffffff") == "#e5484d"
 

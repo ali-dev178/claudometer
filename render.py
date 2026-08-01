@@ -405,7 +405,7 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
         if dots:
             # One dot per session, coloured by its state — readable without
             # reading. Blocked sessions sort first, so red leads.
-            f_dot = _font("reg", 13 * S)
+            f_dot = _font("reg", 15 * S)     # a touch larger than the labels
             for i, color in enumerate(dots):
                 g.append(("●" + (" " if i < len(dots) - 1 else ""),
                           f_dot, sev_color(T, color), "dot"))
@@ -466,9 +466,15 @@ def render_strip(disp, bg_hex, theme, scale=3, metrics=("session", "weekly")):
             # Every glyph passes through here, the one place that knows both
             # the colour and what it will sit on.
             if kind == "dot":
+                # The ring is the dot's OWN colour, darkened or lightened
+                # until it separates from the background. Black or white
+                # reads as a hard outline drawn around the dot; this reads as
+                # the edge of the dot itself, and keeps the row's palette.
+                # When the fill already contrasts, the two match and there is
+                # no visible ring at all.
                 d.text((x, cy), t, font=f, fill=c, anchor="lm",
-                       stroke_width=max(1, round(S * 0.6)),
-                       stroke_fill=outline_for(bg_hex))
+                       stroke_width=max(1, round(S * 0.5)),
+                       stroke_fill=keeping_hue(c, bg_hex))
             elif kind == "sev":
                 # Lighter or darker only: which colour it is IS the message.
                 d.text((x, cy), t, font=f, fill=keeping_hue(c, bg_hex),
@@ -706,10 +712,21 @@ def render_popover(disp, theme, scale=3):
 # --------------------------------------------------------------------------- #
 # Threshold alert toast
 # --------------------------------------------------------------------------- #
-def render_toast(pct, title, subtitle, color_name, theme, scale=3):
+def render_toast(pct, title, subtitle, color_name, theme, scale=3,
+                 choices=(), hit=None):
+    """The alert card. With *choices*, it also answers.
+
+    A blocked session's toast is the first thing you see and, for a short
+    prompt, everything you need: "run the tests?" wants a yes, not a window.
+    Passing two or three choices adds a row of buttons and fills *hit* with
+    ``(index, x0, y0, x1, y1)`` rectangles in FINAL pixels for the caller to
+    hit-test. Longer menus are deliberately not offered here — three words on
+    a toast is not enough to choose between six options, and the window is one
+    click away.
+    """
     T = THEMES.get(theme, THEMES["light"])
     S = scale
-    W, H = 322, 70
+    W, H = 322, (70 + 34 if choices else 70)
     Ws, Hs = W * S, H * S
     base = Image.new("RGB", (Ws, Hs), T["key"])
     grad = _vgrad(Ws, Hs, T["panel_top"], T["panel_bot"])
@@ -737,6 +754,24 @@ def render_toast(pct, title, subtitle, color_name, theme, scale=3):
     ft, fs = _font("sb", 13 * S), _font("reg", 11 * S)
     d.text((tx, 26 * S), _elide(d, title, ft, avail), font=ft, fill=T["neutral"], anchor="lm")
     d.text((tx, 45 * S), _elide(d, subtitle, fs, avail), font=fs, fill=T["dim"], anchor="lm")
+
+    if choices:
+        fb = _font("sb", 11 * S)
+        pad_x, gap = 14 * S, 8 * S
+        top, height = 70 * S, 26 * S
+        span = (W * S - pad_x * 2 - gap * (len(choices) - 1)) / len(choices)
+        for index, label in enumerate(choices):
+            x0 = pad_x + index * (span + gap)
+            primary = index == 0
+            d.rounded_rectangle([x0, top, x0 + span, top + height],
+                                radius=7 * S,
+                                fill=T["accent"] if primary else T["track"])
+            d.text((x0 + span / 2, top + height / 2),
+                   _elide(d, label, fb, span - 12 * S), font=fb,
+                   fill="#ffffff" if primary else T["neutral"], anchor="mm")
+            if hit is not None:
+                hit.append((index, int(x0 / S), int(top / S),
+                            int((x0 + span) / S), int((top + height) / S)))
     return base.resize((W, H), Image.LANCZOS)
 
 
