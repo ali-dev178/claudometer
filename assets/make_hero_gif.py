@@ -33,6 +33,11 @@ import make_assets     # noqa: E402  (reuse popover_rgba / place_card / radial /
 
 OUT = os.path.dirname(os.path.abspath(__file__))
 THEME = "light"
+#: What the strip actually ships with. render_strip defaults to the two usage
+#: meters, so leaving this off silently drops the live-session dots — the
+#: popover keys off the session data directly and shows them either way, which
+#: is exactly how the strip came to be missing them while the tour looked fine.
+METRICS = ("session", "weekly", "sessions")
 W, H = 1040, 640
 TB_H = 50
 TB_HEX = "#f4f6fa"
@@ -131,7 +136,13 @@ def _backdrop():
     d.rectangle([0, H - TB_H, W, H], fill=TB_HEX)
     d.line([0, H - TB_H, W, H - TB_H], fill=(0, 0, 0, 18), width=1)
     icons = ["#3b6fd6", "#5c636e", "#e5a100", "#2ea043", "#d97757", "#8250df", "#0aa2c0"]
-    x0 = W // 2 - (len(icons) * 44) // 2
+    # Centred, but never closer than a comfortable gap to the widget. The
+    # strip grew when the live-session dots went in and the cluster, which
+    # knew nothing about that, ended up touching the last dot.
+    widest = max(render.render_strip(d, TB_HEX, THEME, scale=3,
+                                     metrics=METRICS).width
+                 for d in (disp(41, 21, live=BLOCKED), disp(100, 54)))
+    x0 = max(W // 2 - (len(icons) * 44) // 2, 26 + widest + 46)
     iy = H - TB_H + (TB_H - 25) // 2
     for i, c in enumerate(icons):
         d.rounded_rectangle([x0 + i * 44, iy, x0 + i * 44 + 25, iy + 25], radius=6, fill=c)
@@ -182,21 +193,24 @@ def compose(d_disp, *, pop_alpha=255, pop_dy=0, toast=None, toast_alpha=255,
     im = BG.copy()
     if strip_xy is None:
         # normal: docked on the taskbar
-        strip = render.render_strip(d_disp, TB_HEX, THEME, scale=3).convert("RGBA")
+        strip = render.render_strip(d_disp, TB_HEX, THEME, scale=3,
+                                    metrics=METRICS).convert("RGBA")
         im.alpha_composite(strip, _strip_home(strip.height))
     else:
         # dragged onto the desktop: the real widget samples the pixels under it
         # so it reads as floating text — mimic that by sampling the backdrop, and
         # leave a faint "home" ghost on the taskbar.
         if ghost:
-            g = render.render_strip(d_disp, TB_HEX, THEME, scale=3).convert("RGBA")
+            g = render.render_strip(d_disp, TB_HEX, THEME, scale=3,
+                                    metrics=METRICS).convert("RGBA")
             g.putalpha(g.split()[3].point(lambda p: int(p * 0.30)))
             im.alpha_composite(g, _strip_home(g.height))
         x, y = int(strip_xy[0]), int(strip_xy[1])
         sx = max(0, min(W - 1, x + 42))
         sy = max(0, min(H - 1, y + 14))
         bg_hex = "#%02x%02x%02x" % BG.getpixel((sx, sy))[:3]
-        strip = render.render_strip(d_disp, bg_hex, THEME, scale=3).convert("RGBA")
+        strip = render.render_strip(d_disp, bg_hex, THEME, scale=3,
+                                    metrics=METRICS).convert("RGBA")
         sh, pad = make_assets.drop_shadow(strip.size, 8, 15, 55)
         im.alpha_composite(sh, (x - pad, y - pad + 6))
         im.alpha_composite(strip, (x, y))
@@ -350,7 +364,7 @@ hold(compose(OFFLINE, caption="Graceful when you're offline"), 1600)
 # 8 ── drag it anywhere ------------------------------------------------------
 capd = "Drag it anywhere — it remembers the spot"
 dd = disp(41, 21)
-_HOME = _strip_home(render.render_strip(dd, TB_HEX, THEME, scale=3).height)
+_HOME = _strip_home(render.render_strip(dd, TB_HEX, THEME, scale=3, metrics=METRICS).height)
 _B, _C = (536, 250), (770, 150)
 
 
@@ -372,7 +386,7 @@ hold(_drag(_C), 1100)
 
 # 8b ── open the details from the new spot (popover follows the widget) -------
 capo = "Open the details right where it sits"
-_striph = render.render_strip(dd, TB_HEX, THEME, scale=3).height
+_striph = render.render_strip(dd, TB_HEX, THEME, scale=3, metrics=METRICS).height
 _popw = make_assets.popover_rgba(dd, THEME).width
 _anchor = (min(int(_C[0]), W - _popw - 20), int(_C[1]) + _striph + 10)
 
