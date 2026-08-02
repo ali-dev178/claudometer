@@ -30,6 +30,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import render          # noqa: E402
 import sessions_core as sc   # noqa: E402
 import make_assets     # noqa: E402  (reuse popover_rgba / place_card / radial / drop_shadow)
+# The real placement rule, rather than constants that drift from it: the
+# popover aligns with the strip's LEFT edge and sits just above it, and hand
+# tuning had it floating 30px high and 48px to the right of where the app
+# actually puts it. _popover_xy is pure arithmetic.
+from widget_bar import _popover_xy    # noqa: E402
 
 OUT = os.path.dirname(os.path.abspath(__file__))
 THEME = "light"
@@ -218,8 +223,15 @@ def compose(d_disp, *, pop_alpha=255, pop_dy=0, toast=None, toast_alpha=255,
         pop = make_assets.popover_rgba(d_disp, THEME)
         if pop_at is not None:                 # anchored to a dragged strip
             px, py = int(pop_at[0]), int(pop_at[1]) + pop_dy
-        else:                                  # default: docked above the taskbar
-            px, py = POP_X, POP_BOTTOM - pop.height + pop_dy
+        else:
+            # Docked: exactly where the app would put it — left edge aligned
+            # with the strip, bottom tucked just above it.
+            sh = render.render_strip(d_disp, TB_HEX, THEME, scale=3,
+                                     metrics=METRICS).height
+            ax, at = _strip_home(sh)
+            px, py = _popover_xy(ax, at, at + sh, pop.width, pop.height,
+                                 (0, 0, W, H - TB_H))
+            py += pop_dy
         make_assets.place_card(im, _fade(pop, pop_alpha) if pop_alpha < 255 else pop,
                                px, py)
     if toast is not None and toast_alpha > 0:
@@ -364,8 +376,13 @@ hold(compose(OFFLINE, caption="Graceful when you're offline"), 1600)
 # 8 ── drag it anywhere ------------------------------------------------------
 capd = "Drag it anywhere — it remembers the spot"
 dd = disp(41, 21)
-_HOME = _strip_home(render.render_strip(dd, TB_HEX, THEME, scale=3, metrics=METRICS).height)
-_B, _C = (536, 250), (770, 150)
+_dragged = render.render_strip(dd, TB_HEX, THEME, scale=3, metrics=METRICS)
+_HOME = _strip_home(_dragged.height)
+# Kept on screen by the strip's real width rather than a number that was right
+# before the live-session dots made it wider — at the old target its last dot
+# hung off the right edge of the frame.
+_B = (536, 250)
+_C = (min(770, W - _dragged.width - 26), 150)
 
 
 def _drag(xy):
@@ -387,8 +404,12 @@ hold(_drag(_C), 1100)
 # 8b ── open the details from the new spot (popover follows the widget) -------
 capo = "Open the details right where it sits"
 _striph = render.render_strip(dd, TB_HEX, THEME, scale=3, metrics=METRICS).height
-_popw = make_assets.popover_rgba(dd, THEME).width
-_anchor = (min(int(_C[0]), W - _popw - 20), int(_C[1]) + _striph + 10)
+_pop = make_assets.popover_rgba(dd, THEME)
+# Same rule as the docked case, anchored to where the widget was dragged to.
+# Up here there is no room above, so it drops below — which is the app's own
+# behaviour, not a special case for the tour.
+_anchor = _popover_xy(int(_C[0]), int(_C[1]), int(_C[1]) + _striph,
+                      _pop.width, _pop.height, (0, 0, W, H - TB_H))
 
 
 def _drag_open(alpha, dy=0):
