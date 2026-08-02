@@ -318,19 +318,43 @@ def alerts_showcase():
 def strip_states():
     """The strip's color-coded severity plus the graceful offline state."""
     now = datetime.now(timezone.utc)
+    # The usage rows carry sessions too — the live-session group ships ON by
+    # default, so a picture of "what the strip contains" that leaves it out is
+    # a picture of a configuration almost nobody runs. None of them is BLOCKED,
+    # though: a blocked session deliberately forces the leading dot red, which
+    # would put a red dot on the row labelled "Comfortable".
+    calm = sessions_core.format_sessions(sample_sessions()[1:])
+    blocked = sessions_core.format_sessions(sample_sessions())
     states = [
-        ({"session_pct": 22, "session_color": "green", "weekly_pct": 6, "weekly_color": "green",
-          "session_resets_at": now + timedelta(hours=3, minutes=40)}, "Comfortable"),
-        ({"session_pct": 61, "session_color": "amber", "weekly_pct": 18, "weekly_color": "green",
-          "session_resets_at": now + timedelta(hours=1, minutes=22)}, "Getting close"),
-        ({"session_pct": 94, "session_color": "red", "weekly_pct": 42, "weekly_color": "amber",
-          "session_resets_at": now + timedelta(minutes=48)}, "Near the limit"),
-        ({"session_pct": 100, "session_color": "red", "weekly_pct": 42, "weekly_color": "amber",
-          "session_resets_at": now + timedelta(minutes=6)}, "Limit reached"),
+        (dict({"session_pct": 22, "session_color": "green", "weekly_pct": 6,
+               "weekly_color": "green",
+               "session_resets_at": now + timedelta(hours=3, minutes=40)},
+              **calm), "Comfortable"),
+        (dict({"session_pct": 61, "session_color": "amber", "weekly_pct": 18,
+               "weekly_color": "green",
+               "session_resets_at": now + timedelta(hours=1, minutes=22)},
+              **calm), "Getting close"),
+        (dict({"session_pct": 94, "session_color": "red", "weekly_pct": 42,
+               "weekly_color": "amber",
+               "session_resets_at": now + timedelta(minutes=48)},
+              **calm), "Near the limit"),
+        (dict({"session_pct": 100, "session_color": "red", "weekly_pct": 42,
+               "weekly_color": "amber",
+               "session_resets_at": now + timedelta(minutes=6)},
+              **calm), "Limit reached"),
+        (dict({"session_pct": 61, "session_color": "amber", "weekly_pct": 18,
+               "weekly_color": "green",
+               "session_resets_at": now + timedelta(hours=1, minutes=22)},
+              **blocked), "A session needs you"),
+        # Deliberately WITHOUT sessions: the offline text only renders when
+        # there is nothing else to show, so adding a dot row here would delete
+        # the one thing this row exists to demonstrate.
         ({"session": "offline — last known"}, "Offline / no data"),
     ]
     bgc = "#e8edf3"
-    strips = [(render.render_strip(disp, bgc, "light", scale=3), lbl) for disp, lbl in states]
+    strips = [(render.render_strip(disp, bgc, "light", scale=3,
+                                   metrics=STRIP_METRICS), lbl)
+              for disp, lbl in states]
     pad, gap, labelw = 26, 22, 150
     W = pad * 2 + labelw + max(s.width for s, _ in strips)
     H = pad * 2 + sum(s.height for s, _ in strips) + gap * (len(strips) - 1)
@@ -427,9 +451,13 @@ def anywhere_showcase():
     """The strip is a free-floating widget — draggable anywhere, not just the taskbar."""
     W, H = 1200, 720
     now = datetime.now(timezone.utc)
-    disp = {"session_pct": 61, "session_color": "amber",
-            "session_resets_at": now + timedelta(minutes=82),
-            "weekly_pct": 18, "weekly_color": "green"}
+    # Same data as strip.png a few lines earlier in the README — including the
+    # live sessions, or the same widget appears in two different shapes within
+    # a screen of scrolling.
+    disp = dict({"session_pct": 61, "session_color": "amber",
+                 "session_resets_at": now + timedelta(minutes=82),
+                 "weekly_pct": 18, "weekly_color": "green"},
+                **sessions_core.format_sessions(sample_sessions()[1:]))
     bg = render._vgrad(W, H, "#26406e", "#0e1626").convert("RGBA")
     bg.alpha_composite(radial(W, H, int(W * 0.72), 120, 540, (96, 138, 210), 95))
     bg.alpha_composite(radial(W, H, int(W * 0.20), int(H * 0.55), 440, (60, 80, 150), 60))
@@ -461,13 +489,15 @@ def anywhere_showcase():
     d.text((W - 18, H - tb + 16), "10:24 AM", font=render._font("sb", 12), fill="#1f242b", anchor="rm")
 
     # faint "ghost" of the strip on the taskbar (where it usually lives)
-    ghost = render.render_strip(disp, "#f2f4f7", "light", scale=3).convert("RGBA")
+    ghost = render.render_strip(disp, "#f2f4f7", "light", scale=3,
+                                metrics=STRIP_METRICS).convert("RGBA")
     ghost.putalpha(ghost.split()[3].point(lambda p: int(p * 0.32)))
     gx, gy = 26, H - tb + (tb - ghost.height) // 2
     bg.alpha_composite(ghost, (gx, gy))
 
     # the strip floating up on the desktop, clearly OFF the taskbar
-    strip = render.render_strip(disp, "#243a63", "dark", scale=3).convert("RGBA")
+    strip = render.render_strip(disp, "#243a63", "dark", scale=3,
+                                metrics=STRIP_METRICS).convert("RGBA")
     sx, sy = W - strip.width - 70, 96
     ssh, spad = drop_shadow(strip.size, 8, 22, 95)
     bg.alpha_composite(ssh, (sx - spad, sy - spad + 8))
@@ -513,11 +543,16 @@ def fullscreen_showcase():
     sub = "— We still have thirty-eight minutes."
     d.text(((W - d.textlength(sub, font=fsub)) / 2, H - bar - 44), sub, font=fsub, fill=(236, 236, 236))
 
-    disp = {"session_pct": 42, "session_color": "green",
-            "session_resets_at": datetime.now(timezone.utc) + timedelta(minutes=38, seconds=50),
-            "weekly_pct": 8, "weekly_color": "green",
-            "weekly_resets_at": datetime.now(timezone.utc) + timedelta(days=2)}
-    strip = render.render_strip(disp, "#12151b", "dark", scale=3).convert("RGBA")
+    # A blocked session here on purpose: over a fullscreen film you are not
+    # looking at a terminal, so the red dot is the ONLY thing that can tell
+    # you a session is waiting — which is the whole argument for this mode.
+    disp = dict({"session_pct": 42, "session_color": "green",
+                 "session_resets_at": datetime.now(timezone.utc) + timedelta(minutes=38, seconds=50),
+                 "weekly_pct": 8, "weekly_color": "green",
+                 "weekly_resets_at": datetime.now(timezone.utc) + timedelta(days=2)},
+                **sessions_core.format_sessions(sample_sessions()))
+    strip = render.render_strip(disp, "#12151b", "dark", scale=3,
+                                metrics=STRIP_METRICS).convert("RGBA")
     bg.alpha_composite(strip, (26, H - bar - 26 - strip.height))
 
     ftag = render._font("sb", 12)

@@ -28,6 +28,7 @@ from PIL import Image, ImageDraw
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import render          # noqa: E402
+import sessions_core as sc   # noqa: E402
 import make_assets     # noqa: E402  (reuse popover_rgba / place_card / radial / drop_shadow)
 
 OUT = os.path.dirname(os.path.abspath(__file__))
@@ -47,7 +48,40 @@ def color_for(p):
     return "green" if p < 50 else ("amber" if p <= 80 else "red")
 
 
-def disp(session, weekly, fable=None, foot="Updated just now · auto", cost=None):
+#: The live sessions the tour runs with. Built through the real Session and
+#: format_sessions, so the dots, their order and the row text are the app's.
+W_, B_, S_, I_ = sc.WAITING, sc.BUSY, sc.SHELL, sc.IDLE
+_CAST = [("Ship the release pipeline", "claude-widget"),
+         ("Refactor the payment retries", "checkout-api"),
+         ("Draft the migration plan", "docs-site"),
+         ("Explore the caching idea", "proxy-passer")]
+
+
+def sessions(*spec):
+    """format_sessions for (index, status, age_s, reason) tuples."""
+    stamp = sc.now_ms()
+    live = []
+    for index, status, age, reason in spec:
+        title, project = _CAST[index % len(_CAST)]
+        live.append(sc.Session(
+            session_id=f"hero-{index}", pid=4000 + index, cwd=f"/work/{project}",
+            name=f"{project}-{index}", title=title, status=status,
+            waiting_for=reason, status_updated_at=stamp - age * 1000))
+    return sc.format_sessions(live)
+
+
+#: What the strip carries for most of the tour: three sessions, nothing wrong.
+CALM = sessions((1, B_, 720, ""), (2, S_, 45, ""), (3, I_, 1560, ""))
+#: One of them blocks, and sorts to the front.
+BLOCKED = sessions((0, W_, 240, "input needed"), (1, B_, 720, ""),
+                   (2, S_, 45, ""), (3, I_, 1560, ""))
+#: Answered — it goes back to work.
+ANSWERED = sessions((0, B_, 2, ""), (1, B_, 725, ""), (2, S_, 50, ""),
+                    (3, I_, 1565, ""))
+
+
+def disp(session, weekly, fable=None, foot="Updated just now · auto", cost=None,
+         live=CALM, pulse=False):
     fable = int(round(session * 0.3)) if fable is None else fable
     face = max(session, weekly)
     d = {
@@ -60,12 +94,16 @@ def disp(session, weekly, fable=None, foot="Updated just now · auto", cost=None
         "face_pct": "%d%%" % face, "face_color": color_for(face),
         "foot": {"text": foot, "dot": "amber" if "Refresh" in foot else "green"},
     }
+    if live is not None:
+        d.update(live)
+    if pulse:
+        d["_pulse"] = True
     if cost:
         d["cost_tokens"], d["cost_usd"] = cost
     return d
 
 
-OFFLINE = {
+OFFLINE = dict({
     "plan": "Plan: Max (5x)",
     "session_pct": 61, "session_color": "grey",
     "session_resets_at": NOW + timedelta(hours=2, minutes=55),
@@ -74,7 +112,7 @@ OFFLINE = {
     "model_rows": [{"label": "Fable", "pct": 18, "color": "grey"}],
     "session": "offline — last known", "face_pct": "61%", "face_color": "grey",
     "foot": {"text": "offline · showing last known", "dot": "amber"},
-}
+}, **CALM)   # sessions are read locally, so they survive losing the network
 
 
 def ease(t):                       # smoothstep 0..1
@@ -224,8 +262,50 @@ for i in range(0, 22):
     add(compose(disp(s, w), caption=cap), 55)
 hold(compose(disp(92, 54), caption=cap), 1500)
 
+# 2b ── live sessions, and answering the blocked one -------------------------
+# Built from the app's own alert payload so the card says what the app says.
+NEEDS = sc.alert_for(sc.Transition(
+    "status", sc.Session(session_id="hero-0", pid=4000, cwd="/work/claude-widget",
+                         name="claude-widget-0", title="Ship the release pipeline",
+                         status=W_, waiting_for="run the test suite?",
+                         status_updated_at=sc.now_ms() - 20_000),
+    B_, W_))
+NEEDS_TOAST = render.render_toast(None, NEEDS["title"], NEEDS["subtitle"],
+                                  NEEDS["color"], THEME,
+                                  choices=("Yes", "No")).convert("RGBA")
+
+caps = "Every Claude Code session, right on the strip"
+busy = disp(41, 21)
+xfade(compose(disp(92, 54), caption="Live session & weekly usage, color-coded"),
+      compose(busy, caption=caps), 4, 55)
+hold(compose(busy, caption=caps), 1500)
+
+# one of them blocks: it sorts to the front, the leading dot goes red, and the
+# strip pulses once — the same beat the real widget plays.
+capb = "One needs you — the dot turns red and the strip pulses"
+blocked_now = disp(41, 21, live=BLOCKED)
+for i in range(4):
+    add(compose(disp(41, 21, live=BLOCKED, pulse=i % 2 == 0), caption=capb), 110)
+hold(compose(blocked_now, caption=capb), 900)
+
+capa = "Answer it from the toast — without leaving what you're doing"
+for i in range(1, 6):
+    t = ease(i / 5)
+    add(compose(blocked_now, toast=NEEDS_TOAST, toast_alpha=int(255 * t),
+                toast_dy=int((1 - t) * 40), caption=capa), 55)
+hold(compose(blocked_now, toast=NEEDS_TOAST, caption=capa), 2100)
+
+# answered — the toast goes and the session is back at work.
+answered_now = disp(41, 21, live=ANSWERED)
+for i in range(1, 5):
+    add(compose(blocked_now, toast=NEEDS_TOAST,
+                toast_alpha=int(255 * (1 - i / 4)), caption=capa), 55)
+hold(compose(answered_now, caption="…and it's back to work"), 1500)
+
 # 3 ── threshold alert -------------------------------------------------------
 peak = disp(92, 54)
+xfade(compose(answered_now, caption="…and it's back to work"),
+      compose(peak, caption="Desktop alert before you hit a limit"), 4, 55)
 for i in range(1, 6):
     t = ease(i / 5)
     add(compose(peak, toast=ALERT, toast_alpha=int(255 * t),
@@ -337,9 +417,55 @@ xfade(ec, compose(start, pop_alpha=0), 5, 55)   # gentle loop back
 
 
 # --------------------------------------------------------------------------- #
+def _shared_palette(colors=256):
+    """One colour table for the whole GIF.
+
+    Left to itself PIL picks a palette per frame, so the encoder writes a
+    local colour table for each and the same flat backdrop quantises slightly
+    differently frame to frame — which is both larger and visibly noisier.
+
+    Built from CROPS of the interface rather than whole frames. Most of a frame
+    is pale backdrop, and a palette weighted by pixel count spends itself on
+    two hundred shades of grey-blue while the amber, red and green that carry
+    the meaning share what is left. The first attempt at this did exactly
+    that: severity colours washed out and the accent turned muddy pink.
+    """
+    picks = frames[::max(1, len(frames) // 20)][:20]
+    # The interface lives in these bands; the last keeps enough backdrop to
+    # quantise the gradient smoothly.
+    bands = [(60, 140, 560, 580), (0, H - TB_H, W, H),
+             (620, 380, W, H - TB_H), (0, 0, W, 120)]
+    tiles = [frame.crop(box) for frame in picks for box in bands]
+    # …and the palette that MEANS something gets a block of its own. Sampling
+    # alone is a popularity contest: the "needs you" toast is on screen for a
+    # dozen frames out of a hundred and thirty, so its red lost every slot and
+    # came out magenta. These are the colours the app chose on purpose.
+    T = render.THEMES[THEME]
+    keys = ("green", "amber", "red", "accent", "accent_soft", "neutral", "dim",
+            "faint", "grey", "track", "panel_top", "panel_bot", "border")
+    swatch = Image.new("RGB", (240, 60 * len(keys)))
+    paint = ImageDraw.Draw(swatch)
+    for index, key in enumerate(keys):
+        paint.rectangle([0, index * 60, 240, index * 60 + 60], fill=T[key])
+    tiles.append(swatch)
+    width = max(t.width for t in tiles)
+    montage = Image.new("RGB", (width, sum(t.height for t in tiles)))
+    y = 0
+    for tile in tiles:
+        montage.paste(tile, (0, y))
+        y += tile.height
+    return montage.quantize(colors=colors, method=Image.MEDIANCUT)
+
+
 def _save():
-    frames[0].save(
-        os.path.join(OUT, "hero.gif"), save_all=True, append_images=frames[1:],
+    palette = _shared_palette()
+    # dither=NONE: the backdrop is a smooth gradient and dithering it turns a
+    # flat area into noise that no two frames share, which is exactly what a
+    # GIF cannot compress.
+    flat = [f.quantize(palette=palette, dither=Image.Dither.NONE)
+            for f in frames]
+    flat[0].save(
+        os.path.join(OUT, "hero.gif"), save_all=True, append_images=flat[1:],
         duration=durs, loop=0, optimize=True, disposal=2,
     )
     kb = os.path.getsize(os.path.join(OUT, "hero.gif")) // 1024
