@@ -1385,6 +1385,26 @@ def test_coalesce_mixed_kinds_summarises_counts():
     assert "1 finished" in merged["subtitle"]
 
 
+def test_a_count_of_one_in_a_mixed_batch_reads_as_one():
+    # A real tour put "2 session updates · 1 need you · 1 are still waiting"
+    # on screen. Each kind is counted separately, so any of them can land on
+    # one even though the batch as a whole is plural.
+    merged = sc.coalesce_alerts(_mk_alerts(sc.IDLE, sc.WAITING))
+    assert "1 needs you" in merged["subtitle"], merged["subtitle"]
+    assert "1 need you" not in merged["subtitle"].replace("1 needs you", "")
+
+
+def test_a_lone_stuck_session_in_a_batch_is_singular():
+    stuck = dict(_mk_alerts(sc.WAITING)[0], kind="stuck")
+    merged = sc.coalesce_alerts(_mk_alerts(sc.IDLE, sc.IDLE) + [stuck])
+    assert "1 is still waiting" in merged["subtitle"], merged["subtitle"]
+
+
+def test_several_of_a_kind_stay_plural():
+    merged = sc.coalesce_alerts(_mk_alerts(sc.IDLE, sc.WAITING, sc.WAITING))
+    assert "2 need you" in merged["subtitle"]
+
+
 def test_coalesce_takes_the_colour_of_the_most_urgent():
     # Two finishes and one block: the block is what matters.
     merged = sc.coalesce_alerts(_mk_alerts(sc.IDLE, sc.IDLE, sc.WAITING))

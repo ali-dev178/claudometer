@@ -75,7 +75,7 @@ def test_a_mixed_batch_reads_the_way_the_app_writes_it():
         for n in range(2)]
     merged = sc.coalesce_alerts([blocked] + done)
     assert merged["title"] == "3 session updates"
-    assert merged["subtitle"] == "1 need you · 2 finished", (
+    assert merged["subtitle"] == "1 needs you · 2 finished", (
         "the sheet invented a tidier wording than the app's")
 
 

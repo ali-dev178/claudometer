@@ -535,8 +535,18 @@ def alerts_for(transitions, kinds=DEFAULT_ALERT_KINDS):
 #: the same thing.
 _URGENCY = (WAITING, "stuck", IDLE, "gone")
 
-_ALERT_NOUNS = {WAITING: "need you", "stuck": "are still waiting",
-                IDLE: "finished", "gone": "ended"}
+#: (one, several). A mixed batch counts each kind separately, so any of these
+#: can land on 1 — "2 session updates · 1 need you · 1 are still waiting" is
+#: what a real tour put on screen before these had singular forms.
+_ALERT_NOUNS = {WAITING: ("needs you", "need you"),
+                "stuck": ("is still waiting", "are still waiting"),
+                IDLE: ("finished", "finished"),
+                "gone": ("ended", "ended")}
+
+
+def _noun(kind, count):
+    one, many = _ALERT_NOUNS[kind]
+    return one if count == 1 else many
 
 
 def coalesce_alerts(alerts) -> Optional[dict]:
@@ -557,12 +567,13 @@ def coalesce_alerts(alerts) -> Optional[dict]:
     lead = present[0]
 
     if len(present) == 1:
-        title = f"{counts[lead]} sessions {_ALERT_NOUNS[lead]}"
+        title = f"{counts[lead]} sessions {_noun(lead, counts[lead])}"
         # Each subtitle is "<label> · <detail>"; the labels alone identify them.
         subtitle = " · ".join(a["subtitle"].split(" · ")[0] for a in alerts)
     else:
         title = f"{len(alerts)} session updates"
-        subtitle = " · ".join(f"{counts[k]} {_ALERT_NOUNS[k]}" for k in present)
+        subtitle = " · ".join(f"{counts[k]} {_noun(k, counts[k])}"
+                              for k in present)
 
     return {
         "kind": lead,
